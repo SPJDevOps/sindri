@@ -315,7 +315,63 @@ request, not three weeks later on a developer's machine.
 
 ## 8. Configuration as code
 
-Two levels. Teams get autonomy, the organisation keeps guardrails.
+Two levels of concern. Teams get autonomy, the organisation keeps guardrails. But a
+single team running Docker Compose has no organisation to govern, and asking them to
+write enveloped manifests and run a separate apply step is friction with nothing bought
+for it.
+
+So the configuration surface scales the same way the deployment does: one file for one
+team, a directory of manifests for many, with one schema and one loader underneath.
+
+### 8.1 One file, two forms
+
+There is a **short form** and a **long form**. The short form desugars into the long
+form during loading. The reconciler, the validator, and everything downstream see only
+the long form.
+
+This is the same arrangement Compose itself uses for `ports: ["80:80"]` versus its long
+object form, and it works for the same reason: one representation to implement against,
+two ways to write it.
+
+A complete single-team setup:
+
+```yaml
+# sindri.yaml
+listen:   :8080
+storage:  ./data                          # or s3://sindri-blobs
+database: postgres://sindri@localhost:55432/sindri
+
+repos:
+  internal-py:  { protocol: pypi }                 # hosted
+  pypi:         { upstream: pypi }                 # proxy, from a preset
+  python:       { members: [internal-py, pypi] }   # virtual, order is precedence
+
+  internal-oci: { protocol: oci }
+  dockerhub:    { upstream: dockerhub }
+  docker:       { members: [internal-oci, dockerhub] }
+
+lifecycle:
+  stages: [dev, integration, prod]
+  gates:
+    prod: [sbom, signature]
+```
+
+The same `python` repository in long form, which is what the loader produces and what a
+multi-team installation writes directly:
+
+```yaml
+kind: Repository
+metadata:
+  name: python
+spec:
+  type: virtual
+  protocol: pypi
+  members:
+    - ref: hosted/internal-py
+    - ref: proxy/pypi
+```
+
+And the organisation level, which exists only when there is an organisation to govern:
 
 ```yaml
 kind: OrgPolicy
@@ -324,28 +380,119 @@ spec:
   mandatoryRepos:
     - name: approved-base-images
       locked: true             # teams reference it, they cannot override it
----
-kind: Repository
-metadata:
-  name: python
-spec:
-  type: virtual
-  protocol: pypi
-  members:                     # order is meaningful, hosted first
-    - ref: hosted/payments-internal
-    - ref: org/approved-base-images
-    - ref: proxy/pypi-public
-  rbac:
-    read:  [team:payments, team:platform]
-    write: [team:payments-admins]
 ```
 
-Manifests live in Git. A reconciler converges the database onto them and reports drift. So
-every permission change goes through code review instead of an invisible admin click.
+An absent `OrgPolicy` means `mode: delegated` with no mandatory repositories. A single
+team therefore never writes one, and adopting governance later is adding a file rather
+than migrating a format.
 
-Structure is static, membership is live: the manifest names groups such as
-`team:payments`, and who belongs to that group is resolved against the identity provider
-at request time. Re-applying configuration is never needed because someone joined a team.
+### 8.2 Inference rules
+
+Repository type is inferred from which key is present, so `type:` is never required:
+
+| Keys present | Type |
+|---|---|
+| `members` | virtual |
+| `upstream` | proxy |
+| neither | hosted |
+| both | error, reported as a conflict |
+
+A virtual repository's protocol is inferred from its members, and **all members must
+share one protocol**. That is not a shortcut, it is a real constraint: one URL serves one
+wire protocol, so a virtual repository mixing PyPI and OCI members could not be served at
+all.
+
+Bare member names resolve within the same file. A prefix (`org/`, another team's
+namespace) is required to reach across a boundary, which makes every cross-boundary
+reference visibly one.
+
+`upstream` accepts a named preset (`pypi`, `dockerhub`, `ghcr`, `npm`, `maven-central`)
+or an explicit object. Presets carry the upstream URL and sensible TTLs so that nobody
+hand-types the pypi.org simple index. Preset expansions are visible through
+`sindri config show --expanded`, and are pinned in the binary so an upstream URL change is
+a release, not a surprise.
+
+### 8.3 What keeps two forms from becoming two systems
+
+Desugaring must be **one-way and total**. The short form has no representational power the
+long form lacks, nothing downstream branches on which form was written, and a golden test
+asserts that the short and long spellings of the same setup produce identical internal
+trees. Without that discipline two syntaxes become two parsers that drift, which is a real
+failure mode of configuration surfaces that grow sugar after the fact.
+
+Two commands make the sugar honest rather than magic:
+
+- `sindri config check` validates statically, with no database and no server, so it runs
+  in CI before anything is deployed. Errors name the file, the line, and the field.
+- `sindri config show --expanded` prints the desugared long form. This is how a reader
+  sees exactly what the short form did, how a team learns the explicit form, and the first
+  thing to reach for when the resolution order is not what someone expected.
+
+### 8.4 Two triggers, one reconciler
+
+The reconciler is the same in both deployments. Only what invokes it differs.
+
+```
+Compose:     sindri serve --config sindri.yaml    # reconciles on boot and on SIGHUP
+Enterprise:  sindri apply -f manifests/           # reconciles from CI, against a server
+```
+
+Reconcile-on-boot is what removes the apply step for a single-node install, and it is the
+larger half of making this feel native to Compose rather than borrowed from Kubernetes.
+The config file is read-only to the process, so it mounts read-only into a container.
+
+Repositories created through the management API are marked API-managed and are
+distinguished from config-managed ones, so the reconciler and the API never fight over the
+same row.
+
+### 8.5 Power without inheritance chains
+
+Environment substitution with defaults, because one file should work across dev and prod:
+
+```yaml
+storage: s3://${SINDRI_BUCKET:-sindri-blobs}
+```
+
+A `defaults:` block keyed by repository type, which covers most repetition:
+
+```yaml
+defaults:
+  proxy:
+    ttl: 1h
+    negativeTtl: 5m
+  hosted:
+    read: [team:platform]
+```
+
+Durations are Go duration strings, parsed with `time.ParseDuration`, so `1h` and `5m` are
+valid and a bare `3600` is **rejected** rather than assumed to be seconds. Guessing a unit
+for the user is how a five-minute negative cache becomes a one-hour one.
+
+Deliberately **no `extends:`**. Per-type defaults plus YAML's own anchors and aliases cover
+the real cases, and transitive template inheritance is how configuration languages become
+unreadable. If per-type defaults turn out to be insufficient, that needs an ADR and not a
+convenience feature.
+
+### 8.6 The properties that must survive the sugar
+
+**Manifests live in Git.** A reconciler converges the database onto them and reports
+drift, so every permission change goes through code review instead of an invisible admin
+click.
+
+**Validation happens at write time**, not per request. The download path stays a lookup,
+and a misconfiguration fails in a pull request rather than three weeks later on a
+developer's machine.
+
+**Structure is static, membership is live.** The manifest names groups such as
+`team:payments`; who belongs to that group is resolved against the identity provider at
+request time. Configuration is never re-applied because somebody joined a team.
+
+**The three repository types stay visible.** Sugar makes declaring hosted, proxy, and
+virtual repositories cheap. It must never make them disappear into a single entry, however
+tempting `python: {hosted: ..., proxy: ...}` looks. The proxy/hosted/virtual separation
+*is* the dependency-confusion defence of invariant I5, and a configuration surface that
+hides it teaches users to stop reasoning about it. The guarantee then erodes socially even
+while the code still enforces it.
 
 ---
 

@@ -62,6 +62,21 @@ code cannot receive a malformed digest.
 **Every backend passes the same suite.** When there are two implementations of an
 interface, there is one test suite parameterised over them, not two suites that drift.
 
+## Configuration rules
+
+There is **one** configuration file and one loader, extended by section over time: M1 adds
+server settings, M7 adds `repos:`, `lifecycle:`, and `defaults:`. Never a second
+configuration system, and never a separate simplified file for small deployments.
+
+The short form desugars into the long form **one-way and totally**. Loading produces long
+form; nothing downstream may branch on which spelling was written. A golden test asserts
+both spellings of one setup produce identical internal trees, and that test is the only
+thing keeping two spellings from becoming two parsers.
+
+Sugar may make hosted, proxy, and virtual repositories cheap to declare. It may never make
+them invisible: that separation is the dependency-confusion defence. See
+ARCHITECTURE.md section 8 and ADR 7.
+
 ## Security rules
 
 This is a registry. Supply-chain security is the product, so these are not style points.

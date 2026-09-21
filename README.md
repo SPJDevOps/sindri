@@ -21,7 +21,8 @@ and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 - **Repository types:** hosted, proxy, and virtual, cleanly separated
 - **Lifecycle:** stages and promotion that change trust status instead of copying bytes
 - **Evidence:** SBOMs and signatures attached to an artifact identity
-- **Config as code:** repositories and org policy as YAML, reconciled from Git
+- **Config as code:** one short YAML file for a single team, reconciled on startup with
+  no separate apply step; enveloped manifests and org policy when you have many teams
 - **Auth:** OpenID Connect login with role-based access control
 - **Storage:** filesystem or any S3-compatible object store, a config choice only
 

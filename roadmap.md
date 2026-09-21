@@ -113,7 +113,8 @@ grep -rl 'github.com/spj/sindri' --include='*.go' --include='Makefile' --include
 blob on two different backends.
 
 **Scope.**
-- Command tree with `cobra`; `serve` reads a YAML config file with environment overrides
+- Command tree with `cobra`; `serve` reads `sindri.yaml` with `${VAR:-default}`
+  environment substitution
 - `storage.BlobStore` interface per ARCHITECTURE.md section 6
 - `fsstore`: content-addressed directory fan-out (`ab/cd/abcd...`) to avoid million-entry
   directories
@@ -130,6 +131,13 @@ database URL is `postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable
 the Compose stack.
 
 **Out of scope.** Any protocol adapter. Any notion of a repository.
+
+**One config file, for the whole project's life.** M1 needs only `listen`, `storage`, and
+`database`, but this is the same file and the same loader that M7 extends with `repos:`,
+`lifecycle:`, and `defaults:`. Build it as a section-based schema with an unknown-key
+error from the start. The alternative is that M7 arrives to find a throwaway format in
+place and Sindri ships with two configuration systems, which is the most likely
+self-inflicted wound in this roadmap. See ARCHITECTURE.md section 8.
 
 **Watch out for.** Write staged bytes to a staging key and only rename to the
 content-addressed key after the digest matches. A partially uploaded blob committed under
@@ -346,43 +354,97 @@ An integration test that walks the whole story:
 
 ### M7 — Config as code, reconciler, OIDC and RBAC
 
-**Goal.** Governance as code. Real authentication. Guardrails teams cannot route around.
+**Goal.** Governance as code, in a form a one-person team will actually write. Real
+authentication. Guardrails teams cannot route around.
 
-**Scope.**
-- `config`: `Repository` and `OrgPolicy` kinds, schema validation with errors that name
-  the file, line, and field
-- `sindri apply -f <dir>` and `sindri diff -f <dir>`
-- Reconciler converging the database onto a manifest directory, reporting drift, and
-  distinguishing config-managed from API-managed repositories so they cannot fight
-- `OrgPolicy` modes `centralized`, `delegated`, `hybrid`
+Read ARCHITECTURE.md section 8 in full before starting. This milestone is where the
+project either stays light for small teams or acquires the ceremony it was built to avoid.
+
+**Scope, configuration.**
+- Extend `sindri.yaml` from M1 with `repos:`, `lifecycle:`, and `defaults:` sections
+- **Short form** with type inference: `members` means virtual, `upstream` means proxy,
+  neither means hosted, both is a named error
+- Virtual protocol inferred from members, with all members required to share one protocol
+- Named upstream presets: `pypi`, `dockerhub`, `ghcr`, `npm`, `maven-central`, pinned in
+  the binary, each overridable by an explicit object
+- **Long form** `Repository` and `OrgPolicy` kinds, multi-document manifest directories
+- **One-way, total desugaring** into the long form; nothing downstream may branch on which
+  form was written
+- `defaults:` keyed by repository type. No `extends:`, per ADR 7
+- Bare member names resolve locally; a prefix is required to cross a namespace boundary
+- `sindri config check`: static validation, no database, no server, errors naming file,
+  line, and field
+- `sindri config show --expanded`: prints the desugared long form
+
+**Scope, reconciliation.**
+- One reconciler, two triggers: `serve --config` converges on boot and on `SIGHUP`, and
+  `sindri apply -f <dir>` converges from CI against a running server
+- `sindri diff -f <dir>` reports drift without changing anything
+- Config-managed and API-managed repositories distinguished so the two never fight over a
+  row
+- `OrgPolicy` modes `centralized`, `delegated`, `hybrid`; an absent `OrgPolicy` means
+  `delegated` with no mandatory repositories
 - `locked: true` repositories: referenceable, never overridable
+- Invariant I4 enforced here: lifecycle configuration on a proxy repository is rejected at
+  reconcile time
+
+**Scope, identity.**
 - OIDC authorization code flow, token validation, JWKS caching with refresh
-- Group-to-role mapping; group membership resolved live at request time, never baked into
-  the database
+- Group-to-role mapping; group membership resolved live at request time, never stored
 - RBAC enforced on every route: both adapters, the management API, and the UI
 - Machine tokens for CI, scoped to a repository and a role
 
-**Out of scope.** Git polling, which is M8-and-beyond territory; v1 reconciles from a
-directory and lets existing CI call it. SAML and LDAP are commercial.
+**Out of scope.** Git polling; v1 reconciles on boot or from CI, and an operator can come
+later without changing the format. SAML and LDAP are commercial.
 
-**Watch out for.** Validation belongs at reconcile time, not per request. And keep group
-resolution live: caching group membership in the database means a revoked team membership
-still grants access until something re-applies, which is exactly the invisible-admin
-problem config-as-code is meant to remove.
+**Watch out for.**
+
+*Two syntaxes becoming two parsers.* The guard is a golden test asserting that the short
+and long spellings of the same setup produce byte-identical internal trees. Without it
+they drift, and then every feature costs twice.
+
+*Sugar that hides the three repository types.* Do not add `python: {hosted: ..., proxy:
+...}`, however much shorter it looks. That separation is the dependency-confusion defence
+of invariant I5, and hiding it teaches people to stop reasoning about it.
+
+*Validation drifting onto the request path.* It belongs at reconcile time. Downloads and
+installs must stay a lookup.
+
+*Caching group membership.* A revoked team membership would keep granting access until
+something re-applied, which recreates exactly the invisible-admin problem
+config-as-code exists to remove.
 
 **Gate.**
 ```bash
-./bin/sindri apply -f testdata/manifests/   # converges, reports what changed
-./bin/sindri diff  -f testdata/manifests/   # clean on second run
+# Short form: a complete setup in one file, no apply step
+./bin/sindri config check  -f testdata/config/sindri.yaml
+./bin/sindri config show --expanded -f testdata/config/sindri.yaml
+./bin/sindri serve --config testdata/config/sindri.yaml &   # reconciles on boot
+docker push localhost:8080/docker/demo/app:1.0              # repos exist, unprompted
+kill -HUP $!                                                # re-reconciles
+
+# Long form: a manifest directory from CI
+./bin/sindri apply -f testdata/manifests/    # converges, reports what changed
+./bin/sindri diff  -f testdata/manifests/    # clean on the second run
+
 make test-integration
 ```
 Integration tests, against a stub OIDC provider, that assert:
-1. Applying a directory creates repositories, members, and RBAC as specified
-2. Re-applying is a no-op, and manual drift is reported
-3. A team manifest that overrides a `locked: true` org repository is **rejected**
-4. A user in `team:payments` can pull and cannot push
-5. An anonymous `docker pull` and an anonymous `pip install` are both refused
-6. Adding a user to a group in the identity provider grants access with **no** re-apply
+1. The short-form file and the equivalent manifest directory produce **identical**
+   database state, which is the desugaring guarantee made executable
+2. `config check` rejects a repository with both `members` and `upstream`, and rejects a
+   virtual repository whose members disagree on protocol, each with a message naming the
+   file and field
+3. `serve --config` creates repositories on boot with no apply step, and `SIGHUP`
+   re-reconciles
+4. Re-applying is a no-op, and manual drift is reported
+5. A team manifest that overrides a `locked: true` org repository is **rejected**
+6. Lifecycle configuration on a proxy repository is rejected, invariant I4
+7. A user in `team:payments` can pull and cannot push
+8. An anonymous `docker pull` and an anonymous `pip install` are both refused
+9. Adding a user to a group in the identity provider grants access with **no** re-apply
+
+Test 1 is the one that keeps the two forms honest for the life of the project.
 
 ---
 
@@ -441,6 +503,8 @@ the most common first impression a project gets wrong.
 - [ ] Invariant I2 asserted: no blob reachable through a repository it is not placed in
 - [ ] RBAC enforced on every route, with an anonymous-access test per adapter
 - [ ] Quickstart verified on a clean machine with only Docker
+- [ ] A single-team setup works from one short-form `sindri.yaml` with no apply step
+- [ ] Short form and long form asserted to produce identical database state
 - [ ] Upgrade path documented: replace the binary, migrations self-apply
 - [ ] Every deferred item listed as deferred, so nothing is silently missing
 - [ ] `SECURITY.md` published with a disclosure contact
