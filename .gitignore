@@ -1,0 +1,22 @@
+# Build output
+/bin/
+/dist/
+sindri
+
+# Local development state
+/.data/
+*.local.yaml
+.env
+.env.*
+!.env.example
+
+# Test and coverage output
+coverage.out
+coverage.html
+*.test
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp

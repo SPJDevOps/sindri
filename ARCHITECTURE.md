@@ -1,0 +1,384 @@
+# Sindri Architecture
+
+This document is the single source of truth for Sindri's design. When code and this
+document disagree, one of them is a bug. Decisions with a rationale worth preserving live
+in [docs/adr/](docs/adr/).
+
+The implementation sequence is in [roadmap.md](roadmap.md). The product rationale is in
+[pitch.md](pitch.md).
+
+---
+
+## 1. The organising idea
+
+Classic repositories are file-first. They ask "where is the file?" Sindri is
+identity-first. It asks "what is this artifact, where did it come from, who owns it, what
+evidence backs it, and how far has it been trusted?"
+
+The practical consequence is that **an artifact is never copied between repositories as
+it matures.** Its trust status changes. One digest, one set of bytes, many lifecycle
+states.
+
+```
+                    subject
+                 sha256:abc123
+                       |
+          +------------+------------+
+          v            v            v
+        DEV       INTEGRATION      PROD
+      approved     approved       denied
+```
+
+So the question Sindri answers for CI/CD and for a Kubernetes admission controller is not
+"does this image exist?" but **"is exactly this digest approved for this environment?"**
+That is a single indexed query, not a directory convention.
+
+---
+
+## 2. The five invariants
+
+Everything below follows from these. A change that breaks one of them needs an ADR.
+
+### I1. One blob, many placements
+
+A blob exists exactly once per `sha256` digest in the content-addressable store.
+Repository membership is metadata, never a second copy. A layer pulled through a proxy
+and also pushed to a hosted repository is stored once with two placement rows.
+
+### I2. Placement gates every read
+
+Never serve bytes by digest alone. Every read resolves
+`(caller, repository, digest) -> allowed?` before touching storage.
+
+This is the invariant most easily broken by accident. Deduplication means a digest one
+tenant pushed is physically present for everyone, so an endpoint that trusts the digest
+in the URL is a cross-tenant data leak. The OCI specification's blob routes are scoped by
+repository name for exactly this reason. Honour that scope even though the CAS does not
+need it.
+
+### I3. Promotion changes state, never location
+
+Lifecycle is an append-only ledger keyed by subject digest. Promoting writes one row.
+Nothing is moved, copied, retagged, or re-uploaded. Current state is a view over the
+latest event per `(digest, repository, stage)`.
+
+Append-only gives the audit trail for free, makes "who promoted this and why" answerable
+forever, and turns the paid audit-retention feature into a query rather than a rewrite.
+
+### I4. Only hosted repositories promote
+
+Proxy content is external and stays external. Promotion, ownership, and evidence apply to
+artifacts that are ours. The reconciler rejects lifecycle configuration on a proxy
+repository at write time, not at request time.
+
+### I5. Virtual repositories resolve in explicit, hosted-first order
+
+A virtual repository holds an ordered member list. Resolution walks it and the first hit
+wins. There is no scoring, no "newest version across members", no implicit ordering.
+
+Combined with the name-claim rule in section 4, this is the dependency-confusion defence:
+a package name claimed by a hosted member can never be served from a proxy member, no
+matter what version the upstream offers.
+
+---
+
+## 3. Component map
+
+```
+              +-----------------------------------------------+
+              |             Protocol Adapters                 |
+              |   OCI  |  PyPI  |  (npm, Maven, Helm: post-v1)|
+              +--------------------+--------------------------+
+                                   |
+              +--------------------v--------------------------+
+              |  Resolution: hosted | proxy | virtual         |
+              |  ordering, name claims, upstream cache        |
+              +--------------------+--------------------------+
+                                   |
+        +--------------------------+--------------------------+
+        |                          |                          |
++-------v--------+     +-----------v----------+    +----------v---------+
+|  Core Registry  |     |  Identity/Lifecycle  |    |  Auth: OIDC, RBAC  |
+|  publish,       |     |  subjects, evidence, |    |                    |
+|  resolve, list  |     |  stages, promotion   |    |                    |
++-------+--------+     +-----------+----------+    +--------------------+
+        |                          |
++-------v--------------------------v--------------+
+|  CAS: sha256 -> blob, staged uploads, dedup      |
++-------+------------------------------+----------+
+        |                              |
++-------v---------+          +---------v---------+
+|  BlobStore      |          |  Metadata: Postgres|
+|  filesystem, S3 |          |                    |
++-----------------+          +--------------------+
+```
+
+Lifecycle, promotion, policy, and evidence exist **once** in the core, not once per
+protocol. That is the whole reason for the shared CAS. If a protocol adapter ever needs
+its own promotion logic, the abstraction is wrong.
+
+### Package layout
+
+```
+cmd/sindri/              entrypoint and command tree
+internal/
+  config/                YAML kinds (Repository, OrgPolicy), loading, validation
+  storage/               BlobStore interface
+    fsstore/             filesystem backend
+    s3store/             S3-compatible backend
+  cas/                   digest computation, staged uploads, dedup
+  db/                    pgx pool, migrations/, sqlc-generated queries
+  model/                 domain types shared across packages
+  registry/              core artifact service: publish, resolve, list, delete
+  lifecycle/             stages, promotion, gate evaluation
+  evidence/              attach and list evidence
+  auth/                  tokens, OIDC, RBAC middleware
+  api/                   management REST API
+  proto/
+    oci/                 OCI distribution spec handlers
+    pypi/                PEP 503/691 index and upload
+  remote/                proxy upstream fetch and caching
+  resolve/               virtual repository ordered resolution
+  reconcile/             YAML to database convergence
+  worker/                garbage collection, indexing, background jobs
+web/                     Go templates and static assets, embedded
+deploy/compose/          local and single-node deployment
+docs/adr/                architecture decision records
+```
+
+Dependency direction is strictly inward. `proto/*` and `api` depend on `registry`,
+`lifecycle`, and `auth`. Those depend on `cas`, `db`, and `model`. `cas` depends on
+`storage`. Nothing in `storage`, `cas`, or `model` imports an adapter. Keeping this
+one-way is what makes a third protocol cheap later.
+
+---
+
+## 4. Repository types
+
+| Type | Owns bytes | Promotable | Resolution |
+|---|---|---|---|
+| **hosted** | yes | yes | direct |
+| **proxy** | caches upstream bytes | never | direct, with upstream fetch on miss |
+| **virtual** | no | no | ordered walk over members |
+
+**Hosted** repositories hold our own artifacts. They are the only place ownership,
+provenance, evidence, and lifecycle apply.
+
+**Proxy** repositories mirror an upstream such as pypi.org or Docker Hub. On a miss they
+fetch, stream to the client, and cache into the CAS. They carry a positive TTL for
+metadata freshness and a negative TTL so that a missing package does not hammer upstream.
+Cached bytes are indistinguishable from any other blob in storage, but their placement row
+marks them as proxied, which is what keeps invariant I4 enforceable.
+
+**Virtual** repositories are the developer-facing view. One URL, an explicit ordered list
+of members, hosted first.
+
+### The name-claim rule
+
+When a virtual repository resolves a package name:
+
+1. Walk members in order.
+2. If a **hosted** member has ever published that normalized name, that name is
+   **claimed**. Resolution stops at the hosted member. A proxy member is not consulted,
+   even if the hosted member lacks the requested version.
+3. Only an unclaimed name falls through to a proxy member.
+
+Step 2 is the dependency-confusion defence, and the failure mode it prevents is subtle:
+without it, an attacker publishes `our-internal-lib` version `99.0.0` to pypi.org, a
+developer asks for the newest version, and the proxy member wins. With it, the request
+fails loudly instead of installing hostile code. There is a regression test named for this
+behaviour; it is not optional and it does not get relaxed for convenience.
+
+---
+
+## 5. Data model
+
+Postgres. Two layers: identity, keyed by digest, and placement, keyed by repository and
+name.
+
+### Identity layer
+
+```sql
+subjects(digest PK, size, kind, created_at)
+subject_owners(digest FK, owner_ref, PRIMARY KEY (digest, owner_ref))
+provenance(digest FK, source_type, source_ref, build_ref, recorded_at)
+
+evidence(
+  id PK, subject_digest FK, type,          -- sbom | signature | scan | attestation
+  media_type, blob_digest FK, metadata jsonb,
+  created_at, created_by
+)
+
+lifecycle_stages(id PK, name UNIQUE, position)
+promotion_gates(id PK, stage_id FK, rule jsonb)
+
+lifecycle_events(                          -- APPEND ONLY, never updated or deleted
+  id PK, subject_digest FK, repo_id FK, stage_id FK,
+  action,                                  -- approve | revoke
+  actor, reason, at
+)
+```
+
+`lifecycle_events` is the ledger of invariant I3. Current state is a view selecting the
+latest event per `(subject_digest, repo_id, stage_id)`. Index that view's key columns: the
+admission-decision endpoint is on the hot path for every deployment in the organisation.
+
+### Placement and protocol layer
+
+```sql
+blobs(digest PK, size, storage_backend, created_at)
+
+repositories(
+  id PK, name UNIQUE, type,                -- hosted | proxy | virtual
+  protocol,                                -- oci | pypi
+  config jsonb, locked bool, managed_by,   -- config | api
+  created_at
+)
+repository_members(virtual_repo_id FK, member_repo_id FK, position,
+                   PRIMARY KEY (virtual_repo_id, member_repo_id))
+remotes(repo_id PK FK, upstream_url, credentials_ref,
+        ttl_seconds, negative_ttl_seconds)
+
+packages(id PK, repo_id FK, normalized_name, display_name,
+         UNIQUE (repo_id, normalized_name))
+versions(id PK, package_id FK, version, UNIQUE (package_id, version))
+files(id PK, version_id FK, blob_digest FK, filename, media_type, metadata jsonb)
+
+tags(repo_id FK, package_id FK, name, target_digest FK,
+     PRIMARY KEY (repo_id, package_id, name))     -- mutable, OCI
+manifest_children(parent_digest FK, child_digest FK,
+                  PRIMARY KEY (parent_digest, child_digest))
+```
+
+`normalized_name` is the protocol's canonical form, lowercased with separators folded for
+PyPI per PEP 503. Uniqueness is on the normalized form so that `Foo.Bar` and `foo-bar`
+cannot both be claimed.
+
+`manifest_children` records manifest-to-blob and index-to-manifest edges at push time.
+Garbage collection is then a reachability query from tags and lifecycle states, which is
+far safer than reference counting: a refcount that drifts either leaks storage forever or
+deletes live data, and it cannot be recomputed after the fact.
+
+---
+
+## 6. Storage
+
+```go
+// BlobStore is the only thing that touches bytes at rest.
+type BlobStore interface {
+	Put(ctx context.Context, digest Digest, r io.Reader, size int64) error
+	Get(ctx context.Context, digest Digest) (io.ReadCloser, error)
+	GetRange(ctx context.Context, digest Digest, off, length int64) (io.ReadCloser, error)
+	Stat(ctx context.Context, digest Digest) (BlobInfo, error)
+	Delete(ctx context.Context, digest Digest) error
+}
+```
+
+Two implementations, filesystem and S3-compatible. Choosing between them is configuration,
+never a code path. Both pass the same conformance suite, which is what makes that claim
+true rather than aspirational.
+
+`GetRange` exists because OCI clients resume interrupted layer pulls and because the UI
+should not stream a gigabyte to render a manifest.
+
+**Staged uploads.** An upload writes to a staging location under a session id, hashing as
+it goes. On completion the computed digest is compared against the client's claim; only on
+a match is the blob committed to its final content-addressed key. A mismatch discards the
+staging object. Never write unverified bytes to a content-addressed key, and never trust a
+client-supplied digest.
+
+---
+
+## 7. HTTP surface
+
+| Prefix | Purpose |
+|---|---|
+| `/v2/...` | OCI distribution API |
+| `/pypi/{repo}/simple/...` | PyPI index, PEP 503 and 691 |
+| `/pypi/{repo}/upload` | PyPI upload, twine's POST |
+| `/api/v1/...` | management API |
+| `/api/v1/decisions/...` | "is this digest approved for this environment" |
+| `/ui/...` | read-only web interface |
+| `/healthz`, `/readyz` | liveness and readiness |
+| `/metrics` | Prometheus |
+
+Routing uses `chi`. The stdlib `ServeMux` cannot express the OCI routes, because an OCI
+repository name legitimately contains slashes in the middle of a path
+(`/v2/team/service/blobs/sha256:...`), and stdlib wildcards only span path segments at the
+end of a pattern.
+
+Validation happens at write time in the reconciler, not per request. Downloads and
+installs are the hot path and must stay a lookup. A misconfiguration should fail in a pull
+request, not three weeks later on a developer's machine.
+
+---
+
+## 8. Configuration as code
+
+Two levels. Teams get autonomy, the organisation keeps guardrails.
+
+```yaml
+kind: OrgPolicy
+spec:
+  mode: hybrid                 # centralized | delegated | hybrid
+  mandatoryRepos:
+    - name: approved-base-images
+      locked: true             # teams reference it, they cannot override it
+---
+kind: Repository
+metadata:
+  name: python
+spec:
+  type: virtual
+  protocol: pypi
+  members:                     # order is meaningful, hosted first
+    - ref: hosted/payments-internal
+    - ref: org/approved-base-images
+    - ref: proxy/pypi-public
+  rbac:
+    read:  [team:payments, team:platform]
+    write: [team:payments-admins]
+```
+
+Manifests live in Git. A reconciler converges the database onto them and reports drift. So
+every permission change goes through code review instead of an invisible admin click.
+
+Structure is static, membership is live: the manifest names groups such as
+`team:payments`, and who belongs to that group is resolved against the identity provider
+at request time. Re-applying configuration is never needed because someone joined a team.
+
+---
+
+## 9. Operations
+
+**Modes.** One binary. `sindri serve` runs everything in one process, which is the Compose
+story. `--api-only` and `--worker-only` split the same binary for Kubernetes and are
+post-v1, but no v1 design may assume that API and worker share a process. Background work
+goes through a queue table from the start.
+
+**Observability.** Structured logs via `log/slog`, Prometheus metrics, a request id on
+every log line and response.
+
+**Errors.** One error model across the management API. Protocol adapters translate to
+their own specified error shapes at the edge, because an OCI client expects the OCI error
+body and a broken shape breaks real clients.
+
+**Migrations** are embedded in the binary and applied on startup, so upgrading is
+replacing one binary.
+
+---
+
+## 10. Open Core boundary
+
+Drawn deliberately, and drawn here so that the free and paid split never leaks into the
+core's structure: everything a single team needs to work productively is open source under
+Apache 2.0. Everything an organisation needs to govern many teams is commercial.
+
+Open: all protocol adapters, both storage backends, basic RBAC, full single-node
+operation, lifecycle and promotion, evidence.
+
+Commercial: SSO beyond basic OIDC (SAML, LDAP), audit logging with retention guarantees,
+multi-region replication, the advanced policy engine, managed hosting.
+
+No commercial feature may require a different core. If one does, the boundary is in the
+wrong place.

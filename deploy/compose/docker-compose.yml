@@ -1,0 +1,73 @@
+# Local development dependencies for Sindri.
+#
+# Brings up Postgres and a MinIO S3-compatible object store. Sindri itself is not
+# in here yet; run it from source with `make build && ./bin/sindri serve` once the
+# serve command lands in milestone M1.
+#
+#   make up     start
+#   make logs   follow
+#   make down   stop and delete volumes
+#
+# Host ports default high to avoid colliding with anything you already run.
+# Override them per shell or in a .env file next to this file:
+#   SINDRI_PG_PORT=5432 SINDRI_S3_PORT=9000 SINDRI_S3_CONSOLE_PORT=9001 make up
+
+name: sindri-dev
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sindri
+      POSTGRES_PASSWORD: sindri
+      POSTGRES_DB: sindri
+      # Fail fast on an unreadable locale rather than at first query.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "127.0.0.1:${SINDRI_PG_PORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sindri -d sindri"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: sindri
+      MINIO_ROOT_PASSWORD: sindri-dev-secret
+    ports:
+      - "127.0.0.1:${SINDRI_S3_PORT:-59000}:9000"           # S3 API
+      - "127.0.0.1:${SINDRI_S3_CONSOLE_PORT:-59001}:9001"   # web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # One-shot: create the bucket Sindri expects, then exit.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 sindri sindri-dev-secret &&
+      mc mb --ignore-existing local/sindri-blobs &&
+      echo 'bucket sindri-blobs ready'
+      "
+    restart: "no"
+
+volumes:
+  postgres-data:
+  minio-data:

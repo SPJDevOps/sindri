@@ -1,0 +1,69 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck      # unchecked errors
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose     # unclosed HTTP response bodies leak connections
+    - copyloopvar
+    - errorlint     # %w vs %v, errors.Is vs ==
+    - gosec         # this is a registry; treat security findings as bugs
+    - misspell
+    - nilerr
+    - noctx         # every outbound request must carry a context
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - usestdlibvars
+    - wastedassign
+    - whitespace
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      # Writing to stdout, stderr, or an already-committed HTTP response has no
+      # recovery path. Note that (io.Writer).Write is deliberately NOT excluded:
+      # this is a registry, and a short write while streaming a blob is a real bug.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    revive:
+      rules:
+        - name: exported
+          disabled: false
+        - name: package-comments
+          disabled: false
+    gosec:
+      excludes:
+        - G104  # duplicate of errcheck
+
+  exclusions:
+    rules:
+      # Test code may assert loosely and hardcode credentials for fixtures.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/spj/sindri
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
