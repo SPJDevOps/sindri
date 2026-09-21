@@ -126,9 +126,12 @@ internal/
   storage/               BlobStore interface
     fsstore/             filesystem backend
     s3store/             S3-compatible backend
+    memstore/            in-memory backend, tests only, not configurable
+    storagetest/         the one conformance suite every backend runs
   cas/                   digest computation, staged uploads, dedup
   db/                    pgx pool, migrations/, sqlc-generated queries
-  model/                 domain types shared across packages
+  model/                 domain types shared across packages, imports nothing
+  server/                HTTP server, middleware, /healthz, /readyz, /metrics
   registry/              core artifact service: publish, resolve, list, delete
   lifecycle/             stages, promotion, gate evaluation
   evidence/              attach and list evidence
@@ -266,13 +269,25 @@ deletes live data, and it cannot be recomputed after the fact.
 ```go
 // BlobStore is the only thing that touches bytes at rest.
 type BlobStore interface {
-	Put(ctx context.Context, digest Digest, r io.Reader, size int64) error
-	Get(ctx context.Context, digest Digest) (io.ReadCloser, error)
-	GetRange(ctx context.Context, digest Digest, off, length int64) (io.ReadCloser, error)
-	Stat(ctx context.Context, digest Digest) (BlobInfo, error)
-	Delete(ctx context.Context, digest Digest) error
+	Put(ctx context.Context, digest model.Digest, r io.Reader, size int64) error
+	Get(ctx context.Context, digest model.Digest) (io.ReadCloser, error)
+	GetRange(ctx context.Context, digest model.Digest, off, length int64) (io.ReadCloser, error)
+	Stat(ctx context.Context, digest model.Digest) (BlobInfo, error)
+	Delete(ctx context.Context, digest model.Digest) error
+
+	// Staged writes. Bytes land under a staging key and reach their content
+	// addressed key only through CommitUpload, after the caller has verified
+	// the digest. See ADR 8.
+	CreateUpload(ctx context.Context) (UploadID, error)
+	Append(ctx context.Context, id UploadID, r io.Reader) (offset int64, err error)
+	CommitUpload(ctx context.Context, id UploadID, digest model.Digest) error
+	AbortUpload(ctx context.Context, id UploadID) error
 }
 ```
+
+A digest is `model.Digest`, a struct with unexported fields, never a string. It is parsed
+at the edge, so no internal code can be handed a malformed one and the zero value is
+invalid rather than an empty but usable key.
 
 Two implementations, filesystem and S3-compatible. Choosing between them is configuration,
 never a code path. Both pass the same conformance suite, which is what makes that claim
@@ -281,11 +296,16 @@ true rather than aspirational.
 `GetRange` exists because OCI clients resume interrupted layer pulls and because the UI
 should not stream a gigabyte to render a manifest.
 
-**Staged uploads.** An upload writes to a staging location under a session id, hashing as
-it goes. On completion the computed digest is compared against the client's claim; only on
-a match is the blob committed to its final content-addressed key. A mismatch discards the
-staging object. Never write unverified bytes to a content-addressed key, and never trust a
-client-supplied digest.
+**Staged uploads.** An upload writes to a staging key under a session id, hashing as it
+goes. On completion the computed digest is compared against the client's claim; only on a
+match is the blob committed to its final content-addressed key, by rename on a filesystem
+and by server-side copy on S3, so a commit moves no bytes through the process. A mismatch
+discards the staging object. Never write unverified bytes to a content-addressed key, and
+never trust a client-supplied digest.
+
+`internal/cas` is the only caller of the staging methods and the only place that decides a
+blob's digest. `Put` stays for payloads that are already in memory and already hashed,
+such as manifests and evidence documents, where a staging round trip buys nothing.
 
 ---
 
@@ -301,6 +321,11 @@ client-supplied digest.
 | `/ui/...` | read-only web interface |
 | `/healthz`, `/readyz` | liveness and readiness |
 | `/metrics` | Prometheus |
+
+`/healthz` checks nothing: a liveness probe that fails during a database outage gets the
+process killed for someone else's problem. `/readyz` checks the database, and the blob
+store when the backend offers a cheap probe. Both report which check failed, never why:
+the cause goes to the log, tied to the same request id.
 
 Routing uses `chi`. The stdlib `ServeMux` cannot express the OCI routes, because an OCI
 repository name legitimately contains slashes in the middle of a path

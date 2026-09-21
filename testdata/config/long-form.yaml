@@ -1,0 +1,17 @@
+# The same setup, spelled out. Loading either file must produce the identical
+# internal tree: that is the desugaring guarantee of ADR 7, and the golden test
+# beside this file is what keeps two spellings from becoming two parsers.
+listen:
+  address: :9090
+
+storage:
+  backend: s3
+  bucket: sindri-blobs
+  prefix: registry
+
+database:
+  url: postgres://sindri:sindri@db:5432/sindri?sslmode=disable
+
+log:
+  level: debug
+  format: json

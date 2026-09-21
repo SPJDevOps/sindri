@@ -1,0 +1,4 @@
+# A single node deployment with an environment override and a default.
+listen:   ${SINDRI_LISTEN:-:8080}
+storage:  ${SINDRI_DATA_DIR:-./data}
+database: postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable
