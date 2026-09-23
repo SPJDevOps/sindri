@@ -107,24 +107,26 @@ grep -rl 'github.com/spj/sindri' --include='*.go' --include='Makefile' --include
 
 ---
 
-### M1 — Storage, CAS, and a process that boots
+### M1 — Storage, CAS, and a process that boots ✅
 
 **Goal.** `sindri serve` runs, connects to Postgres, and can store and retrieve a verified
 blob on two different backends.
 
 **Scope.**
-- Command tree with `cobra`; `serve` reads `sindri.yaml` with `${VAR:-default}`
+- [x] Command tree with `cobra`; `serve` reads `sindri.yaml` with `${VAR:-default}`
   environment substitution
-- `storage.BlobStore` interface per ARCHITECTURE.md section 6
-- `fsstore`: content-addressed directory fan-out (`ab/cd/abcd...`) to avoid million-entry
-  directories
-- `s3store` on `aws-sdk-go-v2`, tested against MinIO, path-style addressing configurable
-- `cas`: streaming digest computation, staged uploads, digest verification before commit,
-  dedup on put
-- `db`: `pgx/v5` pool, `goose` migrations embedded via `embed.FS`, applied on startup
-- `/healthz`, `/readyz` (readiness checks the database), `/metrics`, structured `slog`
-  logging with a request id
-- Graceful shutdown on SIGTERM
+- [x] `storage.BlobStore` interface per ARCHITECTURE.md section 6
+- [x] `fsstore`: content-addressed directory fan-out (`ab/cd/abcd...`) to avoid
+  million-entry directories
+- [x] `s3store` on `aws-sdk-go-v2`, tested against MinIO, path-style addressing
+  configurable
+- [x] `cas`: streaming digest computation, staged uploads, digest verification before
+  commit, dedup on put
+- [x] `db`: `pgx/v5` pool, `goose` migrations embedded via `embed.FS`, applied on startup
+  under an advisory lock
+- [x] `/healthz`, `/readyz` (readiness checks the database, and storage where the backend
+  can be probed), `/metrics`, structured `slog` logging with a request id
+- [x] Graceful shutdown on SIGTERM
 
 Sindri's own default listen address is `:8080`, overridable, and the default development
 database URL is `postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable` to match
@@ -143,7 +145,7 @@ self-inflicted wound in this roadmap. See ARCHITECTURE.md section 8.
 content-addressed key after the digest matches. A partially uploaded blob committed under
 its claimed digest is corruption that every later integrity check will trust.
 
-**Gate.**
+**Gate.** Verified on 2026-09-21 with Go 1.27.1, Docker 29.8, golangci-lint v2.13.2.
 ```bash
 make up
 make test                      # unit tests pass
@@ -155,7 +157,24 @@ curl -fsS localhost:8080/metrics | head
 The conformance suite is one table-driven test run twice, once per backend, via
 testcontainers. Two suites that drifted apart would defeat the purpose.
 
-Then enable the `integration` job in `.github/workflows/ci.yml` by removing `if: false`.
+It is `TestBlobStore_Conformance` in `internal/storage/conformance_integration_test.go`,
+over a suite that lives in `internal/storage/storagetest`. The in-memory store that stands
+in for a backend in higher-level tests runs the same suite, so a fake cannot drift from
+the thing it fakes.
+
+**What M1 decided.** Staged uploads became part of `storage.BlobStore` rather than a local
+temporary file inside `cas` ([ADR 8](docs/adr/0008-staged-uploads-belong-to-the-blobstore.md)),
+and the configuration loader was built in full rather than as a throwaway
+([ADR 9](docs/adr/0009-one-configuration-loader-from-m1.md)). `cas` does not touch
+Postgres: dedup is a `Stat` against the backend, and the `blobs` table stays in M2 where
+this document puts it. The first migration is a documented baseline whose job is to prove
+that embedded migrations apply on startup.
+
+Two things changed outside the milestone's scope because they were broken: MinIO's images
+now come from `quay.io` and are pinned, since Docker Hub no longer serves them to
+anonymous pulls, and `make lint` now covers the `integration` build tag.
+
+The `integration` job in `.github/workflows/ci.yml` is enabled from here.
 
 ---
 

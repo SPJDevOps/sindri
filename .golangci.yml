@@ -3,6 +3,10 @@ version: "2"
 run:
   timeout: 5m
   tests: true
+  # Lint the integration suites too. They are the only tests that touch real
+  # Postgres and real S3, so they are the last code that should go unchecked.
+  build-tags:
+    - integration
 
 linters:
   default: none
@@ -51,6 +55,12 @@ linters:
     rules:
       # Test code may assert loosely and hardcode credentials for fixtures.
       - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+      # internal/testsupport starts containers for the integration suites. It
+      # is test-only infrastructure despite not being a _test.go file.
+      - path: internal/testsupport/
         linters:
           - errcheck
           - gosec

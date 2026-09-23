@@ -15,6 +15,11 @@ exist?" but **"is exactly this artifact approved for this environment?"**
 Pre-v1, under active construction. See [roadmap.md](roadmap.md) for the milestone plan
 and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
+Through milestone M1, `sindri serve` boots: it reads one YAML file, applies its embedded
+migrations to Postgres, serves `/healthz`, `/readyz`, and `/metrics`, and stores digest
+verified blobs on a filesystem or any S3-compatible bucket. There is no protocol adapter
+yet, so there is nothing to `docker push` at; that is M3.
+
 ## What v1 will do
 
 - **Protocols:** OCI (Docker, Helm charts) and PyPI
@@ -30,6 +35,15 @@ and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
 Not yet available. It arrives with milestone M8 and will be verified from a clean
 machine with nothing installed but Docker.
+
+To run what exists today from source, with Go and Docker installed:
+
+```bash
+make up            # Postgres on 55432, MinIO on 59000
+make build
+./bin/sindri serve # no configuration file needed; defaults match the Compose stack
+curl -fsS localhost:8080/readyz
+```
 
 ## Why
 

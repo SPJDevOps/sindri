@@ -34,6 +34,9 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.2
+          # .golangci.yml sets the integration build tag, so the suites that
+          # touch real Postgres and real S3 are linted too.
+          args: --timeout=5m
 
   test:
     name: Unit tests
@@ -60,8 +63,9 @@ jobs:
   integration:
     name: Integration tests
     runs-on: ubuntu-latest
-    # Enabled from milestone M1, when the first testcontainers suite lands.
-    if: false
+    # Real Postgres and real MinIO through testcontainers, which needs the
+    # Docker daemon the runner already provides.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

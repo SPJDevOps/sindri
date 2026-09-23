@@ -60,7 +60,15 @@ code cannot receive a malformed digest.
 `TestResolve_HostedMemberWinsOverProxy`.
 
 **Every backend passes the same suite.** When there are two implementations of an
-interface, there is one test suite parameterised over them, not two suites that drift.
+interface, there is one test suite parameterised over them, not two suites that drift. The
+storage suite lives in `internal/storage/storagetest` and is run per backend by
+`internal/storage/conformance_integration_test.go`. Test fakes run it too, so a fake cannot
+behave differently from the thing it fakes.
+
+**Integration tests get their dependencies from `internal/testsupport`**, which is built
+only under the `integration` tag and starts real Postgres and real MinIO through
+testcontainers. Container images are pinned there; MinIO comes from `quay.io` because
+Docker Hub no longer serves it to anonymous pulls.
 
 ## Configuration rules
 
@@ -127,6 +135,9 @@ Compose binds high host ports so it never fights whatever else you are running.
 Credentials are `sindri` / `sindri` for Postgres and `sindri` /
 `sindri-dev-secret` for MinIO, which creates the `sindri-blobs` bucket on startup. These
 are development-only values and must never appear in a deployment manifest.
+
+`make lint` runs with the `integration` build tag set in `.golangci.yml`, so the suites
+that touch real infrastructure are linted with everything else.
 
 **golangci-lint must be v2.** The v2 configuration format is incompatible with v1, so a v1
 binary on your `PATH` will reject `.golangci.yml`. Install v2 into its own `GOBIN` if you
