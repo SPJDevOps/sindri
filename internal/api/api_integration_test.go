@@ -184,7 +184,7 @@ func TestAPI_RequiresBearerToken(t *testing.T) {
 		t.Fatalf("server.New: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/repositories", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/repositories", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
@@ -213,7 +213,7 @@ func mustDo(t *testing.T, h http.Handler, method, path string, body []byte, cont
 	if body != nil {
 		rdr = bytes.NewReader(body)
 	}
-	req := httptest.NewRequest(method, path, rdr)
+	req := httptest.NewRequestWithContext(t.Context(), method, path, rdr)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)

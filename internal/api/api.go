@@ -245,7 +245,7 @@ func (a *api) getFile(w http.ResponseWriter, r *http.Request) {
 		a.writeRegistryError(w, r, err)
 		return
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	w.Header().Set("Content-Type", file.MediaType)
 	w.Header().Set("Docker-Content-Digest", file.Digest.String())

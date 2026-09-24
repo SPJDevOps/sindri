@@ -81,7 +81,7 @@ generate:
 ## tools: Install developer tooling into GOBIN.
 .PHONY: tools
 tools:
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	GOTOOLCHAIN=go1.27.1 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 
 ## up: Start local Postgres and MinIO for development.

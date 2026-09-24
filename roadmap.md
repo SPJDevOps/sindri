@@ -178,20 +178,20 @@ The `integration` job in `.github/workflows/ci.yml` is enabled from here.
 
 ---
 
-### M2 — Domain spine and management API
+### M2 — Domain spine and management API ✅
 
 **Goal.** Repositories, packages, versions, and files are real rows, manageable over HTTP.
 
 **Scope.**
-- Migrations for the placement layer: `repositories`, `repository_members`, `remotes`,
+- [x] Migrations for the placement layer: `repositories`, `repository_members`, `remotes`,
   `packages`, `versions`, `files`, `blobs`, `tags`, `manifest_children`
-- `sqlc` wired into `make generate`, typed queries in `internal/db`
-- `internal/registry`: publish, resolve, list, delete, enforcing invariant I1
-- `/api/v1` with repository CRUD, package and version listing, cursor pagination
-- One error model: stable machine-readable code, human message, request id
-- Static bearer-token auth as an explicit placeholder for M7, and a middleware seam that
+- [x] `sqlc` wired into `make generate`, typed queries in `internal/db`
+- [x] `internal/registry`: publish, resolve, list, delete, enforcing invariant I1
+- [x] `/api/v1` with repository CRUD, package and version listing, cursor pagination
+- [x] One error model: stable machine-readable code, human message, request id
+- [x] Static bearer-token auth as an explicit placeholder for M7, and a middleware seam that
   M7 fills rather than replaces
-- Placement check helper that every read path must call, per invariant I2
+- [x] Placement check helper that every read path must call, per invariant I2
 
 **Out of scope.** Protocols, proxying, lifecycle.
 
@@ -199,14 +199,17 @@ The `integration` job in `.github/workflows/ci.yml` is enabled from here.
 though with one repository type it looks like pointless indirection. Adding it after two
 adapters exist means auditing every handler instead of writing one function.
 
-**Gate.**
+**Gate.** Verified on 2026-09-24 with Go 1.27.1, Docker 29.1, golangci-lint v2.13.2.
 ```bash
+make generate
+make test
 make test-integration
+make ci
 ```
 An end-to-end test that, over HTTP only: creates a hosted repository, uploads a blob,
 lists it, reads it back byte-identical, fails to read it via a *different* repository's
 path with 404, and deletes it. That fourth assertion is invariant I2 and it is the
-important one.
+important one. See `TestAPI_PlacementGatesCrossRepoReads`.
 
 ---
 

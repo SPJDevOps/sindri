@@ -8,7 +8,7 @@ import (
 
 func TestStaticBearer_AcceptsMatchingToken(t *testing.T) {
 	a := NewStaticBearer("secret-token")
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer secret-token")
 
 	id, err := a.Authenticate(t.Context(), req)
@@ -34,7 +34,7 @@ func TestStaticBearer_RejectsWrongOrMissingToken(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 			if tc.header != "" {
 				req.Header.Set("Authorization", tc.header)
 			}
@@ -47,7 +47,7 @@ func TestStaticBearer_RejectsWrongOrMissingToken(t *testing.T) {
 
 func TestStaticBearer_EmptyTokenRejectsEverything(t *testing.T) {
 	a := NewStaticBearer("")
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer anything")
 	if _, err := a.Authenticate(t.Context(), req); err == nil {
 		t.Fatal("empty configured token must fail closed")
@@ -63,7 +63,7 @@ func TestMiddleware_SetsIdentity(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer tok")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

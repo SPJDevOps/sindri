@@ -316,9 +316,10 @@ type Auth struct {
 }
 
 func defaultAuth() Auth {
-	// Development-only default, matching the spirit of the Compose credentials.
-	// Production must set auth.static_token (typically via ${SINDRI_TOKEN}).
-	return Auth{StaticToken: "sindri-dev-token"}
+	// G101: development-only default token, parallel to the Compose database
+	// credential. Production must set auth.static_token (typically via
+	// ${SINDRI_TOKEN}). It must never appear in a deployment manifest.
+	return Auth{StaticToken: "sindri-dev-token"} //nolint:gosec
 }
 
 // UnmarshalYAML accepts the token on its own or the full mapping.
