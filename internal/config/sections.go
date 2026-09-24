@@ -305,3 +305,42 @@ func (l *Log) validate() error {
 	}
 	return nil
 }
+
+// Auth describes how the management API authenticates callers.
+//
+// Short form: `auth: ${SINDRI_TOKEN}`. Long form: a mapping with static_token.
+// M2 is a static bearer placeholder; M7 replaces the authenticator behind the
+// same config section and middleware seam (ADR 9: one loader).
+type Auth struct {
+	StaticToken string `yaml:"static_token"`
+}
+
+func defaultAuth() Auth {
+	// Development-only default, matching the spirit of the Compose credentials.
+	// Production must set auth.static_token (typically via ${SINDRI_TOKEN}).
+	return Auth{StaticToken: "sindri-dev-token"}
+}
+
+// UnmarshalYAML accepts the token on its own or the full mapping.
+func (a *Auth) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		a.StaticToken = node.Value
+		return nil
+	}
+
+	type raw Auth
+	return strictDecode(node, (*raw)(a))
+}
+
+func (a *Auth) applyDefaults() {
+	if a.StaticToken == "" {
+		a.StaticToken = defaultAuth().StaticToken
+	}
+}
+
+func (a *Auth) validate() error {
+	if strings.TrimSpace(a.StaticToken) == "" {
+		return fmt.Errorf("auth.static_token: must not be empty")
+	}
+	return nil
+}

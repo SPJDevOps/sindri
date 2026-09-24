@@ -1,4 +1,5 @@
-// Package db owns the Postgres connection pool and the embedded migrations.
+// Package db owns the Postgres connection pool, the embedded migrations, and
+// the sqlc-generated typed queries against them.
 //
 // Postgres is the only supported metadata store (ADR 2), and migrations ship
 // inside the binary and apply on startup, so upgrading Sindri is replacing one
@@ -69,9 +70,12 @@ func Open(ctx context.Context, opts Options) (*DB, error) {
 	return &DB{pool: pool}, nil
 }
 
-// Pool exposes the pool for query packages. M2 generates typed queries with
-// sqlc against it.
+// Pool exposes the pool for sqlc-generated Queries and anything else that
+// needs a *pgxpool.Pool. Prefer the typed Queries over ad-hoc SQL.
 func (d *DB) Pool() *pgxpool.Pool { return d.pool }
+
+// Queries returns a sqlc Queries bound to this pool.
+func (d *DB) Queries() *Queries { return New(d.pool) }
 
 // Ping reports whether the database is reachable. This is what /readyz asks.
 func (d *DB) Ping(ctx context.Context) error {

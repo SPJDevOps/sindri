@@ -33,8 +33,8 @@ func TestMigrate_AppliesAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the schema version: %v", err)
 	}
-	if version < 1 {
-		t.Fatalf("schema version = %d, want at least 1", version)
+	if version < 2 {
+		t.Fatalf("schema version = %d, want at least 2 (placement layer)", version)
 	}
 
 	var rows int
@@ -43,6 +43,24 @@ func TestMigrate_AppliesAndIsIdempotent(t *testing.T) {
 	}
 	if rows != 1 {
 		t.Fatalf("schema_origin holds %d rows after two migration runs, want 1", rows)
+	}
+
+	for _, table := range []string{
+		"blobs", "repositories", "repository_members", "remotes",
+		"packages", "versions", "files", "tags", "manifest_children",
+	} {
+		var exists bool
+		err := pool.Pool().QueryRow(t.Context(),
+			`SELECT EXISTS (
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema = 'public' AND table_name = $1
+			)`, table).Scan(&exists)
+		if err != nil {
+			t.Fatalf("checking table %s: %v", table, err)
+		}
+		if !exists {
+			t.Fatalf("expected placement table %s after migrate", table)
+		}
 	}
 }
 
