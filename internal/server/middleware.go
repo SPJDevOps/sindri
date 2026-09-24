@@ -138,7 +138,7 @@ func recoverer(log *slog.Logger) func(http.Handler) http.Handler {
 						slog.Any("panic", recovered),
 						slog.String("route", routePattern(r)),
 					)
-					writeJSON(r.Context(), w, http.StatusInternalServerError, errorBody{
+					writeJSON(r.Context(), w, http.StatusInternalServerError, ErrorBody{
 						Code:      "INTERNAL",
 						Message:   "the server failed to handle this request",
 						RequestID: RequestIDFromContext(r.Context()),

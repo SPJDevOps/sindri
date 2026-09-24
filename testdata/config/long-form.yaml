@@ -15,3 +15,6 @@ database:
 log:
   level: debug
   format: json
+
+auth:
+  static_token: ${SINDRI_TOKEN:-sindri-dev-token}

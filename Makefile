@@ -12,6 +12,7 @@ LDFLAGS     := -s -w \
 	-X $(PKG)/internal/version.Date=$(DATE)
 
 GOLANGCI_VERSION := v2.13.2
+SQLC_VERSION     := v1.30.0
 COMPOSE_FILE     := deploy/compose/docker-compose.yml
 
 .DEFAULT_GOAL := help
@@ -71,10 +72,17 @@ tidy:
 	go mod tidy
 	go mod verify
 
+## generate: Regenerate sqlc typed queries under internal/db.
+.PHONY: generate
+generate:
+	@command -v sqlc >/dev/null 2>&1 || { echo "sqlc not found. Install it with: make tools"; exit 1; }
+	sqlc generate
+
 ## tools: Install developer tooling into GOBIN.
 .PHONY: tools
 tools:
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	GOTOOLCHAIN=go1.27.1 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 
 ## up: Start local Postgres and MinIO for development.
 .PHONY: up

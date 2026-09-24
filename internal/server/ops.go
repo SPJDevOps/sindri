@@ -11,10 +11,10 @@ import (
 	"github.com/spj/sindri/internal/storage"
 )
 
-// errorBody is the shape every error response takes until M2 defines the one
-// error model for the management API. A stable code, a human message, and the
-// request id that ties the response to a log line.
-type errorBody struct {
+// ErrorBody is the shape every error response takes: a stable code, a human
+// message, and the request id that ties the response to a log line. The
+// management API uses the same JSON fields (see internal/api.ErrorBody).
+type ErrorBody struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	RequestID string `json:"request_id,omitempty"`
@@ -41,15 +41,19 @@ func (s *Server) router() http.Handler {
 	r.Get("/readyz", s.handleReadyz)
 	r.Method(http.MethodGet, "/metrics", s.metrics.handler())
 
+	if s.opts.API != nil {
+		r.Mount("/api/v1", s.opts.API)
+	}
+
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(r.Context(), w, http.StatusNotFound, errorBody{
+		writeJSON(r.Context(), w, http.StatusNotFound, ErrorBody{
 			Code:      "NOT_FOUND",
 			Message:   "no route matches this path",
 			RequestID: RequestIDFromContext(r.Context()),
 		})
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(r.Context(), w, http.StatusMethodNotAllowed, errorBody{
+		writeJSON(r.Context(), w, http.StatusMethodNotAllowed, ErrorBody{
 			Code:      "METHOD_NOT_ALLOWED",
 			Message:   "this route does not accept that method",
 			RequestID: RequestIDFromContext(r.Context()),

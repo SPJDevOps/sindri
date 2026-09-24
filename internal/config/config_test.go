@@ -80,6 +80,12 @@ func TestParse_DesugarsEverySection(t *testing.T) {
 			want:  func(c *config.Config) bool { return c.Log.Level == "warn" && c.Log.Format == "json" },
 			desc:  "log level warn with the default format",
 		},
+		{
+			name:  "AuthScalar",
+			input: "auth: my-token",
+			want:  func(c *config.Config) bool { return c.Auth.StaticToken == "my-token" },
+			desc:  "auth.static_token = my-token",
+		},
 	}
 
 	for _, tc := range tests {

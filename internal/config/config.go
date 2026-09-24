@@ -35,6 +35,7 @@ type Config struct {
 	Storage  Storage  `yaml:"storage"`
 	Database Database `yaml:"database"`
 	Log      Log      `yaml:"log"`
+	Auth     Auth     `yaml:"auth"`
 }
 
 // Default returns the configuration a server runs on with no file present.
@@ -44,6 +45,7 @@ func Default() Config {
 		Storage:  defaultStorage(),
 		Database: defaultDatabase(),
 		Log:      defaultLog(),
+		Auth:     defaultAuth(),
 	}
 }
 
@@ -137,6 +139,7 @@ func (c *Config) applyDefaults() {
 	c.Storage.applyDefaults()
 	c.Database.applyDefaults()
 	c.Log.applyDefaults()
+	c.Auth.applyDefaults()
 }
 
 // Validate reports the first configuration error, naming the field.
@@ -146,6 +149,7 @@ func (c *Config) Validate() error {
 		c.Storage.validate,
 		c.Database.validate,
 		c.Log.validate,
+		c.Auth.validate,
 	} {
 		if err := check(); err != nil {
 			return err

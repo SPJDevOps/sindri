@@ -10,8 +10,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/spj/sindri/internal/api"
+	"github.com/spj/sindri/internal/auth"
+	"github.com/spj/sindri/internal/cas"
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/db"
+	"github.com/spj/sindri/internal/registry"
 	"github.com/spj/sindri/internal/server"
 	"github.com/spj/sindri/internal/storage"
 	"github.com/spj/sindri/internal/storage/fsstore"
@@ -28,7 +32,7 @@ func newServeCmd() *cobra.Command {
 
 Reads one configuration file (sindri.yaml by default, or --config), applies
 embedded database migrations, opens the configured blob store, and serves
-/healthz, /readyz, and /metrics until SIGTERM or SIGINT.`,
+/healthz, /readyz, /metrics, and /api/v1 until SIGTERM or SIGINT.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runServe(cmd.Context(), configPath)
 		},
@@ -91,12 +95,22 @@ func runServe(parent context.Context, explicitConfig string) error {
 		return err
 	}
 
+	casStore := cas.New(blobs)
+	reg := registry.New(database, casStore, string(cfg.Storage.Backend))
+	authenticator := auth.NewStaticBearer(cfg.Auth.StaticToken)
+	apiHandler := api.Handler(api.Options{
+		Registry:  reg,
+		Auth:      authenticator,
+		RequestID: server.RequestIDFromContext,
+	})
+
 	srv, err := server.New(server.Options{
 		Address:           cfg.Listen.Address,
 		ReadHeaderTimeout: cfg.Listen.ReadHeaderTimeout.Duration(),
 		ShutdownTimeout:   cfg.Listen.ShutdownTimeout.Duration(),
 		Database:          database,
 		Blobs:             blobs,
+		API:               apiHandler,
 		Logger:            logger,
 	})
 	if err != nil {
