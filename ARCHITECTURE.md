@@ -251,11 +251,17 @@ tags(repo_id FK, package_id FK, name, target_digest FK,
      PRIMARY KEY (repo_id, package_id, name))     -- mutable, OCI
 manifest_children(parent_digest FK, child_digest FK,
                   PRIMARY KEY (parent_digest, child_digest))
+repository_blobs(repo_id FK, digest FK,
+                 PRIMARY KEY (repo_id, digest))   -- OCI blob membership (I2)
 ```
 
 `normalized_name` is the protocol's canonical form, lowercased with separators folded for
 PyPI per PEP 503. Uniqueness is on the normalized form so that `Foo.Bar` and `foo-bar`
 cannot both be claimed.
+
+`repository_blobs` records that a digest was uploaded (or written as a manifest) into a
+repository. It is what makes a layer readable under invariant I2 after a blob push and
+before any tag exists. See ADR 10.
 
 `manifest_children` records manifest-to-blob and index-to-manifest edges at push time.
 Garbage collection is then a reachability query from tags and lifecycle states, which is

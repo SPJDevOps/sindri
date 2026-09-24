@@ -213,21 +213,21 @@ important one. See `TestAPI_PlacementGatesCrossRepoReads`.
 
 ---
 
-### M3 — OCI adapter, hosted
+### M3 — OCI adapter, hosted ✅
 
 **Goal.** `docker push` and `docker pull` work against Sindri.
 
 **Scope.**
-- `GET /v2/` version check
-- Blob upload: monolithic `POST`, chunked `PATCH`/`PUT` with correct `Range` and
+- [x] `GET /v2/` version check
+- [x] Blob upload: monolithic `POST`, chunked `PATCH`/`PUT` with correct `Range` and
   `Location` handling, `DELETE` of an upload session
-- Blob `GET`/`HEAD` with range support
-- Manifest `GET`/`HEAD`/`PUT`/`DELETE`, including image indexes and multi-arch
-- Tag listing with pagination and `Link` headers
-- `manifest_children` populated on every manifest push, covering index-to-manifest and
+- [x] Blob `GET`/`HEAD` with range support
+- [x] Manifest `GET`/`HEAD`/`PUT`/`DELETE`, including image indexes and multi-arch
+- [x] Tag listing with pagination and `Link` headers
+- [x] `manifest_children` populated on every manifest push, covering index-to-manifest and
   manifest-to-layer edges
-- OCI-shaped error bodies with the specification's error codes
-- Struct types from `opencontainers/image-spec`; no hand-rolled manifest JSON
+- [x] OCI-shaped error bodies with the specification's error codes
+- [x] Struct types from `opencontainers/image-spec`; no hand-rolled manifest JSON
 
 **Out of scope.** Proxying Docker Hub, referrers API, cross-repository blob mounts.
 
@@ -235,18 +235,21 @@ important one. See `TestAPI_PlacementGatesCrossRepoReads`.
 must be tracked server-side, and the `Range` response header is inclusive of both bounds,
 which is off by one from every Go slice you will write next to it.
 
-**Gate.**
+**Gate.** Verified on 2026-09-24 with Go 1.27.1, Docker 29.8, golangci-lint v2.13.2.
+Upstream distribution-spec conformance (`OCI_TEST_PUSH/PULL/CONTENT_MANAGEMENT`)
+passed 60/60 (20 skipped: referrers and related). Docker Desktop needs
+`host.docker.internal:8080` in `insecure-registries` for `docker push`; use
+[`scripts/oci-docker-gate.sh`](scripts/oci-docker-gate.sh). Round-trip is also
+covered by `TestOCI_PushPullAndPlacementGate`.
 ```bash
-docker build -t localhost:8080/demo/app:1.0 testdata/demo
-docker push  localhost:8080/demo/app:1.0
-docker rmi   localhost:8080/demo/app:1.0
-docker pull  localhost:8080/demo/app:1.0          # round-trips
+# create demo/app via /api/v1 (see scripts/oci-docker-gate.sh), then:
+docker build -t host.docker.internal:8080/demo/app:1.0 testdata/demo
+docker push  host.docker.internal:8080/demo/app:1.0
+docker rmi   host.docker.internal:8080/demo/app:1.0
+docker pull  host.docker.internal:8080/demo/app:1.0          # round-trips
 
 # Upstream conformance, push + pull + content management workflows
-docker run --rm -e OCI_ROOT_URL=http://host.docker.internal:8080 \
-  -e OCI_NAMESPACE=conformance/test \
-  -e OCI_TEST_PUSH=1 -e OCI_TEST_PULL=1 -e OCI_TEST_CONTENT_MANAGEMENT=1 \
-  ghcr.io/opencontainers/distribution-spec/conformance:latest
+./scripts/oci-conformance.sh
 ```
 Check in the conformance invocation as a script so the next session does not reconstruct
 it.

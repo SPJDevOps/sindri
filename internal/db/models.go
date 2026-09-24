@@ -58,6 +58,11 @@ type Repository struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type RepositoryBlob struct {
+	RepoID uuid.UUID `json:"repo_id"`
+	Digest string    `json:"digest"`
+}
+
 type RepositoryMember struct {
 	VirtualRepoID uuid.UUID `json:"virtual_repo_id"`
 	MemberRepoID  uuid.UUID `json:"member_repo_id"`

@@ -27,6 +27,12 @@ SELECT EXISTS (
     JOIN repositories r ON r.id = t.repo_id
     WHERE r.name = $1
       AND t.target_digest = $2
+    UNION ALL
+    SELECT 1
+    FROM repository_blobs rb
+    JOIN repositories r ON r.id = rb.repo_id
+    WHERE r.name = $1
+      AND rb.digest = $2
 )::bool AS placed
 `
 
@@ -36,7 +42,7 @@ type CheckPlacementParams struct {
 }
 
 // Invariant I2: a digest is readable in a repository only when a placement
-// row (file or tag) links it into that repository's graph.
+// row (file, tag, or repository_blobs) links it into that repository.
 func (q *Queries) CheckPlacement(ctx context.Context, arg CheckPlacementParams) (bool, error) {
 	row := q.db.QueryRow(ctx, checkPlacement, arg.RepoName, arg.Digest)
 	var placed bool
@@ -138,6 +144,16 @@ func (q *Queries) DeleteFile(ctx context.Context, arg DeleteFileParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const deleteManifestChildren = `-- name: DeleteManifestChildren :exec
+DELETE FROM manifest_children
+WHERE parent_digest = $1
+`
+
+func (q *Queries) DeleteManifestChildren(ctx context.Context, parentDigest string) error {
+	_, err := q.db.Exec(ctx, deleteManifestChildren, parentDigest)
+	return err
+}
+
 const deletePackageIfEmpty = `-- name: DeletePackageIfEmpty :execrows
 DELETE FROM packages p
 WHERE p.id = $1
@@ -163,6 +179,45 @@ func (q *Queries) DeleteRepositoryByName(ctx context.Context, name string) (int6
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteTag = `-- name: DeleteTag :execrows
+DELETE FROM tags t
+USING repositories r, packages p
+WHERE t.repo_id = r.id
+  AND t.package_id = p.id
+  AND r.name = $1
+  AND p.normalized_name = $2
+  AND t.name = $3
+`
+
+type DeleteTagParams struct {
+	RepoName       string `json:"repo_name"`
+	NormalizedName string `json:"normalized_name"`
+	TagName        string `json:"tag_name"`
+}
+
+func (q *Queries) DeleteTag(ctx context.Context, arg DeleteTagParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTag, arg.RepoName, arg.NormalizedName, arg.TagName)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteTagsByDigest = `-- name: DeleteTagsByDigest :exec
+DELETE FROM tags
+WHERE repo_id = $1 AND target_digest = $2
+`
+
+type DeleteTagsByDigestParams struct {
+	RepoID       uuid.UUID `json:"repo_id"`
+	TargetDigest string    `json:"target_digest"`
+}
+
+func (q *Queries) DeleteTagsByDigest(ctx context.Context, arg DeleteTagsByDigestParams) error {
+	_, err := q.db.Exec(ctx, deleteTagsByDigest, arg.RepoID, arg.TargetDigest)
+	return err
 }
 
 const deleteVersionIfEmpty = `-- name: DeleteVersionIfEmpty :execrows
@@ -343,6 +398,33 @@ func (q *Queries) GetRepositoryByName(ctx context.Context, name string) (Reposit
 	return i, err
 }
 
+const getTag = `-- name: GetTag :one
+SELECT t.repo_id, t.package_id, t.name, t.target_digest FROM tags t
+JOIN repositories r ON r.id = t.repo_id
+JOIN packages p ON p.id = t.package_id
+WHERE r.name = $1
+  AND p.normalized_name = $2
+  AND t.name = $3
+`
+
+type GetTagParams struct {
+	RepoName       string `json:"repo_name"`
+	NormalizedName string `json:"normalized_name"`
+	TagName        string `json:"tag_name"`
+}
+
+func (q *Queries) GetTag(ctx context.Context, arg GetTagParams) (Tag, error) {
+	row := q.db.QueryRow(ctx, getTag, arg.RepoName, arg.NormalizedName, arg.TagName)
+	var i Tag
+	err := row.Scan(
+		&i.RepoID,
+		&i.PackageID,
+		&i.Name,
+		&i.TargetDigest,
+	)
+	return i, err
+}
+
 const getVersion = `-- name: GetVersion :one
 SELECT id, package_id, version FROM versions
 WHERE package_id = $1 AND version = $2
@@ -358,6 +440,22 @@ func (q *Queries) GetVersion(ctx context.Context, arg GetVersionParams) (Version
 	var i Version
 	err := row.Scan(&i.ID, &i.PackageID, &i.Version)
 	return i, err
+}
+
+const linkRepositoryBlob = `-- name: LinkRepositoryBlob :exec
+INSERT INTO repository_blobs (repo_id, digest)
+VALUES ($1, $2)
+ON CONFLICT (repo_id, digest) DO NOTHING
+`
+
+type LinkRepositoryBlobParams struct {
+	RepoID uuid.UUID `json:"repo_id"`
+	Digest string    `json:"digest"`
+}
+
+func (q *Queries) LinkRepositoryBlob(ctx context.Context, arg LinkRepositoryBlobParams) error {
+	_, err := q.db.Exec(ctx, linkRepositoryBlob, arg.RepoID, arg.Digest)
+	return err
 }
 
 const listPackagesByRepo = `-- name: ListPackagesByRepo :many
@@ -440,6 +538,49 @@ func (q *Queries) ListRepositories(ctx context.Context, arg ListRepositoriesPara
 	return items, nil
 }
 
+const listTags = `-- name: ListTags :many
+SELECT t.name FROM tags t
+JOIN repositories r ON r.id = t.repo_id
+JOIN packages p ON p.id = t.package_id
+WHERE r.name = $1
+  AND p.normalized_name = $2
+  AND ($3::text IS NULL OR t.name > $3)
+ORDER BY t.name
+LIMIT $4
+`
+
+type ListTagsParams struct {
+	RepoName       string      `json:"repo_name"`
+	NormalizedName string      `json:"normalized_name"`
+	AfterName      pgtype.Text `json:"after_name"`
+	PageLimit      int32       `json:"page_limit"`
+}
+
+func (q *Queries) ListTags(ctx context.Context, arg ListTagsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listTags,
+		arg.RepoName,
+		arg.NormalizedName,
+		arg.AfterName,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVersionsByPackage = `-- name: ListVersionsByPackage :many
 SELECT id, package_id, version FROM versions
 WHERE package_id = $1
@@ -472,6 +613,24 @@ func (q *Queries) ListVersionsByPackage(ctx context.Context, arg ListVersionsByP
 		return nil, err
 	}
 	return items, nil
+}
+
+const unlinkRepositoryBlob = `-- name: UnlinkRepositoryBlob :execrows
+DELETE FROM repository_blobs
+WHERE repo_id = $1 AND digest = $2
+`
+
+type UnlinkRepositoryBlobParams struct {
+	RepoID uuid.UUID `json:"repo_id"`
+	Digest string    `json:"digest"`
+}
+
+func (q *Queries) UnlinkRepositoryBlob(ctx context.Context, arg UnlinkRepositoryBlobParams) (int64, error) {
+	result, err := q.db.Exec(ctx, unlinkRepositoryBlob, arg.RepoID, arg.Digest)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertBlob = `-- name: UpsertBlob :one
@@ -534,6 +693,54 @@ func (q *Queries) UpsertFile(ctx context.Context, arg UpsertFileParams) (File, e
 		&i.Filename,
 		&i.MediaType,
 		&i.Metadata,
+	)
+	return i, err
+}
+
+const upsertManifestChild = `-- name: UpsertManifestChild :exec
+INSERT INTO manifest_children (parent_digest, child_digest)
+VALUES ($1, $2)
+ON CONFLICT (parent_digest, child_digest) DO NOTHING
+`
+
+type UpsertManifestChildParams struct {
+	ParentDigest string `json:"parent_digest"`
+	ChildDigest  string `json:"child_digest"`
+}
+
+func (q *Queries) UpsertManifestChild(ctx context.Context, arg UpsertManifestChildParams) error {
+	_, err := q.db.Exec(ctx, upsertManifestChild, arg.ParentDigest, arg.ChildDigest)
+	return err
+}
+
+const upsertTag = `-- name: UpsertTag :one
+INSERT INTO tags (repo_id, package_id, name, target_digest)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (repo_id, package_id, name) DO UPDATE
+SET target_digest = EXCLUDED.target_digest
+RETURNING repo_id, package_id, name, target_digest
+`
+
+type UpsertTagParams struct {
+	RepoID       uuid.UUID `json:"repo_id"`
+	PackageID    uuid.UUID `json:"package_id"`
+	Name         string    `json:"name"`
+	TargetDigest string    `json:"target_digest"`
+}
+
+func (q *Queries) UpsertTag(ctx context.Context, arg UpsertTagParams) (Tag, error) {
+	row := q.db.QueryRow(ctx, upsertTag,
+		arg.RepoID,
+		arg.PackageID,
+		arg.Name,
+		arg.TargetDigest,
+	)
+	var i Tag
+	err := row.Scan(
+		&i.RepoID,
+		&i.PackageID,
+		&i.Name,
+		&i.TargetDigest,
 	)
 	return i, err
 }

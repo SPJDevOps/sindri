@@ -1,10 +1,9 @@
 // Package server assembles Sindri's HTTP surface: the router, the middleware
 // chain, and the operational endpoints every deployment needs.
 //
-// The management API (/api/v1) mounts onto this router via Options.API; protocol
-// adapters (/v2, /pypi) follow in later milestones. They are not part of this
-// package, so that "what every request passes through" stays readable in one
-// place.
+// The management API (/api/v1) and OCI adapter (/v2) mount onto this router
+// via Options. Protocol adapters are not part of this package, so that "what
+// every request passes through" stays readable in one place.
 package server
 
 import (
@@ -45,6 +44,10 @@ type Options struct {
 	// API is the management surface mounted at /api/v1. Optional so unit tests
 	// of the ops endpoints need not wire a registry.
 	API http.Handler
+
+	// OCI is the distribution-spec surface mounted at /v2. Optional for the
+	// same reason as API.
+	OCI http.Handler
 
 	// Logger receives access logs and server errors. Required.
 	Logger *slog.Logger

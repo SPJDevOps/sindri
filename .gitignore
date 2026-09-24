@@ -5,6 +5,7 @@
 
 # Local development state
 /.data/
+/data/
 *.local.yaml
 .env
 .env.*

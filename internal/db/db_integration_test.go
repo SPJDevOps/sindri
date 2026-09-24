@@ -33,8 +33,8 @@ func TestMigrate_AppliesAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the schema version: %v", err)
 	}
-	if version < 2 {
-		t.Fatalf("schema version = %d, want at least 2 (placement layer)", version)
+	if version < 3 {
+		t.Fatalf("schema version = %d, want at least 3 (repository_blobs)", version)
 	}
 
 	var rows int
@@ -48,6 +48,7 @@ func TestMigrate_AppliesAndIsIdempotent(t *testing.T) {
 	for _, table := range []string{
 		"blobs", "repositories", "repository_members", "remotes",
 		"packages", "versions", "files", "tags", "manifest_children",
+		"repository_blobs",
 	} {
 		var exists bool
 		err := pool.Pool().QueryRow(t.Context(),
