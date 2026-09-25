@@ -234,6 +234,50 @@ func TestStore_RejectsTheZeroDigestOnEveryReadPath(t *testing.T) {
 	}
 }
 
+func TestResumeUpload_AppendsAcrossCalls(t *testing.T) {
+	store := cas.New(memstore.New())
+	payload := []byte("hello chunked world")
+
+	upload, err := store.NewUpload(t.Context())
+	if err != nil {
+		t.Fatalf("NewUpload: %v", err)
+	}
+	id := upload.ID()
+
+	if _, err := upload.Append(t.Context(), bytes.NewReader(payload[:5])); err != nil {
+		t.Fatalf("Append head: %v", err)
+	}
+
+	resumed, err := store.ResumeUpload(id)
+	if err != nil {
+		t.Fatalf("ResumeUpload: %v", err)
+	}
+	if resumed.Size() != 5 {
+		t.Fatalf("resumed size = %d, want 5", resumed.Size())
+	}
+	if _, err := resumed.Append(t.Context(), bytes.NewReader(payload[5:])); err != nil {
+		t.Fatalf("Append tail: %v", err)
+	}
+
+	info, err := resumed.Commit(t.Context(), digestOf(payload), int64(len(payload)))
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if info.Digest != digestOf(payload) {
+		t.Fatalf("digest = %v, want %v", info.Digest, digestOf(payload))
+	}
+	if _, err := store.ResumeUpload(id); !errors.Is(err, storage.ErrUploadNotFound) {
+		t.Fatalf("ResumeUpload after commit = %v, want ErrUploadNotFound", err)
+	}
+}
+
+func TestResumeUpload_UnknownID(t *testing.T) {
+	store := cas.New(memstore.New())
+	if _, err := store.ResumeUpload(storage.UploadID("0123456789abcdef0123456789abcdef")); !errors.Is(err, storage.ErrUploadNotFound) {
+		t.Fatalf("ResumeUpload unknown = %v, want ErrUploadNotFound", err)
+	}
+}
+
 type countingReader struct {
 	io.Reader
 	n int

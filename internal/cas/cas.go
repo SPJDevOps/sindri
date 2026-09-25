@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/storage"
@@ -36,7 +37,8 @@ var (
 
 // Store computes digests and commits verified blobs to a BlobStore.
 type Store struct {
-	blobs storage.BlobStore
+	blobs   storage.BlobStore
+	uploads sync.Map // storage.UploadID -> *Upload
 }
 
 // New returns a Store writing through blobs.

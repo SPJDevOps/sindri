@@ -116,9 +116,65 @@ DELETE FROM packages p
 WHERE p.id = sqlc.arg('id')
   AND NOT EXISTS (SELECT 1 FROM versions v WHERE v.package_id = sqlc.arg('id'));
 
+-- name: LinkRepositoryBlob :exec
+INSERT INTO repository_blobs (repo_id, digest)
+VALUES ($1, $2)
+ON CONFLICT (repo_id, digest) DO NOTHING;
+
+-- name: UnlinkRepositoryBlob :execrows
+DELETE FROM repository_blobs
+WHERE repo_id = $1 AND digest = $2;
+
+-- name: UpsertTag :one
+INSERT INTO tags (repo_id, package_id, name, target_digest)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (repo_id, package_id, name) DO UPDATE
+SET target_digest = EXCLUDED.target_digest
+RETURNING *;
+
+-- name: GetTag :one
+SELECT t.* FROM tags t
+JOIN repositories r ON r.id = t.repo_id
+JOIN packages p ON p.id = t.package_id
+WHERE r.name = sqlc.arg('repo_name')
+  AND p.normalized_name = sqlc.arg('normalized_name')
+  AND t.name = sqlc.arg('tag_name');
+
+-- name: DeleteTag :execrows
+DELETE FROM tags t
+USING repositories r, packages p
+WHERE t.repo_id = r.id
+  AND t.package_id = p.id
+  AND r.name = sqlc.arg('repo_name')
+  AND p.normalized_name = sqlc.arg('normalized_name')
+  AND t.name = sqlc.arg('tag_name');
+
+-- name: ListTags :many
+SELECT t.name FROM tags t
+JOIN repositories r ON r.id = t.repo_id
+JOIN packages p ON p.id = t.package_id
+WHERE r.name = sqlc.arg('repo_name')
+  AND p.normalized_name = sqlc.arg('normalized_name')
+  AND (sqlc.narg('after_name')::text IS NULL OR t.name > sqlc.narg('after_name'))
+ORDER BY t.name
+LIMIT sqlc.arg('page_limit');
+
+-- name: DeleteTagsByDigest :exec
+DELETE FROM tags
+WHERE repo_id = $1 AND target_digest = $2;
+
+-- name: UpsertManifestChild :exec
+INSERT INTO manifest_children (parent_digest, child_digest)
+VALUES ($1, $2)
+ON CONFLICT (parent_digest, child_digest) DO NOTHING;
+
+-- name: DeleteManifestChildren :exec
+DELETE FROM manifest_children
+WHERE parent_digest = $1;
+
 -- name: CheckPlacement :one
 -- Invariant I2: a digest is readable in a repository only when a placement
--- row (file or tag) links it into that repository's graph.
+-- row (file, tag, or repository_blobs) links it into that repository.
 SELECT EXISTS (
     SELECT 1
     FROM files f
@@ -133,4 +189,10 @@ SELECT EXISTS (
     JOIN repositories r ON r.id = t.repo_id
     WHERE r.name = sqlc.arg('repo_name')
       AND t.target_digest = sqlc.arg('digest')
+    UNION ALL
+    SELECT 1
+    FROM repository_blobs rb
+    JOIN repositories r ON r.id = rb.repo_id
+    WHERE r.name = sqlc.arg('repo_name')
+      AND rb.digest = sqlc.arg('digest')
 )::bool AS placed;

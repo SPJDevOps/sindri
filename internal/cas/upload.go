@@ -23,17 +23,39 @@ type Upload struct {
 	done     bool
 }
 
-// NewUpload opens a staging area for a blob whose digest is not known yet.
+// NewUpload opens a staging area for a blob whose digest is not known yet and
+// registers it so a later request can ResumeUpload by id.
 func (s *Store) NewUpload(ctx context.Context) (*Upload, error) {
 	id, err := s.blobs.CreateUpload(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &Upload{
+	u := &Upload{
 		store:    s,
 		id:       id,
 		digester: model.NewDigester(model.AlgorithmSHA256),
-	}, nil
+	}
+	s.uploads.Store(id, u)
+	return u, nil
+}
+
+// ResumeUpload returns an in-flight upload previously opened by NewUpload.
+// Sessions live in process memory (same v1 limit as ADR 8 for S3 multipart
+// state): a different instance cannot resume another process's upload.
+func (s *Store) ResumeUpload(id storage.UploadID) (*Upload, error) {
+	if id == "" {
+		return nil, storage.ErrUploadNotFound
+	}
+	v, ok := s.uploads.Load(id)
+	if !ok {
+		return nil, storage.ErrUploadNotFound
+	}
+	u, ok := v.(*Upload)
+	if !ok || u.done {
+		s.uploads.Delete(id)
+		return nil, storage.ErrUploadNotFound
+	}
+	return u, nil
 }
 
 // ID is the staging identifier, which a protocol adapter hands to a client so
@@ -99,6 +121,7 @@ func (u *Upload) Commit(ctx context.Context, expected model.Digest, size int64) 
 		return storage.BlobInfo{}, err
 	}
 	u.done = true
+	u.store.uploads.Delete(u.id)
 
 	return storage.BlobInfo{Digest: actual, Size: actualSize}, nil
 }
@@ -109,6 +132,7 @@ func (u *Upload) Abort(ctx context.Context) error {
 		return nil
 	}
 	u.done = true
+	u.store.uploads.Delete(u.id)
 	return u.store.blobs.AbortUpload(ctx, u.id)
 }
 
@@ -118,5 +142,6 @@ func (u *Upload) Abort(ctx context.Context) error {
 // time an upload fails, and leaked staging objects are what fills a disk.
 func (u *Upload) abortQuietly(ctx context.Context) {
 	u.done = true
+	u.store.uploads.Delete(u.id)
 	_ = u.store.blobs.AbortUpload(context.WithoutCancel(ctx), u.id)
 }
