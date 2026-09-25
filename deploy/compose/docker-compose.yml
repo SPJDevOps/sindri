@@ -36,19 +36,24 @@ services:
       start_period: 10s
 
   minio:
-    # quay.io, and pinned: MinIO's Docker Hub repository no longer serves
-    # anonymous pulls, and "latest" is not a quickstart anyone can reproduce.
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    # Bitnami's archived build, and pinned: MinIO's own images stopped serving
+    # anonymous pulls on both Docker Hub and quay.io, and "latest" is not a
+    # quickstart anyone can reproduce. See ADR 11.
+    #
+    # This image runs its own entrypoint as a non-root user, so it takes no
+    # `command:` and keeps its data under /bitnami, not /data.
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: sindri
       MINIO_ROOT_PASSWORD: sindri-dev-secret
+      MINIO_API_PORT_NUMBER: "9000"
+      MINIO_CONSOLE_PORT_NUMBER: "9001"
     ports:
       - "127.0.0.1:${SINDRI_S3_PORT:-59000}:9000"           # S3 API
       - "127.0.0.1:${SINDRI_S3_CONSOLE_PORT:-59001}:9001"   # web console
     volumes:
-      - minio-data:/data
+      - minio-data:/bitnami/minio/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
@@ -58,7 +63,7 @@ services:
 
   # One-shot: create the bucket Sindri expects, then exit.
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3
     depends_on:
       minio:
         condition: service_healthy

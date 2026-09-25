@@ -171,8 +171,9 @@ this document puts it. The first migration is a documented baseline whose job is
 that embedded migrations apply on startup.
 
 Two things changed outside the milestone's scope because they were broken: MinIO's images
-now come from `quay.io` and are pinned, since Docker Hub no longer serves them to
-anonymous pulls, and `make lint` now covers the `integration` build tag.
+are pinned rather than floating, and `make lint` now covers the `integration` build tag.
+That pin has since moved twice as upstream closed anonymous pulls, first to `quay.io` and
+then to `bitnamilegacy/minio` ([ADR 11](docs/adr/0011-minio-test-image-source.md)).
 
 The `integration` job in `.github/workflows/ci.yml` is enabled from here.
 

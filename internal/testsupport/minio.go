@@ -16,15 +16,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/testcontainers/testcontainers-go"
-	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/spj/sindri/internal/storage/s3store"
 )
 
 // minioImage is pinned so a test failure is a change in Sindri, never a change
-// upstream. It comes from quay.io because MinIO's Docker Hub repository no
-// longer serves anonymous pulls.
-const minioImage = "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+// upstream. MinIO's own images stopped serving anonymous pulls on both Docker
+// Hub and quay.io, so this is Bitnami's archived build of the same server. See
+// ADR 11 for why an archived image beats a credentialled pull here.
+const minioImage = "bitnamilegacy/minio:2025.7.23-debian-12-r5"
 
 // MinIO describes a running MinIO and the bucket it was given.
 type MinIO struct {
@@ -36,6 +37,11 @@ type MinIO struct {
 
 // StartMinIO starts MinIO, creates a bucket, and stops the container when the
 // test finishes.
+//
+// This drives the container directly rather than through testcontainers'
+// minio module: that module overrides the command with `server /data`, which
+// the Bitnami image's entrypoint does not accept, and whose data directory its
+// non-root user cannot write.
 func StartMinIO(t *testing.T) MinIO {
 	t.Helper()
 	ctx := t.Context()
@@ -46,16 +52,22 @@ func StartMinIO(t *testing.T) MinIO {
 		bucket   = "sindri-blobs"
 	)
 
-	container, err := tcminio.Run(ctx, minioImage,
-		tcminio.WithUsername(user),
-		tcminio.WithPassword(password),
+	container, err := testcontainers.Run(ctx, minioImage,
+		testcontainers.WithExposedPorts(minioPort),
+		testcontainers.WithEnv(map[string]string{
+			"MINIO_ROOT_USER":     user,
+			"MINIO_ROOT_PASSWORD": password,
+		}),
+		testcontainers.WithWaitStrategy(
+			wait.ForHTTP("/minio/health/live").WithPort(minioPort),
+		),
 	)
 	testcontainers.CleanupContainer(t, container)
 	if err != nil {
 		t.Fatalf("starting MinIO: %v", err)
 	}
 
-	hostPort, err := container.ConnectionString(ctx)
+	hostPort, err := container.PortEndpoint(ctx, minioPort, "")
 	if err != nil {
 		t.Fatalf("resolving the MinIO endpoint: %v", err)
 	}
@@ -70,6 +82,10 @@ func StartMinIO(t *testing.T) MinIO {
 
 	return m
 }
+
+// minioPort is the S3 API port. The Bitnami image serves the web console on
+// 9001, which no test needs.
+const minioPort = "9000/tcp"
 
 // Config returns an s3store configuration pointed at m, isolated under prefix
 // so that several stores can share one container without seeing each other.

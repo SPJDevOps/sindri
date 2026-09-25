@@ -67,8 +67,9 @@ behave differently from the thing it fakes.
 
 **Integration tests get their dependencies from `internal/testsupport`**, which is built
 only under the `integration` tag and starts real Postgres and real MinIO through
-testcontainers. Container images are pinned there; MinIO comes from `quay.io` because
-Docker Hub no longer serves it to anonymous pulls.
+testcontainers. Container images are pinned there; MinIO comes from
+`bitnamilegacy/minio` because neither Docker Hub nor `quay.io` serves MinIO's own
+images to anonymous pulls any more. See ADR 11 before changing that pin.
 
 ## Configuration rules
 
