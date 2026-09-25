@@ -1,0 +1,128 @@
+# Dependabot version updates for Sindri.
+#
+# Three ecosystems exist in this repository and all three are covered:
+#   - github-actions   the workflows under .github/workflows
+#   - gomod            the single module at the repository root
+#   - docker-compose   the local development stack in deploy/compose
+#
+# Not covered, deliberately:
+#   - testdata/demo/Dockerfile is `FROM scratch`; there is nothing to update,
+#     and it is a fixture whose bytes tests assert on.
+#   - The container images in internal/testsupport are Go string constants, so
+#     Dependabot cannot see them. When a compose bump below lands, mirror it in
+#     internal/testsupport/postgres.go, which is meant to match compose.
+#
+# Security updates are enabled separately, in the repository's security
+# settings; they ignore the schedule here and open PRs as advisories land.
+
+version: 2
+
+updates:
+  # ---------------------------------------------------------------- actions --
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+    # Let a release sit long enough that a bad tag is yanked before we take it.
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    groups:
+      # One PR for the routine churn; majors stay on their own so the diff that
+      # needs reading is the diff that gets read.
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ------------------------------------------------------------------- go ----
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "go"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    cooldown:
+      default-days: 5
+      semver-major-days: 14
+    groups:
+      # The AWS SDK ships a dozen modules that move together; ungrouped they are
+      # a dozen PRs a week that must merge in lockstep anyway.
+      aws-sdk:
+        applies-to: version-updates
+        patterns:
+          - "github.com/aws/aws-sdk-go-v2*"
+          - "github.com/aws/smithy-go"
+      # Same argument for the OpenTelemetry and testcontainers module families.
+      opentelemetry:
+        applies-to: version-updates
+        patterns:
+          - "go.opentelemetry.io/*"
+      testcontainers:
+        applies-to: version-updates
+        patterns:
+          - "github.com/testcontainers/*"
+      go-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # No ignores here on purpose. The locked choices in CLAUDE.md are all /vN
+    # modules, so a new major arrives under a new import path that Dependabot
+    # will never propose as an upgrade; an ignore rule for them would be dead
+    # config that looks like a guard.
+
+  # --------------------------------------------------------- docker compose --
+  - package-ecosystem: "docker-compose"
+    directory: "/deploy/compose"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "deps"
+    cooldown:
+      default-days: 5
+      semver-major-days: 14
+    groups:
+      compose-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # The MinIO images are pinned on purpose: the pin is what makes the
+      # quickstart reproducible, and which registry serves MinIO anonymously has
+      # already moved once. Repointing them is an ADR decision, not a bot's.
+      # Both spellings are listed because the registry is in flux.
+      - dependency-name: "quay.io/minio/*"
+      - dependency-name: "bitnamilegacy/minio*"
