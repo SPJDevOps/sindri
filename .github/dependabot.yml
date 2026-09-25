@@ -33,9 +33,10 @@ updates:
     commit-message:
       prefix: "ci"
     # Let a release sit long enough that a bad tag is yanked before we take it.
+    # Only default-days here: action tags are not semver, so Dependabot rejects
+    # the semver-*-days keys for this ecosystem.
     cooldown:
       default-days: 3
-      semver-major-days: 7
     groups:
       # One PR for the routine churn; majors stay on their own so the diff that
       # needs reading is the diff that gets read.
@@ -108,9 +109,10 @@ updates:
       - "docker"
     commit-message:
       prefix: "deps"
+    # Image tags are not semver either, so this ecosystem takes default-days
+    # alone. See the note on the actions entry above.
     cooldown:
       default-days: 5
-      semver-major-days: 14
     groups:
       compose-minor-patch:
         applies-to: version-updates
