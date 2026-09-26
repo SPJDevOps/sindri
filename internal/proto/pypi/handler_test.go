@@ -184,3 +184,42 @@ func TestMediaTypeForFilename(t *testing.T) {
 		t.Fatalf("other = %q", mediaTypeForFilename("x.egg"))
 	}
 }
+
+func TestPrefersJSON_QualityValues(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		accept string
+		want   bool
+	}{
+		{name: "pip", accept: mediaSimpleJSON + ", " + mediaSimpleHTML + ";q=0.2, text/html;q=0.01", want: true},
+		{name: "quality beats position", accept: "text/html;q=0.1, application/json;q=0.9", want: true},
+		{name: "html wins on quality", accept: mediaSimpleJSON + ";q=0.1, text/html;q=0.9", want: false},
+		{name: "equal quality falls back to position", accept: mediaSimpleJSON + ";q=0.5, text/html;q=0.5", want: true},
+		{name: "json refused outright", accept: mediaSimpleJSON + ";q=0, text/html", want: false},
+		{name: "html refused outright", accept: "text/html;q=0, " + mediaSimpleJSON, want: true},
+		{name: "wildcard only gets html", accept: "*/*", want: false},
+		{name: "browser", accept: "text/html,application/xhtml+xml,*/*;q=0.8", want: false},
+		{name: "charset parameter is not a quality", accept: mediaSimpleJSON + ";charset=utf-8", want: true},
+		{name: "malformed quality is treated as one", accept: mediaSimpleJSON + ";q=notanumber, text/html;q=0.9", want: true},
+		{name: "empty", accept: "", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := prefersJSON(tc.accept); got != tc.want {
+				t.Fatalf("prefersJSON(%q) = %v, want %v", tc.accept, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPackageURL_IsRootRelative(t *testing.T) {
+	t.Parallel()
+	// Nothing from the request may reach a link: a Host header is client input.
+	got := packageURL("team/internal", "demo-package", "demo_package-1.0.0-py3-none-any.whl")
+	want := "/pypi/team/internal/packages/demo-package/demo_package-1.0.0-py3-none-any.whl"
+	if got != want {
+		t.Fatalf("packageURL = %q, want %q", got, want)
+	}
+}

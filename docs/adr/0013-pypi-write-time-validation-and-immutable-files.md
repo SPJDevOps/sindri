@@ -1,9 +1,9 @@
-# 13. PyPI uploads validate at write time, and published files are immutable
+# 13. PyPI write-time validation, immutable files, and what the index says
 
 - **Status:** Accepted
 - **Date:** 2026-09-26
 - **Relates to:** [ADR 12, PyPI hosted adapter](0012-pypi-hosted-adapter.md),
-  [ADR 3, content-addressable store with placement](0003-content-addressable-store-with-placement.md)
+  [ADR 3, content-addressable store](0003-content-addressable-store-with-placement.md)
 
 ## Context
 
@@ -13,8 +13,15 @@ asserted. The `name` and `version` form fields were trusted, the wheel's own
 verbatim, and a second upload of a filename replaced the first through
 `UpsertFile`'s `ON CONFLICT DO UPDATE`.
 
-Each of those is fine in isolation and wrong together. pip derives the project
-and version from the *filename*, not from the index entry, so an upload that
+The same review found the index side describing the request rather than the
+repository: download links were absolute URLs built from the `Host` header, the
+root listing silently stopped at one page of 200 projects, content negotiation
+ranked media types by position rather than by `q=`, and the JSON payload carried
+PEP 700's fields while declaring api-version 1.0.
+
+Each of the upload problems is fine in isolation and wrong together. pip
+derives the project and version from the *filename*, not from the index entry,
+so an upload that
 declares `name=demo&version=9.9.9` while shipping `evil-1.0.whl` produces an
 index nobody can install correctly. Replacing bytes under an existing filename
 breaks the consumer who recorded that file's hash, which is the entire promise
@@ -60,6 +67,29 @@ the CAS is always one Sindri computed over the bytes it received, never a client
 claim, because that digest is also the deduplication key: `cas.Put` short
 circuits on `Stat` when the expected digest is already stored.
 
+**The index describes itself, and never the request.** Download links are
+root-relative paths (`/pypi/{repo}/packages/{project}/{filename}`). An absolute
+URL has to come from somewhere, and per request the only sources are the `Host`
+header and `X-Forwarded-Proto`, both client input; reflecting them puts a value
+the requester chose into the index served back to it. A relative path resolves
+against the origin the client actually reached, so TLS termination, a port
+mapping, and a rename need no configuration.
+
+**The root index lists the repository, not a page of it.** `simpleRoot` walks
+every cursor page. A truncated root listing is indistinguishable from a complete
+one to a client, which is the worst way for a package to go missing.
+
+**Content negotiation follows quality values, not header order.** PEP 691
+clients spell their preference with `q=`, and position only breaks a tie. A
+client that asks for neither serialization (a browser sending `*/*`) gets HTML.
+
+**The JSON API declares 1.1, the HTML API declares 1.0.** The JSON
+serialization carries PEP 700's `versions` and `size`, so it is a 1.1 document.
+The HTML serialization has nowhere to put those fields, so its PEP 629
+`pypi:repository-version` meta tag says 1.0. One number in both places would
+mean one of them is a claim the payload does not support, and clients ignore a
+minor difference while rejecting a major one.
+
 **Adapter path markers are reserved repository name segments.**
 `validateRepoName` rejects `blobs`, `manifests`, `tags`, `uploads`, `simple`,
 `packages`, and `upload` as name segments. Repository names may contain
@@ -84,6 +114,11 @@ unambiguous.
   the same release as the PyPI adapter.
 - M5 inherits the rule that placement never trusts a client-declared name, which
   is what the name-claim rule needs to be enforceable.
+- Sindri must be served at the root of its origin for index links to resolve,
+  which is already true of `/v2` for OCI clients.
+- The root index is rendered in memory. That is bounded by the response body it
+  is about to write, not by the project count, so streaming it is an
+  optimization and not a correctness fix.
 
 ## Rejected
 
@@ -106,3 +141,13 @@ unambiguous.
 - **Rejecting reserved segments in each adapter.** Two adapters, two lists, and
   a third protocol arrives to find neither. The name is validated once, where it
   is created.
+- **A configured external base URL for download links.** It is the right answer
+  for exactly one deployment shape, files served from a different origin than
+  the index, and nothing asks for that yet. Relative links are correct for every
+  other shape and cost no configuration. Adding the key later changes a link's
+  spelling, not the schema.
+- **Reflecting `X-Forwarded-Proto` when a trusted-proxy list is configured.**
+  The same outcome as relative links, with a list to maintain and a way to get
+  wrong.
+- **Capping the root index with a documented limit.** A limit a client cannot
+  see is not documentation.

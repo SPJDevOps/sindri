@@ -314,6 +314,13 @@ route ([ADR 13](docs/adr/0013-pypi-write-time-validation-and-immutable-files.md)
 The gate script stamps a fresh version per run, because immutability plus
 non-reproducible wheels would otherwise make it single-use.
 
+The index describes itself and never the request: download links are
+root-relative, so no `Host` header reaches a link. Index URLs are canonical
+(a 301 onto the trailing-slash, normalized form), the root listing walks every
+page rather than stopping at the first, content negotiation follows `q=` values,
+and the JSON API declares api-version 1.1 (it carries PEP 700's `versions` and
+`size`) while the HTML API carries a PEP 629 meta tag saying 1.0.
+
 ---
 
 ### M5 — Proxy and virtual repositories

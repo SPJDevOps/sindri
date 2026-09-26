@@ -9,7 +9,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -303,4 +305,145 @@ func buildSdist(t *testing.T, name, version, requiresPython string) []byte {
 		t.Fatalf("gzip Close: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// TestPyPI_IndexShape covers what the index promises a client: canonical URLs,
+// the declared API version, links that do not depend on the request, and a
+// root listing that is not one page of a longer list.
+func TestPyPI_IndexShape(t *testing.T) {
+	client := newTestHandler(t)
+	createRepo(t, client, "internal", "pypi")
+
+	wheel := buildWheel(t, "shape-demo", "1.0.0", ">=3.9")
+	if res := multipartUpload(t, client, "/pypi/internal/upload", map[string]string{
+		"name": "shape-demo", "version": "1.0.0",
+	}, "shape_demo-1.0.0-py3-none-any.whl", wheel); res.StatusCode != http.StatusOK {
+		t.Fatalf("upload: %d %s", res.StatusCode, res.Body)
+	}
+
+	t.Run("index urls are canonical", func(t *testing.T) {
+		for path, want := range map[string]string{
+			"/pypi/internal/simple":            "/pypi/internal/simple/",
+			"/pypi/internal/simple/shape-demo": "/pypi/internal/simple/shape-demo/",
+			"/pypi/internal/simple/Shape.Demo": "/pypi/internal/simple/shape-demo/",
+		} {
+			res := mustDo(t, client, http.MethodGet, path, nil, "", "")
+			if res.StatusCode != http.StatusMovedPermanently {
+				t.Fatalf("%s: status = %d, want 301", path, res.StatusCode)
+			}
+			if got := res.Header.Get("Location"); got != want {
+				t.Fatalf("%s redirects to %q, want %q", path, got, want)
+			}
+		}
+	})
+
+	t.Run("links do not depend on the request", func(t *testing.T) {
+		// A Host header is client input, so it must not reach a link that the
+		// index hands back to that same client.
+		res := mustDoWithHost(t, client, "/pypi/internal/simple/shape-demo/", "evil.example", "")
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d; body %s", res.StatusCode, res.Body)
+		}
+		if strings.Contains(res.Body, "evil.example") || strings.Contains(res.Body, "http://") {
+			t.Fatalf("index reflected the request into a link: %s", res.Body)
+		}
+		want := "/pypi/internal/packages/shape-demo/shape_demo-1.0.0-py3-none-any.whl"
+		if !strings.Contains(res.Body, want) {
+			t.Fatalf("index does not carry the root-relative download path: %s", res.Body)
+		}
+
+		js := mustDoWithHost(t, client, "/pypi/internal/simple/shape-demo/", "evil.example", mediaSimpleJSONAccept)
+		var body struct {
+			Meta  map[string]string `json:"meta"`
+			Files []struct {
+				URL  string `json:"url"`
+				Size int64  `json:"size"`
+			} `json:"files"`
+			Versions []string `json:"versions"`
+		}
+		if err := json.Unmarshal([]byte(js.Body), &body); err != nil {
+			t.Fatalf("decode: %v\n%s", err, js.Body)
+		}
+		if len(body.Files) != 1 || body.Files[0].URL != want {
+			t.Fatalf("JSON url = %+v, want %q", body.Files, want)
+		}
+		if body.Files[0].Size != int64(len(wheel)) {
+			t.Fatalf("JSON size = %d, want %d", body.Files[0].Size, len(wheel))
+		}
+		if body.Versions == nil {
+			t.Fatal("JSON index omits versions, which api-version 1.1 requires")
+		}
+		// PEP 700's versions and size are what makes this 1.1 rather than 1.0.
+		if body.Meta["api-version"] != "1.1" {
+			t.Fatalf("JSON api-version = %q, want 1.1", body.Meta["api-version"])
+		}
+	})
+
+	t.Run("html declares its repository version", func(t *testing.T) {
+		for _, path := range []string{"/pypi/internal/simple/", "/pypi/internal/simple/shape-demo/"} {
+			res := mustDo(t, client, http.MethodGet, path, nil, "", "")
+			if !strings.Contains(res.Body, `<meta name="pypi:repository-version" content="1.0">`) {
+				t.Fatalf("%s has no PEP 629 meta tag: %s", path, res.Body)
+			}
+		}
+	})
+
+	// rootPageLimit is 200, and a page of a longer list is indistinguishable
+	// from the whole list to a client.
+	t.Run("root index lists every project", func(t *testing.T) {
+		createRepo(t, client, "paged", "pypi")
+		const projects = 205
+		for i := range projects {
+			name := fmt.Sprintf("bulk-%03d", i)
+			publishFile(t, client, "paged", name, "1.0.0", name+"-1.0.0.tar.gz", []byte(name))
+		}
+
+		html := mustDo(t, client, http.MethodGet, "/pypi/paged/simple/", nil, "", "")
+		if got := strings.Count(html.Body, `<a href="bulk-`); got != projects {
+			t.Fatalf("root HTML lists %d projects, want %d", got, projects)
+		}
+		if !strings.Contains(html.Body, `<a href="bulk-204/">`) {
+			t.Fatal("root HTML stops before the last project")
+		}
+
+		res := mustDo(t, client, http.MethodGet, "/pypi/paged/simple/", nil, "", mediaSimpleJSONAccept)
+		var body struct {
+			Projects []struct {
+				Name string `json:"name"`
+			} `json:"projects"`
+		}
+		if err := json.Unmarshal([]byte(res.Body), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(body.Projects) != projects {
+			t.Fatalf("root JSON lists %d projects, want %d", len(body.Projects), projects)
+		}
+	})
+}
+
+const mediaSimpleJSONAccept = "application/vnd.pypi.simple.v1+json"
+
+// publishFile seeds a file over the management API, which is cheaper than
+// building a distribution when only the placement rows matter.
+func publishFile(t *testing.T, h http.Handler, repo, pkg, version, filename string, body []byte) {
+	t.Helper()
+	path := "/api/v1/repositories/" + repo + "/packages/" + pkg +
+		"/versions/" + version + "/files/" + filename
+	res := mustDo(t, h, http.MethodPut, path, body, "application/gzip", "")
+	if res.StatusCode != http.StatusCreated && res.StatusCode != http.StatusOK {
+		t.Fatalf("publish %s: %d %s", filename, res.StatusCode, res.Body)
+	}
+}
+
+func mustDoWithHost(t *testing.T, h http.Handler, path, host, accept string) httpResult {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+	req.Host = host
+	req.Header.Set("X-Forwarded-Proto", "https")
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return httpResult{StatusCode: rec.Code, Body: rec.Body.String(), Header: rec.Header()}
 }
