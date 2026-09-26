@@ -257,18 +257,18 @@ it.
 
 ---
 
-### M4 — PyPI adapter, hosted
+### M4 — PyPI adapter, hosted ✅
 
 **Goal.** `twine upload` and `pip install` work against Sindri.
 
 **Scope.**
-- PEP 503 HTML simple index, both the root listing and per-project pages
-- PEP 691 JSON index with correct content negotiation
-- PEP 503 name normalization, enforced as the uniqueness key
-- Upload via twine's multipart `POST`, including the `:action` field and hash fields
-- File download with correct content type and `Content-Length`
-- Metadata extraction from wheel `METADATA` and sdist `PKG-INFO`
-- `data-requires-python` and hash fragments on index links, since pip relies on both
+- [x] PEP 503 HTML simple index, both the root listing and per-project pages
+- [x] PEP 691 JSON index with correct content negotiation
+- [x] PEP 503 name normalization, enforced as the uniqueness key
+- [x] Upload via twine's multipart `POST`, including the `:action` field and hash fields
+- [x] File download with correct content type and `Content-Length`
+- [x] Metadata extraction from wheel `METADATA` and sdist `PKG-INFO`
+- [x] `data-requires-python` and hash fragments on index links, since pip relies on both
 
 **Out of scope.** Proxying pypi.org, which is M5. Yanking. Per-file GPG signatures.
 
@@ -276,8 +276,12 @@ it.
 key. Accepting `Foo.Bar` and `foo_bar` as two projects is the bug that makes the
 name-claim rule in M5 unenforceable, and by then it is a data migration.
 
-**Gate.**
+**Gate.** Verified on 2026-09-26. Create `internal` via `/api/v1` (see
+[`scripts/pypi-twine-gate.sh`](scripts/pypi-twine-gate.sh)); PyPI repositories
+are not auto-created (ADR 12). Round-trip is also covered by
+`TestPyPI_UploadInstallAndPlacementGate`.
 ```bash
+# create internal via /api/v1 (see scripts/pypi-twine-gate.sh), then:
 python -m twine upload --repository-url http://localhost:8080/pypi/internal/upload \
   -u token -p "$SINDRI_TOKEN" dist/*
 
@@ -288,6 +292,16 @@ python -m venv /tmp/v && /tmp/v/bin/pip install \
 curl -fsS -H 'Accept: application/vnd.pypi.simple.v1+json' \
   http://localhost:8080/pypi/internal/simple/demo-package/ | jq .
 ```
+Or run the checked-in gate script:
+```bash
+./scripts/pypi-twine-gate.sh
+```
+
+**What M4 decided.** Hosted PyPI uses `files` placement (no `repository_blobs`),
+does not auto-create repositories, keeps simple/download anonymous, and accepts
+Basic on upload without validating identity until M7
+([ADR 12](docs/adr/0012-pypi-hosted-adapter.md)). Downloads are served at
+`/pypi/{repo}/packages/{project}/{filename}`.
 
 ---
 

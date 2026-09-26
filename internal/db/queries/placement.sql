@@ -87,6 +87,28 @@ WHERE r.name = $1
   AND v.version = $3
   AND f.filename = $4;
 
+-- name: GetFileByFilename :one
+SELECT f.*, v.version, b.size AS blob_size FROM files f
+JOIN versions v ON v.id = f.version_id
+JOIN packages p ON p.id = v.package_id
+JOIN repositories r ON r.id = p.repo_id
+JOIN blobs b ON b.digest = f.blob_digest
+WHERE r.name = $1
+  AND p.normalized_name = $2
+  AND f.filename = $3;
+
+-- name: ListFilesByPackage :many
+SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata,
+       v.version, b.size AS blob_size
+FROM files f
+JOIN versions v ON v.id = f.version_id
+JOIN packages p ON p.id = v.package_id
+JOIN repositories r ON r.id = p.repo_id
+JOIN blobs b ON b.digest = f.blob_digest
+WHERE r.name = sqlc.arg('repo_name')
+  AND p.normalized_name = sqlc.arg('normalized_name')
+ORDER BY v.version, f.filename;
+
 -- name: DeleteFile :execrows
 DELETE FROM files f
 USING versions v, packages p, repositories r

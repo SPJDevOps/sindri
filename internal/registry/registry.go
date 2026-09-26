@@ -9,6 +9,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -181,8 +182,10 @@ type PublishParams struct {
 	Version   string
 	Filename  string
 	MediaType string
-	Body      io.Reader
-	Size      int64 // negative means unknown
+	// Metadata is stored on the files row as jsonb. Nil or empty becomes {}.
+	Metadata json.RawMessage
+	Body     io.Reader
+	Size     int64 // negative means unknown
 }
 
 // Publish stores bytes in the CAS and creates placement rows. A digest already
@@ -194,6 +197,10 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	mediaType := p.MediaType
 	if mediaType == "" {
 		mediaType = "application/octet-stream"
+	}
+	metadata := p.Metadata
+	if len(metadata) == 0 {
+		metadata = json.RawMessage("{}")
 	}
 
 	repo, err := r.q.GetRepositoryByName(ctx, p.Repo)
@@ -247,7 +254,7 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		BlobDigest: info.Digest.String(),
 		Filename:   p.Filename,
 		MediaType:  mediaType,
-		Metadata:   []byte("{}"),
+		Metadata:   []byte(metadata),
 	})
 	if err != nil {
 		return model.File{}, fmt.Errorf("placing file %s: %w", p.Filename, err)

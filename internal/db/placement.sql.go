@@ -288,6 +288,50 @@ func (q *Queries) GetFile(ctx context.Context, arg GetFileParams) (File, error) 
 	return i, err
 }
 
+const getFileByFilename = `-- name: GetFileByFilename :one
+SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata, v.version, b.size AS blob_size FROM files f
+JOIN versions v ON v.id = f.version_id
+JOIN packages p ON p.id = v.package_id
+JOIN repositories r ON r.id = p.repo_id
+JOIN blobs b ON b.digest = f.blob_digest
+WHERE r.name = $1
+  AND p.normalized_name = $2
+  AND f.filename = $3
+`
+
+type GetFileByFilenameParams struct {
+	Name           string `json:"name"`
+	NormalizedName string `json:"normalized_name"`
+	Filename       string `json:"filename"`
+}
+
+type GetFileByFilenameRow struct {
+	ID         uuid.UUID `json:"id"`
+	VersionID  uuid.UUID `json:"version_id"`
+	BlobDigest string    `json:"blob_digest"`
+	Filename   string    `json:"filename"`
+	MediaType  string    `json:"media_type"`
+	Metadata   []byte    `json:"metadata"`
+	Version    string    `json:"version"`
+	BlobSize   int64     `json:"blob_size"`
+}
+
+func (q *Queries) GetFileByFilename(ctx context.Context, arg GetFileByFilenameParams) (GetFileByFilenameRow, error) {
+	row := q.db.QueryRow(ctx, getFileByFilename, arg.Name, arg.NormalizedName, arg.Filename)
+	var i GetFileByFilenameRow
+	err := row.Scan(
+		&i.ID,
+		&i.VersionID,
+		&i.BlobDigest,
+		&i.Filename,
+		&i.MediaType,
+		&i.Metadata,
+		&i.Version,
+		&i.BlobSize,
+	)
+	return i, err
+}
+
 const getOrCreatePackage = `-- name: GetOrCreatePackage :one
 INSERT INTO packages (repo_id, normalized_name, display_name)
 VALUES ($1, $2, $3)
@@ -456,6 +500,64 @@ type LinkRepositoryBlobParams struct {
 func (q *Queries) LinkRepositoryBlob(ctx context.Context, arg LinkRepositoryBlobParams) error {
 	_, err := q.db.Exec(ctx, linkRepositoryBlob, arg.RepoID, arg.Digest)
 	return err
+}
+
+const listFilesByPackage = `-- name: ListFilesByPackage :many
+SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata,
+       v.version, b.size AS blob_size
+FROM files f
+JOIN versions v ON v.id = f.version_id
+JOIN packages p ON p.id = v.package_id
+JOIN repositories r ON r.id = p.repo_id
+JOIN blobs b ON b.digest = f.blob_digest
+WHERE r.name = $1
+  AND p.normalized_name = $2
+ORDER BY v.version, f.filename
+`
+
+type ListFilesByPackageParams struct {
+	RepoName       string `json:"repo_name"`
+	NormalizedName string `json:"normalized_name"`
+}
+
+type ListFilesByPackageRow struct {
+	ID         uuid.UUID `json:"id"`
+	VersionID  uuid.UUID `json:"version_id"`
+	BlobDigest string    `json:"blob_digest"`
+	Filename   string    `json:"filename"`
+	MediaType  string    `json:"media_type"`
+	Metadata   []byte    `json:"metadata"`
+	Version    string    `json:"version"`
+	BlobSize   int64     `json:"blob_size"`
+}
+
+func (q *Queries) ListFilesByPackage(ctx context.Context, arg ListFilesByPackageParams) ([]ListFilesByPackageRow, error) {
+	rows, err := q.db.Query(ctx, listFilesByPackage, arg.RepoName, arg.NormalizedName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFilesByPackageRow{}
+	for rows.Next() {
+		var i ListFilesByPackageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.VersionID,
+			&i.BlobDigest,
+			&i.Filename,
+			&i.MediaType,
+			&i.Metadata,
+			&i.Version,
+			&i.BlobSize,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPackagesByRepo = `-- name: ListPackagesByRepo :many

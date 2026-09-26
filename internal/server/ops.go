@@ -47,6 +47,9 @@ func (s *Server) router() http.Handler {
 	if s.opts.OCI != nil {
 		r.Mount("/v2", s.opts.OCI)
 	}
+	if s.opts.PyPI != nil {
+		r.Mount("/pypi", s.opts.PyPI)
+	}
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(r.Context(), w, http.StatusNotFound, ErrorBody{

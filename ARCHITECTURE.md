@@ -321,6 +321,7 @@ such as manifests and evidence documents, where a staging round trip buys nothin
 |---|---|
 | `/v2/...` | OCI distribution API |
 | `/pypi/{repo}/simple/...` | PyPI index, PEP 503 and 691 |
+| `/pypi/{repo}/packages/...` | PyPI file download |
 | `/pypi/{repo}/upload` | PyPI upload, twine's POST |
 | `/api/v1/...` | management API |
 | `/api/v1/decisions/...` | "is this digest approved for this environment" |

@@ -22,8 +22,9 @@ import (
 // package rather than inventing a second naming layer.
 const ociPackageName = "_"
 
-// ErrWrongProtocol means the named repository exists but does not speak OCI.
-var ErrWrongProtocol = errors.New("repository protocol is not oci")
+// ErrWrongProtocol means the named repository exists but speaks a different
+// protocol than the caller requires (OCI vs PyPI).
+var ErrWrongProtocol = errors.New("wrong repository protocol")
 
 // Manifest is a placed OCI manifest or index document.
 type Manifest struct {
