@@ -62,6 +62,30 @@ func (q *Queries) CountFilesByVersion(ctx context.Context, versionID uuid.UUID) 
 	return column_1, err
 }
 
+const countPackageFilesWithFilename = `-- name: CountPackageFilesWithFilename :one
+SELECT count(*) FROM files f
+JOIN versions v ON v.id = f.version_id
+WHERE v.package_id = $1
+  AND f.filename = $2
+  AND f.version_id <> $3
+`
+
+type CountPackageFilesWithFilenameParams struct {
+	PackageID uuid.UUID `json:"package_id"`
+	Filename  string    `json:"filename"`
+	VersionID uuid.UUID `json:"version_id"`
+}
+
+// Counts the same filename under a *different* version of one package. The
+// files unique constraint is per version, so this is what stops one filename
+// from resolving to two different blobs on the version-less download path.
+func (q *Queries) CountPackageFilesWithFilename(ctx context.Context, arg CountPackageFilesWithFilenameParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPackageFilesWithFilename, arg.PackageID, arg.Filename, arg.VersionID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countVersionsByPackage = `-- name: CountVersionsByPackage :one
 SELECT count(*)::bigint FROM versions
 WHERE package_id = $1
@@ -288,6 +312,52 @@ func (q *Queries) GetFile(ctx context.Context, arg GetFileParams) (File, error) 
 	return i, err
 }
 
+const getFileByFilename = `-- name: GetFileByFilename :one
+SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata, v.version, b.size AS blob_size FROM files f
+JOIN versions v ON v.id = f.version_id
+JOIN packages p ON p.id = v.package_id
+JOIN repositories r ON r.id = p.repo_id
+JOIN blobs b ON b.digest = f.blob_digest
+WHERE r.name = $1
+  AND p.normalized_name = $2
+  AND f.filename = $3
+ORDER BY v.version, f.id
+LIMIT 1
+`
+
+type GetFileByFilenameParams struct {
+	Name           string `json:"name"`
+	NormalizedName string `json:"normalized_name"`
+	Filename       string `json:"filename"`
+}
+
+type GetFileByFilenameRow struct {
+	ID         uuid.UUID `json:"id"`
+	VersionID  uuid.UUID `json:"version_id"`
+	BlobDigest string    `json:"blob_digest"`
+	Filename   string    `json:"filename"`
+	MediaType  string    `json:"media_type"`
+	Metadata   []byte    `json:"metadata"`
+	Version    string    `json:"version"`
+	BlobSize   int64     `json:"blob_size"`
+}
+
+func (q *Queries) GetFileByFilename(ctx context.Context, arg GetFileByFilenameParams) (GetFileByFilenameRow, error) {
+	row := q.db.QueryRow(ctx, getFileByFilename, arg.Name, arg.NormalizedName, arg.Filename)
+	var i GetFileByFilenameRow
+	err := row.Scan(
+		&i.ID,
+		&i.VersionID,
+		&i.BlobDigest,
+		&i.Filename,
+		&i.MediaType,
+		&i.Metadata,
+		&i.Version,
+		&i.BlobSize,
+	)
+	return i, err
+}
+
 const getOrCreatePackage = `-- name: GetOrCreatePackage :one
 INSERT INTO packages (repo_id, normalized_name, display_name)
 VALUES ($1, $2, $3)
@@ -442,6 +512,48 @@ func (q *Queries) GetVersion(ctx context.Context, arg GetVersionParams) (Version
 	return i, err
 }
 
+const insertFileImmutable = `-- name: InsertFileImmutable :one
+INSERT INTO files (version_id, blob_digest, filename, media_type, metadata)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (version_id, filename) DO UPDATE
+SET media_type = EXCLUDED.media_type,
+    metadata = EXCLUDED.metadata
+WHERE files.blob_digest = EXCLUDED.blob_digest
+RETURNING id, version_id, blob_digest, filename, media_type, metadata
+`
+
+type InsertFileImmutableParams struct {
+	VersionID  uuid.UUID `json:"version_id"`
+	BlobDigest string    `json:"blob_digest"`
+	Filename   string    `json:"filename"`
+	MediaType  string    `json:"media_type"`
+	Metadata   []byte    `json:"metadata"`
+}
+
+// Places a file that may never be replaced by different bytes. The DO UPDATE
+// is a no-op refresh of the derived columns and fires only when the stored
+// digest already equals the incoming one, so a re-upload of identical bytes is
+// idempotent and a re-upload of different bytes returns no row at all.
+func (q *Queries) InsertFileImmutable(ctx context.Context, arg InsertFileImmutableParams) (File, error) {
+	row := q.db.QueryRow(ctx, insertFileImmutable,
+		arg.VersionID,
+		arg.BlobDigest,
+		arg.Filename,
+		arg.MediaType,
+		arg.Metadata,
+	)
+	var i File
+	err := row.Scan(
+		&i.ID,
+		&i.VersionID,
+		&i.BlobDigest,
+		&i.Filename,
+		&i.MediaType,
+		&i.Metadata,
+	)
+	return i, err
+}
+
 const linkRepositoryBlob = `-- name: LinkRepositoryBlob :exec
 INSERT INTO repository_blobs (repo_id, digest)
 VALUES ($1, $2)
@@ -456,6 +568,64 @@ type LinkRepositoryBlobParams struct {
 func (q *Queries) LinkRepositoryBlob(ctx context.Context, arg LinkRepositoryBlobParams) error {
 	_, err := q.db.Exec(ctx, linkRepositoryBlob, arg.RepoID, arg.Digest)
 	return err
+}
+
+const listFilesByPackage = `-- name: ListFilesByPackage :many
+SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata,
+       v.version, b.size AS blob_size
+FROM files f
+JOIN versions v ON v.id = f.version_id
+JOIN packages p ON p.id = v.package_id
+JOIN repositories r ON r.id = p.repo_id
+JOIN blobs b ON b.digest = f.blob_digest
+WHERE r.name = $1
+  AND p.normalized_name = $2
+ORDER BY v.version, f.filename
+`
+
+type ListFilesByPackageParams struct {
+	RepoName       string `json:"repo_name"`
+	NormalizedName string `json:"normalized_name"`
+}
+
+type ListFilesByPackageRow struct {
+	ID         uuid.UUID `json:"id"`
+	VersionID  uuid.UUID `json:"version_id"`
+	BlobDigest string    `json:"blob_digest"`
+	Filename   string    `json:"filename"`
+	MediaType  string    `json:"media_type"`
+	Metadata   []byte    `json:"metadata"`
+	Version    string    `json:"version"`
+	BlobSize   int64     `json:"blob_size"`
+}
+
+func (q *Queries) ListFilesByPackage(ctx context.Context, arg ListFilesByPackageParams) ([]ListFilesByPackageRow, error) {
+	rows, err := q.db.Query(ctx, listFilesByPackage, arg.RepoName, arg.NormalizedName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFilesByPackageRow{}
+	for rows.Next() {
+		var i ListFilesByPackageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.VersionID,
+			&i.BlobDigest,
+			&i.Filename,
+			&i.MediaType,
+			&i.Metadata,
+			&i.Version,
+			&i.BlobSize,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPackagesByRepo = `-- name: ListPackagesByRepo :many

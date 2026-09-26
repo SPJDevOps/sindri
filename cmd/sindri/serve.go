@@ -16,6 +16,7 @@ import (
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/proto/oci"
+	"github.com/spj/sindri/internal/proto/pypi"
 	"github.com/spj/sindri/internal/registry"
 	"github.com/spj/sindri/internal/server"
 	"github.com/spj/sindri/internal/storage"
@@ -33,7 +34,7 @@ func newServeCmd() *cobra.Command {
 
 Reads one configuration file (sindri.yaml by default, or --config), applies
 embedded database migrations, opens the configured blob store, and serves
-/healthz, /readyz, /metrics, /api/v1, and /v2 until SIGTERM or SIGINT.`,
+/healthz, /readyz, /metrics, /api/v1, /v2, and /pypi until SIGTERM or SIGINT.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runServe(cmd.Context(), configPath)
 		},
@@ -108,6 +109,9 @@ func runServe(parent context.Context, explicitConfig string) error {
 		Registry: reg,
 		CAS:      casStore,
 	})
+	pypiHandler := pypi.Handler(pypi.Options{
+		Registry: reg,
+	})
 
 	srv, err := server.New(server.Options{
 		Address:           cfg.Listen.Address,
@@ -117,6 +121,7 @@ func runServe(parent context.Context, explicitConfig string) error {
 		Blobs:             blobs,
 		API:               apiHandler,
 		OCI:               ociHandler,
+		PyPI:              pypiHandler,
 		Logger:            logger,
 	})
 	if err != nil {

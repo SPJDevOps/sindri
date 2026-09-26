@@ -77,6 +77,29 @@ SET blob_digest = EXCLUDED.blob_digest,
     metadata = EXCLUDED.metadata
 RETURNING *;
 
+-- name: InsertFileImmutable :one
+-- Places a file that may never be replaced by different bytes. The DO UPDATE
+-- is a no-op refresh of the derived columns and fires only when the stored
+-- digest already equals the incoming one, so a re-upload of identical bytes is
+-- idempotent and a re-upload of different bytes returns no row at all.
+INSERT INTO files (version_id, blob_digest, filename, media_type, metadata)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (version_id, filename) DO UPDATE
+SET media_type = EXCLUDED.media_type,
+    metadata = EXCLUDED.metadata
+WHERE files.blob_digest = EXCLUDED.blob_digest
+RETURNING *;
+
+-- name: CountPackageFilesWithFilename :one
+-- Counts the same filename under a *different* version of one package. The
+-- files unique constraint is per version, so this is what stops one filename
+-- from resolving to two different blobs on the version-less download path.
+SELECT count(*) FROM files f
+JOIN versions v ON v.id = f.version_id
+WHERE v.package_id = sqlc.arg('package_id')
+  AND f.filename = sqlc.arg('filename')
+  AND f.version_id <> sqlc.arg('version_id');
+
 -- name: GetFile :one
 SELECT f.* FROM files f
 JOIN versions v ON v.id = f.version_id
@@ -86,6 +109,30 @@ WHERE r.name = $1
   AND p.normalized_name = $2
   AND v.version = $3
   AND f.filename = $4;
+
+-- name: GetFileByFilename :one
+SELECT f.*, v.version, b.size AS blob_size FROM files f
+JOIN versions v ON v.id = f.version_id
+JOIN packages p ON p.id = v.package_id
+JOIN repositories r ON r.id = p.repo_id
+JOIN blobs b ON b.digest = f.blob_digest
+WHERE r.name = $1
+  AND p.normalized_name = $2
+  AND f.filename = $3
+ORDER BY v.version, f.id
+LIMIT 1;
+
+-- name: ListFilesByPackage :many
+SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata,
+       v.version, b.size AS blob_size
+FROM files f
+JOIN versions v ON v.id = f.version_id
+JOIN packages p ON p.id = v.package_id
+JOIN repositories r ON r.id = p.repo_id
+JOIN blobs b ON b.digest = f.blob_digest
+WHERE r.name = sqlc.arg('repo_name')
+  AND p.normalized_name = sqlc.arg('normalized_name')
+ORDER BY v.version, f.filename;
 
 -- name: DeleteFile :execrows
 DELETE FROM files f

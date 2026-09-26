@@ -259,6 +259,22 @@ repository_blobs(repo_id FK, digest FK,
 PyPI per PEP 503. Uniqueness is on the normalized form so that `Foo.Bar` and `foo-bar`
 cannot both be claimed.
 
+A repository name may contain slashes, so that `team/internal` reads naturally in a
+`docker pull` or an index URL. It may not contain a segment an adapter splits paths on
+(`blobs`, `manifests`, `tags`, `uploads`, `simple`, `packages`, `upload`), because
+`/pypi/team/packages/simple/foo/` would otherwise name either a repository or a download.
+The rule lives in one validator rather than in each adapter. See ADR 13.
+
+`files.metadata` holds what an adapter needs to render an index entry it cannot derive from
+the placement rows: for PyPI that is `name`, `version`, `requires_python`, and `summary`,
+read from the wheel's `METADATA` or the sdist's `PKG-INFO` at upload. It is adapter-owned
+and read only by the adapter that wrote it, so a proxy caching the same project writes the
+same keys rather than inventing a second spelling.
+
+A `files` row is immutable once placed: a re-publish of identical bytes is a no-op, and one
+with different bytes is refused. Consumers pin the hash an index advertised, so the bytes
+behind a filename are not something a later push may change. See ADR 13.
+
 `repository_blobs` records that a digest was uploaded (or written as a manifest) into a
 repository. It is what makes a layer readable under invariant I2 after a blob push and
 before any tag exists. See ADR 10.
@@ -321,6 +337,7 @@ such as manifests and evidence documents, where a staging round trip buys nothin
 |---|---|
 | `/v2/...` | OCI distribution API |
 | `/pypi/{repo}/simple/...` | PyPI index, PEP 503 and 691 |
+| `/pypi/{repo}/packages/...` | PyPI file download |
 | `/pypi/{repo}/upload` | PyPI upload, twine's POST |
 | `/api/v1/...` | management API |
 | `/api/v1/decisions/...` | "is this digest approved for this environment" |

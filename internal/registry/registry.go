@@ -9,6 +9,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +39,11 @@ var (
 	// ErrNotPlaced means a digest is physically present but has no placement
 	// in the named repository. Serving it would break invariant I2.
 	ErrNotPlaced = errors.New("digest not placed in repository")
+
+	// ErrFileExists means an immutable publish would replace a filename that
+	// is already placed with different bytes. A published artifact is the
+	// thing consumers pinned a hash of, so it does not change under them.
+	ErrFileExists = errors.New("file already published with different content")
 )
 
 // Registry owns placement metadata and gates every blob read.
@@ -181,8 +187,22 @@ type PublishParams struct {
 	Version   string
 	Filename  string
 	MediaType string
-	Body      io.Reader
-	Size      int64 // negative means unknown
+	// Metadata is stored on the files row as jsonb. Nil or empty becomes {}.
+	Metadata json.RawMessage
+	Body     io.Reader
+	Size     int64 // negative means unknown
+
+	// ExpectDigest, when set, is the digest the CAS must arrive at for these
+	// bytes. It is the caller's own computation over the bytes it is handing
+	// over, never a value a client claimed: a claim is checked against the
+	// bytes at the edge, because a digest passed through here is also the
+	// deduplication key.
+	ExpectDigest model.Digest
+
+	// Immutable rejects a second publish of the same filename with different
+	// bytes (ErrFileExists), and a filename already used by another version
+	// of the same package. Re-publishing identical bytes stays idempotent.
+	Immutable bool
 }
 
 // Publish stores bytes in the CAS and creates placement rows. A digest already
@@ -195,6 +215,10 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	if mediaType == "" {
 		mediaType = "application/octet-stream"
 	}
+	metadata := p.Metadata
+	if len(metadata) == 0 {
+		metadata = json.RawMessage("{}")
+	}
 
 	repo, err := r.q.GetRepositoryByName(ctx, p.Repo)
 	if err != nil {
@@ -204,7 +228,7 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		return model.File{}, fmt.Errorf("looking up repository %s: %w", p.Repo, err)
 	}
 
-	info, err := r.cas.Put(ctx, p.Body, model.Digest{}, p.Size)
+	info, err := r.cas.Put(ctx, p.Body, p.ExpectDigest, p.Size)
 	if err != nil {
 		return model.File{}, fmt.Errorf("storing blob for %s/%s/%s/%s: %w", p.Repo, p.Package, p.Version, p.Filename, err)
 	}
@@ -242,15 +266,45 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		return model.File{}, fmt.Errorf("ensuring version %s: %w", p.Version, err)
 	}
 
-	file, err := q.UpsertFile(ctx, db.UpsertFileParams{
+	placeParams := db.UpsertFileParams{
 		VersionID:  ver.ID,
 		BlobDigest: info.Digest.String(),
 		Filename:   p.Filename,
 		MediaType:  mediaType,
-		Metadata:   []byte("{}"),
-	})
-	if err != nil {
-		return model.File{}, fmt.Errorf("placing file %s: %w", p.Filename, err)
+		Metadata:   []byte(metadata),
+	}
+
+	var file db.File
+	if p.Immutable {
+		// The files unique constraint is (version_id, filename), so the same
+		// filename under a second version of one package would make the
+		// version-less read path ambiguous. Reject it while still in the
+		// transaction that would create it.
+		others, err := q.CountPackageFilesWithFilename(ctx, db.CountPackageFilesWithFilenameParams{
+			PackageID: pkg.ID,
+			Filename:  p.Filename,
+			VersionID: ver.ID,
+		})
+		if err != nil {
+			return model.File{}, fmt.Errorf("checking existing placements of %s: %w", p.Filename, err)
+		}
+		if others > 0 {
+			return model.File{}, fmt.Errorf("%w: %s is already published under another version of %s",
+				ErrFileExists, p.Filename, p.Package)
+		}
+
+		file, err = q.InsertFileImmutable(ctx, db.InsertFileImmutableParams(placeParams))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return model.File{}, fmt.Errorf("%w: %s", ErrFileExists, p.Filename)
+			}
+			return model.File{}, fmt.Errorf("placing file %s: %w", p.Filename, err)
+		}
+	} else {
+		file, err = q.UpsertFile(ctx, placeParams)
+		if err != nil {
+			return model.File{}, fmt.Errorf("placing file %s: %w", p.Filename, err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -525,6 +579,22 @@ func pageLimit(limit int32) (int32, error) {
 	return limit, nil
 }
 
+// reservedNameSegments are the path markers protocol adapters split on. A
+// repository whose name contains one of them mid-path is ambiguous with the
+// route it would be served under: /pypi/team/packages/simple/foo/ could name
+// the repository "team/packages" or a download from "team". Adapters resolve
+// the ambiguity by taking the leftmost marker, which is only correct because a
+// repository name can never contain one.
+var reservedNameSegments = map[string]struct{}{
+	"blobs":     {}, // OCI
+	"manifests": {}, // OCI
+	"tags":      {}, // OCI
+	"uploads":   {}, // OCI
+	"simple":    {}, // PyPI
+	"packages":  {}, // PyPI
+	"upload":    {}, // PyPI
+}
+
 func validateRepoName(name string) error {
 	for _, c := range name {
 		switch {
@@ -536,6 +606,12 @@ func validateRepoName(name string) error {
 	}
 	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") || strings.Contains(name, "//") {
 		return fmt.Errorf("%w: repository name %q is malformed", ErrInvalidInput, name)
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if _, reserved := reservedNameSegments[strings.ToLower(segment)]; reserved {
+			return fmt.Errorf("%w: repository name %q uses the reserved path segment %q",
+				ErrInvalidInput, name, segment)
+		}
 	}
 	return nil
 }
