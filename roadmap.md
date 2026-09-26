@@ -303,6 +303,17 @@ Basic on upload without validating identity until M7
 ([ADR 12](docs/adr/0012-pypi-hosted-adapter.md)). Downloads are served at
 `/pypi/{repo}/packages/{project}/{filename}`.
 
+An upload must prove what it is before it is placed: the wheel `METADATA` or
+sdist `PKG-INFO`, the filename, and the form fields must agree on project and
+version, and a claimed `sha256_digest` is checked against the received bytes.
+A published file is immutable, so a re-upload of identical bytes is idempotent
+and one with different bytes is 409. Adapter path markers (`simple`, `packages`,
+`upload`, `blobs`, `manifests`, `tags`, `uploads`) are reserved repository name
+segments, which is what makes a slash-containing repository name unambiguous to
+route ([ADR 13](docs/adr/0013-pypi-write-time-validation-and-immutable-files.md)).
+The gate script stamps a fresh version per run, because immutability plus
+non-reproducible wheels would otherwise make it single-use.
+
 ---
 
 ### M5 — Proxy and virtual repositories

@@ -78,24 +78,38 @@ const (
 
 // splitPyPIPath splits "{repo}/(simple|upload|packages)/..." where repo may
 // contain slashes.
+//
+// The leftmost marker segment wins. That is only unambiguous because
+// registry.validateRepoName rejects these words as repository name segments:
+// otherwise /pypi/team/packages/simple/foo/ could equally mean the simple
+// index of "team/packages" or a download from "team", and a project legitimately
+// named "packages" would collide with the download route.
 func splitPyPIPath(path string) (repo, rest string, kind pathKind, ok bool) {
-	if i := strings.Index(path, "/packages/"); i > 0 {
-		return path[:i], strings.Trim(path[i+len("/packages/"):], "/"), pathPackages, true
-	}
-	if i := strings.Index(path, "/simple/"); i > 0 {
-		return path[:i], strings.Trim(path[i+len("/simple/"):], "/"), pathSimple, true
-	}
-	if i := strings.LastIndex(path, "/simple"); i > 0 {
-		suffix := path[i:]
-		if suffix == "/simple" || suffix == "/simple/" {
-			return path[:i], "", pathSimple, true
+	segments := strings.Split(path, "/")
+	for i := 1; i < len(segments); i++ {
+		kind, isMarker := pathKindForSegment(segments[i])
+		if !isMarker {
+			continue
 		}
-	}
-	if i := strings.LastIndex(path, "/upload"); i > 0 {
-		suffix := path[i:]
-		if suffix == "/upload" || suffix == "/upload/" {
-			return path[:i], "", pathUpload, true
+		repo = strings.Join(segments[:i], "/")
+		if repo == "" {
+			return "", "", 0, false
 		}
+		rest = strings.Trim(strings.Join(segments[i+1:], "/"), "/")
+		return repo, rest, kind, true
 	}
 	return "", "", 0, false
+}
+
+func pathKindForSegment(segment string) (pathKind, bool) {
+	switch segment {
+	case "simple":
+		return pathSimple, true
+	case "upload":
+		return pathUpload, true
+	case "packages":
+		return pathPackages, true
+	default:
+		return 0, false
+	}
 }

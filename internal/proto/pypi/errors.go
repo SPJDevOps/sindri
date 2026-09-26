@@ -23,6 +23,10 @@ func mapRegistryError(w http.ResponseWriter, err error) {
 		errors.Is(err, registry.ErrWrongProtocol),
 		errors.Is(err, registry.ErrNotPlaced):
 		writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, registry.ErrFileExists):
+		// PyPI answers 400 here; 409 says the same thing without pretending
+		// the request was malformed, and twine surfaces both.
+		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, registry.ErrInvalidInput),
 		errors.Is(err, cas.ErrDigestMismatch):
 		writeError(w, http.StatusBadRequest, err.Error())

@@ -48,6 +48,10 @@ func TestSplitPyPIPath(t *testing.T) {
 		{name: "upload", path: "internal/upload", wantRepo: "internal", wantRest: "", wantKind: pathUpload, wantOK: true},
 		{name: "packages", path: "internal/packages/demo-package/file.whl", wantRepo: "internal", wantRest: "demo-package/file.whl", wantKind: pathPackages, wantOK: true},
 		{name: "slash repo simple", path: "team/internal/simple/foo", wantRepo: "team/internal", wantRest: "foo", wantKind: pathSimple, wantOK: true},
+		{name: "project named packages", path: "internal/simple/packages/", wantRepo: "internal", wantRest: "packages", wantKind: pathSimple, wantOK: true},
+		{name: "leftmost marker wins", path: "internal/simple/upload/", wantRepo: "internal", wantRest: "upload", wantKind: pathSimple, wantOK: true},
+		{name: "nested repo download", path: "team/internal/packages/demo/f.whl", wantRepo: "team/internal", wantRest: "demo/f.whl", wantKind: pathPackages, wantOK: true},
+		{name: "marker cannot be the first segment", path: "simple/foo", wantOK: false},
 		{name: "invalid", path: "internal/other", wantOK: false},
 	}
 	for _, tc := range cases {
@@ -104,7 +108,7 @@ func TestExtractMetadata_Wheel(t *testing.T) {
 	t.Parallel()
 	body := buildTestWheel(t, "demo_package-1.0.0.dist-info/METADATA",
 		"Name: demo-package\nVersion: 1.0.0\nRequires-Python: >=3.10\n")
-	m, err := extractMetadata("demo_package-1.0.0-py3-none-any.whl", body)
+	m, err := extractMetadata("demo_package-1.0.0-py3-none-any.whl", bytes.NewReader(body), int64(len(body)))
 	if err != nil {
 		t.Fatalf("extractMetadata: %v", err)
 	}
@@ -117,7 +121,7 @@ func TestExtractMetadata_Sdist(t *testing.T) {
 	t.Parallel()
 	body := buildTestSdist(t, "demo-package-1.0.0/PKG-INFO",
 		"Name: demo-package\nVersion: 1.0.0\nRequires-Python: >=3.8\n")
-	m, err := extractMetadata("demo-package-1.0.0.tar.gz", body)
+	m, err := extractMetadata("demo-package-1.0.0.tar.gz", bytes.NewReader(body), int64(len(body)))
 	if err != nil {
 		t.Fatalf("extractMetadata: %v", err)
 	}

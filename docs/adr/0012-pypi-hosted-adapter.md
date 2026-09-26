@@ -4,6 +4,8 @@
 - **Date:** 2026-09-26
 - **Relates to:** [ADR 6, OCI and PyPI first](0006-oci-and-pypi-first.md),
   [ADR 10, OCI hosted adapter placement](0010-oci-hosted-adapter-placement.md)
+- **Amended by:** [ADR 13, write-time validation and immutable files](0013-pypi-write-time-validation-and-immutable-files.md),
+  which sets what an upload must prove before it is placed
 
 ## Context
 

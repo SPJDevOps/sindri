@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -33,38 +34,7 @@ const testToken = "m4-e2e-token"
 // create repos via the management API, twine-shaped multipart upload, simple
 // HTML and JSON indexes, byte-identical download, and cross-repo 404 (I2).
 func TestPyPI_UploadInstallAndPlacementGate(t *testing.T) {
-	url := testsupport.StartPostgres(t)
-	opts := testsupport.DBOptions(url)
-	if err := db.Migrate(t.Context(), opts, nil); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	database, err := db.Open(t.Context(), opts)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(database.Close)
-
-	blobs := memstore.New()
-	casStore := cas.New(blobs)
-	reg := registry.New(database, casStore, "memory")
-	authenticator := auth.NewStaticBearer(testToken)
-
-	srv, err := server.New(server.Options{
-		Address:  "127.0.0.1:0",
-		Database: database,
-		Blobs:    blobs,
-		API: api.Handler(api.Options{
-			Registry:  reg,
-			Auth:      authenticator,
-			RequestID: server.RequestIDFromContext,
-		}),
-		PyPI:   pypi.Handler(pypi.Options{Registry: reg}),
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
-	if err != nil {
-		t.Fatalf("server.New: %v", err)
-	}
-	client := srv.Handler()
+	client := newTestHandler(t)
 
 	createRepo(t, client, "internal", "pypi")
 	createRepo(t, client, "other", "pypi")
@@ -138,6 +108,21 @@ func TestPyPI_UploadInstallAndPlacementGate(t *testing.T) {
 	if dl.Body != string(wheel) {
 		t.Fatalf("download body mismatch: got %d bytes, want %d", len(dl.Body), len(wheel))
 	}
+	if got, want := dl.Header.Get("Content-Length"), strconv.Itoa(len(wheel)); got != want {
+		t.Fatalf("download Content-Length = %q, want %q", got, want)
+	}
+	if got := dl.Header.Get("Content-Type"); got != "application/zip" {
+		t.Fatalf("download Content-Type = %q", got)
+	}
+
+	head := mustDo(t, client, http.MethodHead,
+		"/pypi/internal/packages/demo-package/"+filename, nil, "", "")
+	if head.StatusCode != http.StatusOK || head.Body != "" {
+		t.Fatalf("HEAD download = %d with %d body bytes", head.StatusCode, len(head.Body))
+	}
+	if got, want := head.Header.Get("Content-Length"), strconv.Itoa(len(wheel)); got != want {
+		t.Fatalf("HEAD Content-Length = %q, want %q", got, want)
+	}
 
 	// Invariant I2: same filename under another repository is unknown.
 	cross := mustDo(t, client, http.MethodGet,
@@ -184,6 +169,11 @@ func buildWheel(t *testing.T, name, version, requiresPython string) []byte {
 
 func multipartUpload(t *testing.T, h http.Handler, path string, fields map[string]string, filename string, content []byte) httpResult {
 	t.Helper()
+	return doMultipart(t, h, path, fields, filename, content, true)
+}
+
+func doMultipart(t *testing.T, h http.Handler, path string, fields map[string]string, filename string, content []byte, withBasic bool) httpResult {
+	t.Helper()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	for k, v := range fields {
@@ -204,7 +194,9 @@ func multipartUpload(t *testing.T, h http.Handler, path string, fields map[strin
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, &body)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	req.SetBasicAuth("token", "anything")
+	if withBasic {
+		req.SetBasicAuth("token", "anything")
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return httpResult{StatusCode: rec.Code, Body: rec.Body.String(), Header: rec.Header()}
@@ -248,4 +240,42 @@ func mustDo(t *testing.T, h http.Handler, method, path string, body []byte, cont
 		Body:       rec.Body.String(),
 		Header:     rec.Header(),
 	}
+}
+
+// newTestHandler wires the real server around a real Postgres and an in-memory
+// blob store, which runs the same storage conformance suite as the backends.
+func newTestHandler(t *testing.T) http.Handler {
+	t.Helper()
+
+	url := testsupport.StartPostgres(t)
+	opts := testsupport.DBOptions(url)
+	if err := db.Migrate(t.Context(), opts, nil); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	database, err := db.Open(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(database.Close)
+
+	blobs := memstore.New()
+	casStore := cas.New(blobs)
+	reg := registry.New(database, casStore, "memory")
+
+	srv, err := server.New(server.Options{
+		Address:  "127.0.0.1:0",
+		Database: database,
+		Blobs:    blobs,
+		API: api.Handler(api.Options{
+			Registry:  reg,
+			Auth:      auth.NewStaticBearer(testToken),
+			RequestID: server.RequestIDFromContext,
+		}),
+		PyPI:   pypi.Handler(pypi.Options{Registry: reg}),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	return srv.Handler()
 }

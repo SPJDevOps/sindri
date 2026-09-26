@@ -62,6 +62,30 @@ func (q *Queries) CountFilesByVersion(ctx context.Context, versionID uuid.UUID) 
 	return column_1, err
 }
 
+const countPackageFilesWithFilename = `-- name: CountPackageFilesWithFilename :one
+SELECT count(*) FROM files f
+JOIN versions v ON v.id = f.version_id
+WHERE v.package_id = $1
+  AND f.filename = $2
+  AND f.version_id <> $3
+`
+
+type CountPackageFilesWithFilenameParams struct {
+	PackageID uuid.UUID `json:"package_id"`
+	Filename  string    `json:"filename"`
+	VersionID uuid.UUID `json:"version_id"`
+}
+
+// Counts the same filename under a *different* version of one package. The
+// files unique constraint is per version, so this is what stops one filename
+// from resolving to two different blobs on the version-less download path.
+func (q *Queries) CountPackageFilesWithFilename(ctx context.Context, arg CountPackageFilesWithFilenameParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPackageFilesWithFilename, arg.PackageID, arg.Filename, arg.VersionID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countVersionsByPackage = `-- name: CountVersionsByPackage :one
 SELECT count(*)::bigint FROM versions
 WHERE package_id = $1
@@ -297,6 +321,8 @@ JOIN blobs b ON b.digest = f.blob_digest
 WHERE r.name = $1
   AND p.normalized_name = $2
   AND f.filename = $3
+ORDER BY v.version, f.id
+LIMIT 1
 `
 
 type GetFileByFilenameParams struct {
@@ -483,6 +509,48 @@ func (q *Queries) GetVersion(ctx context.Context, arg GetVersionParams) (Version
 	row := q.db.QueryRow(ctx, getVersion, arg.PackageID, arg.Version)
 	var i Version
 	err := row.Scan(&i.ID, &i.PackageID, &i.Version)
+	return i, err
+}
+
+const insertFileImmutable = `-- name: InsertFileImmutable :one
+INSERT INTO files (version_id, blob_digest, filename, media_type, metadata)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (version_id, filename) DO UPDATE
+SET media_type = EXCLUDED.media_type,
+    metadata = EXCLUDED.metadata
+WHERE files.blob_digest = EXCLUDED.blob_digest
+RETURNING id, version_id, blob_digest, filename, media_type, metadata
+`
+
+type InsertFileImmutableParams struct {
+	VersionID  uuid.UUID `json:"version_id"`
+	BlobDigest string    `json:"blob_digest"`
+	Filename   string    `json:"filename"`
+	MediaType  string    `json:"media_type"`
+	Metadata   []byte    `json:"metadata"`
+}
+
+// Places a file that may never be replaced by different bytes. The DO UPDATE
+// is a no-op refresh of the derived columns and fires only when the stored
+// digest already equals the incoming one, so a re-upload of identical bytes is
+// idempotent and a re-upload of different bytes returns no row at all.
+func (q *Queries) InsertFileImmutable(ctx context.Context, arg InsertFileImmutableParams) (File, error) {
+	row := q.db.QueryRow(ctx, insertFileImmutable,
+		arg.VersionID,
+		arg.BlobDigest,
+		arg.Filename,
+		arg.MediaType,
+		arg.Metadata,
+	)
+	var i File
+	err := row.Scan(
+		&i.ID,
+		&i.VersionID,
+		&i.BlobDigest,
+		&i.Filename,
+		&i.MediaType,
+		&i.Metadata,
+	)
 	return i, err
 }
 

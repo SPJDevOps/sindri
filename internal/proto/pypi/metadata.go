@@ -42,20 +42,24 @@ func requiresPythonFromMetadata(raw json.RawMessage) string {
 
 // extractMetadata reads Requires-Python (and related fields) from a wheel or
 // sdist payload. Unknown formats return empty metadata without error.
-func extractMetadata(filename string, body []byte) (fileMetadata, error) {
+//
+// It takes an io.ReaderAt rather than a []byte because an upload is a
+// multipart.File: already on local disk (or in the multipart memory budget),
+// random-access, and not something to copy into the heap a second time.
+func extractMetadata(filename string, payload io.ReaderAt, size int64) (fileMetadata, error) {
 	lower := strings.ToLower(filename)
 	switch {
 	case strings.HasSuffix(lower, ".whl"):
-		return extractFromWheel(body)
+		return extractFromWheel(payload, size)
 	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
-		return extractFromSdist(body)
+		return extractFromSdist(io.NewSectionReader(payload, 0, size))
 	default:
 		return fileMetadata{}, nil
 	}
 }
 
-func extractFromWheel(body []byte) (fileMetadata, error) {
-	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+func extractFromWheel(payload io.ReaderAt, size int64) (fileMetadata, error) {
+	zr, err := zip.NewReader(payload, size)
 	if err != nil {
 		return fileMetadata{}, fmt.Errorf("opening wheel: %w", err)
 	}
@@ -78,8 +82,8 @@ func extractFromWheel(body []byte) (fileMetadata, error) {
 	return fileMetadata{}, nil
 }
 
-func extractFromSdist(body []byte) (fileMetadata, error) {
-	gr, err := gzip.NewReader(bytes.NewReader(body))
+func extractFromSdist(payload io.Reader) (fileMetadata, error) {
+	gr, err := gzip.NewReader(payload)
 	if err != nil {
 		return fileMetadata{}, fmt.Errorf("gunzipping sdist: %w", err)
 	}

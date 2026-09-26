@@ -30,6 +30,12 @@ func (h *handler) handleSimple(w http.ResponseWriter, r *http.Request, repo, pro
 		h.simpleRoot(w, r, repo)
 		return
 	}
+	if strings.Contains(project, "/") {
+		// One segment names a project. Folding a deeper path into a name
+		// would make many URLs resolve to one project page.
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
 
 	normalized := NormalizeName(project)
 	if normalized == "" {
