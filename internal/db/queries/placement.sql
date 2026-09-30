@@ -28,6 +28,14 @@ ON CONFLICT (digest) DO UPDATE
 SET size = EXCLUDED.size
 RETURNING *;
 
+-- name: InsertBlobPlaceholder :exec
+-- Records a blob a proxied manifest references before its bytes are fetched,
+-- so manifest_children can point at it. An existing row is left alone: its
+-- size came from real bytes and a descriptor's claim must not replace it.
+INSERT INTO blobs (digest, size, storage_backend)
+VALUES ($1, $2, $3)
+ON CONFLICT (digest) DO NOTHING;
+
 -- name: GetBlob :one
 SELECT * FROM blobs
 WHERE digest = $1;

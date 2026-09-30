@@ -51,7 +51,10 @@ makes a third protocol cheap, so a cycle is a design error, not a lint warning.
 concept.
 
 **No naked returns**, no `interface{}`/`any` where a type works, no panics outside
-`main` and impossible-state assertions.
+`main` and impossible-state assertions. One sanctioned exception: an adapter whose
+streamed response fails after headers are sent calls `panic(http.ErrAbortHandler)`,
+net/http's way to cut the connection so the client cannot mistake a bad body for a
+complete one. The server's recoverer passes that value through (ADR 14).
 
 **Digests are a type**, not a `string`. Parse and validate at the edge so that internal
 code cannot receive a malformed digest.

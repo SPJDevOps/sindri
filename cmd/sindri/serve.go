@@ -18,6 +18,8 @@ import (
 	"github.com/spj/sindri/internal/proto/oci"
 	"github.com/spj/sindri/internal/proto/pypi"
 	"github.com/spj/sindri/internal/registry"
+	"github.com/spj/sindri/internal/remote"
+	"github.com/spj/sindri/internal/resolve"
 	"github.com/spj/sindri/internal/server"
 	"github.com/spj/sindri/internal/storage"
 	"github.com/spj/sindri/internal/storage/fsstore"
@@ -99,6 +101,8 @@ func runServe(parent context.Context, explicitConfig string) error {
 
 	casStore := cas.New(blobs)
 	reg := registry.New(database, casStore, string(cfg.Storage.Backend))
+	remoteClient := remote.New(remote.Options{Registry: reg, Logger: logger})
+	resolver := resolve.New(reg, remoteClient)
 	authenticator := auth.NewStaticBearer(cfg.Auth.StaticToken)
 	apiHandler := api.Handler(api.Options{
 		Registry:  reg,
@@ -106,11 +110,11 @@ func runServe(parent context.Context, explicitConfig string) error {
 		RequestID: server.RequestIDFromContext,
 	})
 	ociHandler := oci.Handler(oci.Options{
-		Registry: reg,
+		Resolver: resolver,
 		CAS:      casStore,
 	})
 	pypiHandler := pypi.Handler(pypi.Options{
-		Registry: reg,
+		Resolver: resolver,
 	})
 
 	srv, err := server.New(server.Options{

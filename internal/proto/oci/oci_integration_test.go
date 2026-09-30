@@ -25,6 +25,8 @@ import (
 	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/proto/oci"
 	"github.com/spj/sindri/internal/registry"
+	"github.com/spj/sindri/internal/remote"
+	"github.com/spj/sindri/internal/resolve"
 	"github.com/spj/sindri/internal/server"
 	"github.com/spj/sindri/internal/storage/memstore"
 	"github.com/spj/sindri/internal/testsupport"
@@ -50,6 +52,8 @@ func TestOCI_PushPullAndPlacementGate(t *testing.T) {
 	blobs := memstore.New()
 	casStore := cas.New(blobs)
 	reg := registry.New(database, casStore, "memory")
+	remoteClient := remote.New(remote.Options{Registry: reg})
+	resolver := resolve.New(reg, remoteClient)
 	authenticator := auth.NewStaticBearer(testToken)
 
 	srv, err := server.New(server.Options{
@@ -62,7 +66,7 @@ func TestOCI_PushPullAndPlacementGate(t *testing.T) {
 			RequestID: server.RequestIDFromContext,
 		}),
 		OCI: oci.Handler(oci.Options{
-			Registry: reg,
+			Resolver: resolver,
 			CAS:      casStore,
 		}),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),

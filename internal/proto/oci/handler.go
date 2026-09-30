@@ -1,7 +1,9 @@
 package oci
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -10,12 +12,13 @@ import (
 	"github.com/spj/sindri/internal/cas"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/registry"
+	"github.com/spj/sindri/internal/resolve"
 	"github.com/spj/sindri/internal/storage"
 )
 
 // Options wires the OCI adapter.
 type Options struct {
-	Registry *registry.Registry
+	Resolver *resolve.Resolver
 	CAS      *cas.Store
 }
 
@@ -25,17 +28,18 @@ type Options struct {
 // names contain slashes mid-path (e.g. demo/app/blobs/...), which no fixed
 // segment pattern can express.
 func Handler(opts Options) http.Handler {
-	if opts.Registry == nil {
-		panic("oci.Handler: nil registry")
+	if opts.Resolver == nil {
+		panic("oci.Handler: nil resolver")
 	}
 	if opts.CAS == nil {
 		panic("oci.Handler: nil cas")
 	}
-	h := &handler{reg: opts.Registry, cas: opts.CAS}
+	h := &handler{res: opts.Resolver, reg: opts.Resolver.Registry(), cas: opts.CAS}
 	return http.HandlerFunc(h.serve)
 }
 
 type handler struct {
+	res *resolve.Resolver
 	reg *registry.Registry
 	cas *cas.Store
 }
@@ -63,10 +67,16 @@ func (h *handler) versionCheck(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *handler) dispatch(w http.ResponseWriter, r *http.Request, path string) {
-	name, rest, ok := splitRepoPath(path)
-	if !ok {
+	repo, image, rest, err := h.res.SplitOCIPath(r.Context(), path)
+	if err != nil {
 		writeError(w, http.StatusNotFound, CodeNameUnknown, "repository name not known to registry")
 		return
+	}
+	// clientPath is the original name clients address (repo + image), used in
+	// Location headers so docker keeps talking to the same path.
+	clientPath := repo.Name
+	if image != "" {
+		clientPath = repo.Name + "/" + image
 	}
 
 	switch {
@@ -75,26 +85,27 @@ func (h *handler) dispatch(w http.ResponseWriter, r *http.Request, path string) 
 			writeError(w, http.StatusMethodNotAllowed, CodeUnsupported, "method not allowed")
 			return
 		}
-		h.listTags(w, r, name)
+		h.listTags(w, r, repo, image, clientPath)
 	case strings.HasPrefix(rest, "manifests/"):
 		ref := strings.TrimPrefix(rest, "manifests/")
 		if ref == "" {
 			writeError(w, http.StatusBadRequest, CodeManifestInvalid, "manifest reference required")
 			return
 		}
-		h.handleManifest(w, r, name, ref)
+		h.handleManifest(w, r, repo, image, clientPath, ref)
 	case strings.HasPrefix(rest, "blobs/uploads"):
-		h.handleUpload(w, r, name, rest)
+		h.handleUpload(w, r, repo, image, clientPath, rest)
 	case strings.HasPrefix(rest, "blobs/"):
 		digestStr := strings.TrimPrefix(rest, "blobs/")
-		h.handleBlob(w, r, name, digestStr)
+		h.handleBlob(w, r, repo, image, clientPath, digestStr)
 	default:
 		writeError(w, http.StatusNotFound, CodeNameUnknown, "repository name not known to registry")
 	}
 }
 
 // splitRepoPath splits "{name}/(blobs|manifests|tags)/..." where name may
-// contain slashes.
+// contain slashes. Longest-prefix matching against configured repositories is
+// done by resolve.SplitOCIPath; this helper only finds the route marker.
 func splitRepoPath(path string) (name, rest string, ok bool) {
 	for _, marker := range []string{"/blobs/", "/manifests/", "/tags/"} {
 		if i := strings.Index(path, marker); i > 0 {
@@ -107,7 +118,7 @@ func splitRepoPath(path string) (name, rest string, ok bool) {
 	return "", "", false
 }
 
-func (h *handler) handleBlob(w http.ResponseWriter, r *http.Request, name, digestStr string) {
+func (h *handler) handleBlob(w http.ResponseWriter, r *http.Request, repo model.Repository, image, clientPath, digestStr string) {
 	digest, err := model.ParseDigest(digestStr)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, CodeDigestInvalid, "invalid digest")
@@ -116,9 +127,14 @@ func (h *handler) handleBlob(w http.ResponseWriter, r *http.Request, name, diges
 
 	switch r.Method {
 	case http.MethodHead, http.MethodGet:
-		h.getBlob(w, r, name, digest)
+		h.getBlob(w, r, repo, image, digest)
 	case http.MethodDelete:
-		if err := h.reg.UnlinkBlob(r.Context(), name, digest); err != nil {
+		writeRepo, _, err := h.ensureWritable(r.Context(), repo, image, clientPath)
+		if err != nil {
+			mapRegistryError(w, err)
+			return
+		}
+		if err := h.reg.UnlinkBlob(r.Context(), writeRepo, digest); err != nil {
 			mapBlobReadError(w, err)
 			return
 		}
@@ -128,45 +144,64 @@ func (h *handler) handleBlob(w http.ResponseWriter, r *http.Request, name, diges
 	}
 }
 
-func (h *handler) getBlob(w http.ResponseWriter, r *http.Request, name string, digest model.Digest) {
-	info, err := h.reg.StatBlob(r.Context(), name, digest)
+func (h *handler) getBlob(w http.ResponseWriter, r *http.Request, repo model.Repository, image string, digest model.Digest) {
+	rangeHeader := r.Header.Get("Range")
+	if r.Method == http.MethodHead || rangeHeader != "" {
+		h.statOrRangeBlob(w, r, repo, image, digest, rangeHeader)
+		return
+	}
+
+	// A plain GET does not stat first: for an uncached proxy blob that would
+	// be a second upstream round trip, and the fetch already knows the size.
+	rc, size, err := h.res.GetOCIBlob(r.Context(), repo.Name, image, digest)
 	if err != nil {
 		mapBlobReadError(w, err)
 		return
 	}
+	defer func() { _ = rc.Close() }()
+	setBlobHeaders(w, digest)
+	if size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, rc); err != nil {
+		// Headers are sent, so the only honest signal left is to cut the
+		// connection: a clean end would let a client keep bytes that failed
+		// verification or stopped short. net/http treats this panic value as
+		// "abort the response" and the recoverer passes it through.
+		panic(http.ErrAbortHandler)
+	}
+}
 
-	w.Header().Set("Docker-Content-Digest", digest.String())
+func setBlobHeaders(w http.ResponseWriter, digest model.Digest) {
 	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Docker-Content-Digest", digest.String())
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Docker-Distribution-API-Version", apiVersion)
+}
 
+// statOrRangeBlob answers HEAD without downloading anything, and a ranged GET
+// from storage once the blob is cached.
+func (h *handler) statOrRangeBlob(w http.ResponseWriter, r *http.Request, repo model.Repository, image string, digest model.Digest, rangeHeader string) {
+	size, err := h.res.StatOCIBlob(r.Context(), repo.Name, image, digest)
+	if err != nil {
+		mapBlobReadError(w, err)
+		return
+	}
+	setBlobHeaders(w, digest)
 	if r.Method == http.MethodHead {
-		w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	rangeHeader := r.Header.Get("Range")
-	if rangeHeader == "" {
-		_, rc, err := h.reg.GetBlob(r.Context(), name, digest)
-		if err != nil {
-			mapBlobReadError(w, err)
-			return
-		}
-		defer func() { _ = rc.Close() }()
-		w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.Copy(w, rc)
-		return
-	}
-
-	off, length, ok := parseByteRange(rangeHeader, info.Size)
+	off, length, ok := parseByteRange(rangeHeader, size)
 	if !ok {
-		w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(info.Size, 10))
+		w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(size, 10))
 		writeError(w, http.StatusRequestedRangeNotSatisfiable, CodeSizeInvalid, "invalid range")
 		return
 	}
-	_, rc, err := h.reg.GetBlobRange(r.Context(), name, digest, off, length)
+	rc, err := h.res.GetOCIBlobRange(r.Context(), repo.Name, image, digest, off, length)
 	if err != nil {
 		mapBlobReadError(w, err)
 		return
@@ -174,7 +209,7 @@ func (h *handler) getBlob(w http.ResponseWriter, r *http.Request, name string, d
 	defer func() { _ = rc.Close() }()
 	end := off + length - 1
 	w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
-	w.Header().Set("Content-Range", "bytes "+strconv.FormatInt(off, 10)+"-"+strconv.FormatInt(end, 10)+"/"+strconv.FormatInt(info.Size, 10))
+	w.Header().Set("Content-Range", "bytes "+strconv.FormatInt(off, 10)+"-"+strconv.FormatInt(end, 10)+"/"+strconv.FormatInt(size, 10))
 	w.WriteHeader(http.StatusPartialContent)
 	_, _ = io.Copy(w, rc)
 }
@@ -217,7 +252,7 @@ func parseByteRange(h string, size int64) (off, length int64, ok bool) {
 	return start, end - start + 1, true
 }
 
-func (h *handler) handleUpload(w http.ResponseWriter, r *http.Request, name, rest string) {
+func (h *handler) handleUpload(w http.ResponseWriter, r *http.Request, repo model.Repository, image, clientPath, rest string) {
 	rest = strings.TrimSuffix(rest, "/")
 	switch {
 	case rest == "blobs/uploads":
@@ -225,7 +260,7 @@ func (h *handler) handleUpload(w http.ResponseWriter, r *http.Request, name, res
 			writeError(w, http.StatusMethodNotAllowed, CodeUnsupported, "method not allowed")
 			return
 		}
-		h.startUpload(w, r, name)
+		h.startUpload(w, r, repo, image, clientPath)
 	case strings.HasPrefix(rest, "blobs/uploads/"):
 		id := storage.UploadID(strings.TrimPrefix(rest, "blobs/uploads/"))
 		if id == "" {
@@ -234,13 +269,13 @@ func (h *handler) handleUpload(w http.ResponseWriter, r *http.Request, name, res
 		}
 		switch r.Method {
 		case http.MethodPatch:
-			h.patchUpload(w, r, name, id)
+			h.patchUpload(w, r, clientPath, id)
 		case http.MethodPut:
-			h.putUpload(w, r, name, id)
+			h.putUpload(w, r, repo, image, clientPath, id)
 		case http.MethodGet:
-			h.getUploadStatus(w, r, name, id)
+			h.getUploadStatus(w, r, clientPath, id)
 		case http.MethodDelete:
-			h.abortUpload(w, r, name, id)
+			h.abortUpload(w, r, clientPath, id)
 		default:
 			writeError(w, http.StatusMethodNotAllowed, CodeUnsupported, "method not allowed")
 		}
@@ -260,8 +295,26 @@ func inclusiveRangeHeader(size int64) string {
 	return "0-" + strconv.FormatInt(size-1, 10)
 }
 
-func (h *handler) startUpload(w http.ResponseWriter, r *http.Request, name string) {
-	if _, err := h.requireOCI(r, name); err != nil {
+// ensureWritable returns the Sindri repository name and image package for a
+// write. Proxy and virtual repositories are rejected. When no repository row
+// matched the path, the full client path is auto-created as hosted (M3).
+func (h *handler) ensureWritable(ctx context.Context, repo model.Repository, image, clientPath string) (repoName, imageName string, err error) {
+	if repo.ID != "" {
+		if repo.Type != model.RepoTypeHosted {
+			return "", "", fmt.Errorf("%w: %s is %s", registry.ErrReadOnly, repo.Name, repo.Type)
+		}
+		return repo.Name, image, nil
+	}
+	created, err := h.reg.EnsureOCIRepository(ctx, clientPath)
+	if err != nil {
+		return "", "", err
+	}
+	return created.Name, "", nil
+}
+
+func (h *handler) startUpload(w http.ResponseWriter, r *http.Request, repo model.Repository, image, clientPath string) {
+	writeRepo, _, err := h.ensureWritable(r.Context(), repo, image, clientPath)
+	if err != nil {
 		mapRegistryError(w, err)
 		return
 	}
@@ -283,13 +336,13 @@ func (h *handler) startUpload(w http.ResponseWriter, r *http.Request, name strin
 			mapRegistryError(w, err)
 			return
 		}
-		info, err := h.reg.CommitBlobUpload(r.Context(), name, upload, digest)
+		info, err := h.reg.CommitBlobUpload(r.Context(), writeRepo, upload, digest)
 		if err != nil {
 			mapRegistryError(w, err)
 			return
 		}
 		w.Header().Set("Docker-Content-Digest", info.Digest.String())
-		w.Header().Set("Location", "/v2/"+name+"/blobs/"+info.Digest.String())
+		w.Header().Set("Location", "/v2/"+clientPath+"/blobs/"+info.Digest.String())
 		w.Header().Set("Docker-Distribution-API-Version", apiVersion)
 		w.WriteHeader(http.StatusCreated)
 		return
@@ -303,7 +356,7 @@ func (h *handler) startUpload(w http.ResponseWriter, r *http.Request, name strin
 			mapRegistryError(w, err)
 			return
 		}
-		w.Header().Set("Location", uploadLocation(name, upload.ID()))
+		w.Header().Set("Location", uploadLocation(clientPath, upload.ID()))
 		w.Header().Set("Range", inclusiveRangeHeader(0))
 		w.Header().Set("Docker-Upload-UUID", string(upload.ID()))
 		w.Header().Set("Docker-Distribution-API-Version", apiVersion)
@@ -316,18 +369,14 @@ func (h *handler) startUpload(w http.ResponseWriter, r *http.Request, name strin
 		mapRegistryError(w, err)
 		return
 	}
-	w.Header().Set("Location", uploadLocation(name, upload.ID()))
+	w.Header().Set("Location", uploadLocation(clientPath, upload.ID()))
 	w.Header().Set("Range", inclusiveRangeHeader(0))
 	w.Header().Set("Docker-Upload-UUID", string(upload.ID()))
 	w.Header().Set("Docker-Distribution-API-Version", apiVersion)
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (h *handler) patchUpload(w http.ResponseWriter, r *http.Request, name string, id storage.UploadID) {
-	if _, err := h.requireOCI(r, name); err != nil {
-		mapRegistryError(w, err)
-		return
-	}
+func (h *handler) patchUpload(w http.ResponseWriter, r *http.Request, clientPath string, id storage.UploadID) {
 	upload, err := h.cas.ResumeUpload(id)
 	if err != nil {
 		mapRegistryError(w, err)
@@ -341,7 +390,7 @@ func (h *handler) patchUpload(w http.ResponseWriter, r *http.Request, name strin
 		start, ok := parseContentRangeStart(cr)
 		if !ok || start != upload.Size() {
 			w.Header().Set("Range", inclusiveRangeHeader(upload.Size()))
-			w.Header().Set("Location", uploadLocation(name, id))
+			w.Header().Set("Location", uploadLocation(clientPath, id))
 			w.Header().Set("Docker-Upload-UUID", string(id))
 			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 			return
@@ -352,7 +401,7 @@ func (h *handler) patchUpload(w http.ResponseWriter, r *http.Request, name strin
 		mapRegistryError(w, err)
 		return
 	}
-	w.Header().Set("Location", uploadLocation(name, id))
+	w.Header().Set("Location", uploadLocation(clientPath, id))
 	w.Header().Set("Range", inclusiveRangeHeader(upload.Size()))
 	w.Header().Set("Docker-Upload-UUID", string(id))
 	w.Header().Set("Docker-Distribution-API-Version", apiVersion)
@@ -383,8 +432,9 @@ func parseContentRangeStart(h string) (int64, bool) {
 	return start, true
 }
 
-func (h *handler) putUpload(w http.ResponseWriter, r *http.Request, name string, id storage.UploadID) {
-	if _, err := h.requireOCI(r, name); err != nil {
+func (h *handler) putUpload(w http.ResponseWriter, r *http.Request, repo model.Repository, image, clientPath string, id storage.UploadID) {
+	writeRepo, _, err := h.ensureWritable(r.Context(), repo, image, clientPath)
+	if err != nil {
 		mapRegistryError(w, err)
 		return
 	}
@@ -405,22 +455,18 @@ func (h *handler) putUpload(w http.ResponseWriter, r *http.Request, name string,
 			return
 		}
 	}
-	info, err := h.reg.CommitBlobUpload(r.Context(), name, upload, digest)
+	info, err := h.reg.CommitBlobUpload(r.Context(), writeRepo, upload, digest)
 	if err != nil {
 		mapRegistryError(w, err)
 		return
 	}
 	w.Header().Set("Docker-Content-Digest", info.Digest.String())
-	w.Header().Set("Location", "/v2/"+name+"/blobs/"+info.Digest.String())
+	w.Header().Set("Location", "/v2/"+clientPath+"/blobs/"+info.Digest.String())
 	w.Header().Set("Docker-Distribution-API-Version", apiVersion)
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (h *handler) getUploadStatus(w http.ResponseWriter, r *http.Request, name string, id storage.UploadID) {
-	if _, err := h.requireOCI(r, name); err != nil {
-		mapRegistryError(w, err)
-		return
-	}
+func (h *handler) getUploadStatus(w http.ResponseWriter, r *http.Request, clientPath string, id storage.UploadID) {
 	upload, err := h.cas.ResumeUpload(id)
 	if err != nil {
 		mapRegistryError(w, err)
@@ -428,16 +474,12 @@ func (h *handler) getUploadStatus(w http.ResponseWriter, r *http.Request, name s
 	}
 	w.Header().Set("Range", inclusiveRangeHeader(upload.Size()))
 	w.Header().Set("Docker-Upload-UUID", string(id))
-	w.Header().Set("Location", uploadLocation(name, id))
+	w.Header().Set("Location", uploadLocation(clientPath, id))
 	w.Header().Set("Docker-Distribution-API-Version", apiVersion)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *handler) abortUpload(w http.ResponseWriter, r *http.Request, name string, id storage.UploadID) {
-	if _, err := h.requireOCI(r, name); err != nil {
-		mapRegistryError(w, err)
-		return
-	}
+func (h *handler) abortUpload(w http.ResponseWriter, r *http.Request, clientPath string, id storage.UploadID) {
 	upload, err := h.cas.ResumeUpload(id)
 	if err != nil {
 		mapRegistryError(w, err)
@@ -450,25 +492,22 @@ func (h *handler) abortUpload(w http.ResponseWriter, r *http.Request, name strin
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *handler) requireOCI(r *http.Request, name string) (model.Repository, error) {
-	return h.reg.EnsureOCIRepository(r.Context(), name)
-}
-
-func (h *handler) handleManifest(w http.ResponseWriter, r *http.Request, name, ref string) {
+func (h *handler) handleManifest(w http.ResponseWriter, r *http.Request, repo model.Repository, image, clientPath, ref string) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		h.getManifest(w, r, name, ref)
+		h.getManifest(w, r, repo, image, ref)
 	case http.MethodPut:
-		h.putManifest(w, r, name, ref)
+		h.putManifest(w, r, repo, image, clientPath, ref)
 	case http.MethodDelete:
-		h.deleteManifest(w, r, name, ref)
+		h.deleteManifest(w, r, repo, image, clientPath, ref)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, CodeUnsupported, "method not allowed")
 	}
 }
 
-func (h *handler) getManifest(w http.ResponseWriter, r *http.Request, name, ref string) {
-	man, err := h.reg.GetManifest(r.Context(), name, ref)
+func (h *handler) getManifest(w http.ResponseWriter, r *http.Request, repo model.Repository, image, ref string) {
+	accept := r.Header.Get("Accept")
+	man, err := h.res.GetOCIManifest(r.Context(), repo.Name, image, ref, accept)
 	if err != nil {
 		mapManifestReadError(w, err)
 		return
@@ -485,34 +524,44 @@ func (h *handler) getManifest(w http.ResponseWriter, r *http.Request, name, ref 
 	_, _ = w.Write(man.Body)
 }
 
-func (h *handler) putManifest(w http.ResponseWriter, r *http.Request, name, ref string) {
+func (h *handler) putManifest(w http.ResponseWriter, r *http.Request, repo model.Repository, image, clientPath, ref string) {
+	writeRepo, writeImage, err := h.ensureWritable(r.Context(), repo, image, clientPath)
+	if err != nil {
+		mapRegistryError(w, err)
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, CodeManifestInvalid, "could not read body")
 		return
 	}
 	mediaType := r.Header.Get("Content-Type")
-	man, err := h.reg.PutManifest(r.Context(), name, ref, mediaType, body)
+	man, err := h.reg.PutManifest(r.Context(), writeRepo, writeImage, ref, mediaType, body)
 	if err != nil {
 		mapManifestReadError(w, err)
 		return
 	}
-	w.Header().Set("Location", "/v2/"+name+"/manifests/"+ref)
+	w.Header().Set("Location", "/v2/"+clientPath+"/manifests/"+ref)
 	w.Header().Set("Docker-Content-Digest", man.Digest.String())
 	w.Header().Set("Content-Length", "0")
 	w.Header().Set("Docker-Distribution-API-Version", apiVersion)
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (h *handler) deleteManifest(w http.ResponseWriter, r *http.Request, name, ref string) {
-	if err := h.reg.DeleteManifest(r.Context(), name, ref); err != nil {
+func (h *handler) deleteManifest(w http.ResponseWriter, r *http.Request, repo model.Repository, image, clientPath, ref string) {
+	writeRepo, writeImage, err := h.ensureWritable(r.Context(), repo, image, clientPath)
+	if err != nil {
+		mapRegistryError(w, err)
+		return
+	}
+	if err := h.reg.DeleteManifest(r.Context(), writeRepo, writeImage, ref); err != nil {
 		mapManifestReadError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (h *handler) listTags(w http.ResponseWriter, r *http.Request, name string) {
+func (h *handler) listTags(w http.ResponseWriter, r *http.Request, repo model.Repository, image, clientPath string) {
 	n := int32(100)
 	if v := r.URL.Query().Get("n"); v != "" {
 		parsed, err := strconv.ParseInt(v, 10, 32)
@@ -523,17 +572,13 @@ func (h *handler) listTags(w http.ResponseWriter, r *http.Request, name string) 
 		n = int32(parsed)
 	}
 	last := r.URL.Query().Get("last")
-	page, err := h.reg.ListTags(r.Context(), registry.ListTagsParams{
-		Repo:  name,
-		After: last,
-		Limit: n,
-	})
+	page, err := h.res.ListOCITags(r.Context(), repo.Name, image, last, n)
 	if err != nil {
 		mapRegistryError(w, err)
 		return
 	}
 	if page.NextCursor != "" {
-		link := `</v2/` + name + `/tags/list?n=` + strconv.FormatInt(int64(n), 10) +
+		link := `</v2/` + clientPath + `/tags/list?n=` + strconv.FormatInt(int64(n), 10) +
 			`&last=` + page.NextCursor + `>; rel="next"`
 		w.Header().Set("Link", link)
 	}
@@ -541,7 +586,7 @@ func (h *handler) listTags(w http.ResponseWriter, r *http.Request, name string) 
 	w.Header().Set("Docker-Distribution-API-Version", apiVersion)
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"name": name,
+		"name": clientPath,
 		"tags": page.Items,
 	})
 }

@@ -512,6 +512,26 @@ func (q *Queries) GetVersion(ctx context.Context, arg GetVersionParams) (Version
 	return i, err
 }
 
+const insertBlobPlaceholder = `-- name: InsertBlobPlaceholder :exec
+INSERT INTO blobs (digest, size, storage_backend)
+VALUES ($1, $2, $3)
+ON CONFLICT (digest) DO NOTHING
+`
+
+type InsertBlobPlaceholderParams struct {
+	Digest         string `json:"digest"`
+	Size           int64  `json:"size"`
+	StorageBackend string `json:"storage_backend"`
+}
+
+// Records a blob a proxied manifest references before its bytes are fetched,
+// so manifest_children can point at it. An existing row is left alone: its
+// size came from real bytes and a descriptor's claim must not replace it.
+func (q *Queries) InsertBlobPlaceholder(ctx context.Context, arg InsertBlobPlaceholderParams) error {
+	_, err := q.db.Exec(ctx, insertBlobPlaceholder, arg.Digest, arg.Size, arg.StorageBackend)
+	return err
+}
+
 const insertFileImmutable = `-- name: InsertFileImmutable :one
 INSERT INTO files (version_id, blob_digest, filename, media_type, metadata)
 VALUES ($1, $2, $3, $4, $5)

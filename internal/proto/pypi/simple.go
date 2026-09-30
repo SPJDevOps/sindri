@@ -1,14 +1,14 @@
 package pypi
 
 import (
-	"context"
 	"encoding/json"
 	"html"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/spj/sindri/internal/registry"
+	"github.com/spj/sindri/internal/resolve"
 )
 
 const (
@@ -23,10 +23,6 @@ const (
 	// 1.0 document; clients ignore a minor version difference and reject a
 	// major one, which is the part that matters.
 	apiVersionHTML = "1.0"
-
-	// rootPageLimit is the page size used to walk projects for the root index,
-	// not a bound on how many are listed.
-	rootPageLimit = 200
 )
 
 func (h *handler) handleSimple(w http.ResponseWriter, r *http.Request, repo, project string) {
@@ -87,7 +83,7 @@ func redirectTo(w http.ResponseWriter, target string) {
 }
 
 func (h *handler) simpleRoot(w http.ResponseWriter, r *http.Request, repo string) {
-	names, err := h.projectNames(r.Context(), repo)
+	names, err := h.res.ListPyPIProjects(r.Context(), repo)
 	if err != nil {
 		mapRegistryError(w, err)
 		return
@@ -124,52 +120,21 @@ func (h *handler) simpleRoot(w http.ResponseWriter, r *http.Request, repo string
 	writeHTML(w, b.String())
 }
 
-// projectNames walks every page of packages in a repository. The root index
-// lists a repository in full: a single page would silently stop at the page
-// limit, and pip gives no hint that a project it cannot see exists.
-func (h *handler) projectNames(ctx context.Context, repo string) ([]string, error) {
-	var (
-		names  []string
-		cursor string
-	)
-	for {
-		page, err := h.reg.ListPackages(ctx, registry.ListPackagesParams{
-			Repo:  repo,
-			After: cursor,
-			Limit: rootPageLimit,
-		})
-		if err != nil {
-			return nil, err
-		}
-		for _, pkg := range page.Items {
-			names = append(names, pkg.NormalizedName)
-		}
-		// The cursor is a normalized name, unique per repository, so it
-		// strictly advances. Stopping when it does not is cheap insurance
-		// against a loop that hangs a request handler.
-		if page.NextCursor == "" || page.NextCursor == cursor {
-			return names, nil
-		}
-		cursor = page.NextCursor
-	}
-}
-
 func (h *handler) simpleProject(w http.ResponseWriter, r *http.Request, repo, project string) {
-	files, err := h.reg.ListPackageFiles(r.Context(), repo, project)
+	resolved, err := h.res.ListPyPIFiles(r.Context(), repo, project)
 	if err != nil {
 		mapRegistryError(w, err)
 		return
 	}
-	if len(files) == 0 {
-		// Empty project pages are 404 so pip does not treat an empty index as success.
+
+	entries := indexEntries(resolved)
+	if len(entries) == 0 {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
 
 	wantJSON := prefersJSON(r.Header.Get("Accept"))
 	if wantJSON {
-		// size is required at api-version 1.1 (PEP 700); requires-python is
-		// nullable rather than omitted (PEP 691).
 		type fileEntry struct {
 			Filename       string            `json:"filename"`
 			URL            string            `json:"url"`
@@ -177,26 +142,44 @@ func (h *handler) simpleProject(w http.ResponseWriter, r *http.Request, repo, pr
 			RequiresPython *string           `json:"requires-python"`
 			Size           int64             `json:"size"`
 		}
-		entries := make([]fileEntry, 0, len(files))
-		for _, f := range files {
-			req := requiresPythonFromMetadata(f.Metadata)
+		files := make([]fileEntry, 0, len(entries))
+		versions := map[string]struct{}{}
+		for _, e := range entries {
 			var reqPtr *string
-			if req != "" {
+			if e.requires != "" {
+				req := e.requires
 				reqPtr = &req
 			}
-			entries = append(entries, fileEntry{
-				Filename:       f.Filename,
-				URL:            packageURL(repo, project, f.Filename),
-				Hashes:         map[string]string{"sha256": f.Digest.Hex()},
+			hashes := map[string]string{}
+			if e.sha256 != "" {
+				hashes["sha256"] = e.sha256
+			}
+			// size is required at api-version 1.1 (PEP 700). An upstream on
+			// an older api-version may not have said, and 0 is the least
+			// wrong number; pip does not use it.
+			size := e.size
+			if size < 0 {
+				size = 0
+			}
+			files = append(files, fileEntry{
+				Filename:       e.filename,
+				URL:            packageURL(repo, project, e.filename),
+				Hashes:         hashes,
 				RequiresPython: reqPtr,
-				Size:           f.Size,
+				Size:           size,
 			})
+			versions[e.version] = struct{}{}
 		}
+		verList := make([]string, 0, len(versions))
+		for v := range versions {
+			verList = append(verList, v)
+		}
+		sort.Strings(verList)
 		writeJSON(w, mediaSimpleJSON, map[string]any{
 			"meta":     map[string]any{"api-version": apiVersionJSON},
 			"name":     project,
-			"files":    entries,
-			"versions": uniqueVersions(files),
+			"files":    files,
+			"versions": verList,
 		})
 		return
 	}
@@ -209,36 +192,85 @@ func (h *handler) simpleProject(w http.ResponseWriter, r *http.Request, repo, pr
 	b.WriteString("</title>\n</head><body>\n<h1>Links for ")
 	b.WriteString(html.EscapeString(project))
 	b.WriteString("</h1>\n")
-	for _, f := range files {
-		url := packageURL(repo, project, f.Filename)
-		href := html.EscapeString(url + "#sha256=" + f.Digest.Hex())
+	for _, e := range entries {
+		href := packageURL(repo, project, e.filename)
+		if e.sha256 != "" {
+			href += "#sha256=" + e.sha256
+		}
 		b.WriteString(`<a href="`)
-		b.WriteString(href)
+		b.WriteString(html.EscapeString(href))
 		b.WriteString(`"`)
-		if req := requiresPythonFromMetadata(f.Metadata); req != "" {
+		if e.requires != "" {
 			b.WriteString(` data-requires-python="`)
-			b.WriteString(html.EscapeString(req))
+			b.WriteString(html.EscapeString(e.requires))
 			b.WriteString(`"`)
 		}
 		b.WriteString(`>`)
-		b.WriteString(html.EscapeString(f.Filename))
+		b.WriteString(html.EscapeString(e.filename))
 		b.WriteString("</a><br/>\n")
 	}
 	b.WriteString("</body></html>\n")
 	writeHTML(w, b.String())
 }
 
-func uniqueVersions(files []registry.PackageFile) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0)
-	for _, f := range files {
-		if _, ok := seen[f.Version]; ok {
+// indexEntry is one file link on a project page, whether its bytes are placed
+// here already or only known from a proxy's upstream index.
+type indexEntry struct {
+	filename string
+	sha256   string // hex; empty when an upstream index gave no hash
+	requires string
+	size     int64 // negative when unknown
+	version  string
+}
+
+// indexEntries lists every file a project page must link.
+//
+// For a proxy the upstream index is the authority on what exists, and placed
+// files are only the subset fetched so far: rendering placed files alone would
+// hide every other version and platform the moment one file is cached. Placed
+// files come first and win on a filename collision, because their hash is one
+// Sindri computed. A placed file upstream no longer lists stays: the cache
+// keeps serving what it served before.
+func indexEntries(resolved resolve.PyPIProjectFiles) []indexEntry {
+	entries := make([]indexEntry, 0, len(resolved.Files))
+	placed := make(map[string]struct{}, len(resolved.Files))
+	for _, f := range resolved.Files {
+		placed[f.Filename] = struct{}{}
+		entries = append(entries, indexEntry{
+			filename: f.Filename,
+			sha256:   f.Digest.Hex(),
+			requires: requiresPythonFromMetadata(f.Metadata),
+			size:     f.Size,
+			version:  f.Version,
+		})
+	}
+	if resolved.Index == nil {
+		return entries
+	}
+	for _, f := range resolved.Index.Files {
+		if _, ok := placed[f.Filename]; ok || f.Yanked {
 			continue
 		}
-		seen[f.Version] = struct{}{}
-		out = append(out, f.Version)
+		entries = append(entries, indexEntry{
+			filename: f.Filename,
+			sha256:   f.Hashes["sha256"],
+			requires: f.Requires,
+			size:     f.Size,
+			version:  versionFromPyPIFilename(f.Filename),
+		})
 	}
-	return out
+	return entries
+}
+
+func versionFromPyPIFilename(filename string) string {
+	base := strings.TrimSuffix(filename, ".whl")
+	base = strings.TrimSuffix(base, ".tar.gz")
+	base = strings.TrimSuffix(base, ".zip")
+	parts := strings.Split(base, "-")
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return "0"
 }
 
 // packageURL is the download path for a file, relative to the server root.

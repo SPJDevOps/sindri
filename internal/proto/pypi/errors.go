@@ -7,6 +7,7 @@ import (
 
 	"github.com/spj/sindri/internal/cas"
 	"github.com/spj/sindri/internal/registry"
+	"github.com/spj/sindri/internal/resolve"
 )
 
 func writeError(w http.ResponseWriter, status int, message string) {
@@ -19,10 +20,16 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func mapRegistryError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, resolve.ErrUpstreamUnavailable):
+		// Checked first: upstream bytes failing verification are the
+		// upstream's fault, not a malformed client request.
+		writeError(w, http.StatusBadGateway, "upstream index unavailable")
 	case errors.Is(err, registry.ErrNotFound),
 		errors.Is(err, registry.ErrWrongProtocol),
 		errors.Is(err, registry.ErrNotPlaced):
 		writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, registry.ErrReadOnly):
+		writeError(w, http.StatusMethodNotAllowed, "repository does not accept uploads")
 	case errors.Is(err, registry.ErrFileExists):
 		// PyPI answers 400 here; 409 says the same thing without pretending
 		// the request was malformed, and twine surfaces both.

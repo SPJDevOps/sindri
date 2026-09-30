@@ -47,6 +47,14 @@ type Remote struct {
 	NegativeTtlSeconds int32       `json:"negative_ttl_seconds"`
 }
 
+type RemoteCache struct {
+	RepoID     uuid.UUID   `json:"repo_id"`
+	CacheKey   string      `json:"cache_key"`
+	Status     string      `json:"status"`
+	BlobDigest pgtype.Text `json:"blob_digest"`
+	FetchedAt  time.Time   `json:"fetched_at"`
+}
+
 type Repository struct {
 	ID        uuid.UUID `json:"id"`
 	Name      string    `json:"name"`
