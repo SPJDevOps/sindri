@@ -15,6 +15,13 @@ GOLANGCI_VERSION := v2.13.2
 SQLC_VERSION     := v1.30.0
 COMPOSE_FILE     := deploy/compose/docker-compose.yml
 
+# `make tools` installs into GOBIN, which is often not on PATH. Prefer that
+# pinned copy, fall back to PATH, and let the target fail if neither exists:
+# a lint step that skips itself makes `make ci` green when CI is not.
+TOOLS_BIN     := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)
+GOLANGCI_LINT := $(or $(wildcard $(TOOLS_BIN)/golangci-lint),$(shell command -v golangci-lint 2>/dev/null))
+SQLC          := $(or $(wildcard $(TOOLS_BIN)/sqlc),$(shell command -v sqlc 2>/dev/null))
+
 .DEFAULT_GOAL := help
 
 ## help: List available targets.
@@ -45,15 +52,12 @@ cover:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "report: coverage.html"
 
-## lint: Run go vet, plus golangci-lint when it is installed.
+## lint: Run go vet and golangci-lint. Fails if golangci-lint is not installed.
 .PHONY: lint
 lint: fmt-check
 	go vet ./...
-	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run; \
-	else \
-		echo "golangci-lint not found, ran go vet only. Install it with: make tools"; \
-	fi
+	@test -n "$(GOLANGCI_LINT)" || { echo "golangci-lint not found in $(TOOLS_BIN) or PATH. Install it with: make tools"; exit 1; }
+	$(GOLANGCI_LINT) run
 
 ## fmt: Format all Go source.
 .PHONY: fmt
@@ -75,8 +79,8 @@ tidy:
 ## generate: Regenerate sqlc typed queries under internal/db.
 .PHONY: generate
 generate:
-	@command -v sqlc >/dev/null 2>&1 || { echo "sqlc not found. Install it with: make tools"; exit 1; }
-	sqlc generate
+	@test -n "$(SQLC)" || { echo "sqlc not found in $(TOOLS_BIN) or PATH. Install it with: make tools"; exit 1; }
+	$(SQLC) generate
 
 ## tools: Install developer tooling into GOBIN.
 .PHONY: tools
