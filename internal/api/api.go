@@ -18,6 +18,7 @@ import (
 
 	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/reconcile"
 	"github.com/spj/sindri/internal/registry"
 )
 
@@ -93,9 +94,15 @@ type identityCtxKey struct{}
 
 func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name     string `json:"name"`
-		Type     string `json:"type"`
-		Protocol string `json:"protocol"`
+		Name               string   `json:"name"`
+		Type               string   `json:"type"`
+		Protocol           string   `json:"protocol"`
+		UpstreamURL        string   `json:"upstream_url"`
+		CredentialsRef     string   `json:"credentials_ref"`
+		TTLSeconds         int32    `json:"ttl_seconds"`
+		NegativeTTLSeconds int32    `json:"negative_ttl_seconds"`
+		Members            []string `json:"members"`
+		LifecycleStages    []string `json:"lifecycle_stages"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_JSON", "request body must be JSON")
@@ -105,11 +112,30 @@ func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {
 	if repoType == "" {
 		repoType = model.RepoTypeHosted
 	}
-	repo, err := a.reg.CreateRepository(r.Context(), registry.CreateRepositoryParams{
-		Name:     body.Name,
-		Type:     repoType,
-		Protocol: model.Protocol(body.Protocol),
-	})
+	params := registry.CreateRepositoryParams{
+		Name:            body.Name,
+		Type:            repoType,
+		Protocol:        model.Protocol(body.Protocol),
+		UpstreamURL:     body.UpstreamURL,
+		CredentialsRef:  body.CredentialsRef,
+		TTLSeconds:      body.TTLSeconds,
+		NegativeTTL:     body.NegativeTTLSeconds,
+		Members:         body.Members,
+		LifecycleStages: body.LifecycleStages,
+	}
+	if err := reconcile.ValidateRepository(reconcile.RepositorySpec{
+		Name:            params.Name,
+		Type:            params.Type,
+		Protocol:        params.Protocol,
+		UpstreamURL:     params.UpstreamURL,
+		CredentialsRef:  params.CredentialsRef,
+		Members:         params.Members,
+		LifecycleStages: params.LifecycleStages,
+	}); err != nil {
+		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
+	repo, err := a.reg.CreateRepository(r.Context(), params)
 	if err != nil {
 		a.writeRegistryError(w, r, err)
 		return
@@ -281,7 +307,7 @@ func (a *api) writeRegistryError(w http.ResponseWriter, r *http.Request, err err
 		a.writeError(w, r, http.StatusNotFound, "NOT_FOUND", "resource not found")
 	case errors.Is(err, registry.ErrAlreadyExists):
 		a.writeError(w, r, http.StatusConflict, "ALREADY_EXISTS", "resource already exists")
-	case errors.Is(err, registry.ErrInvalidInput):
+	case errors.Is(err, registry.ErrInvalidInput), errors.Is(err, registry.ErrCycle), errors.Is(err, registry.ErrReadOnly):
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 	default:
 		a.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")

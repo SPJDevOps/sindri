@@ -25,7 +25,7 @@ func (h *handler) handleDownload(w http.ResponseWriter, r *http.Request, repo, r
 		return
 	}
 
-	file, rc, err := h.reg.GetFileByFilename(r.Context(), repo, normalized, filename)
+	file, rc, err := h.res.GetPyPIFile(r.Context(), repo, normalized, filename)
 	if err != nil {
 		mapRegistryError(w, err)
 		return
@@ -37,11 +37,21 @@ func (h *handler) handleDownload(w http.ResponseWriter, r *http.Request, repo, r
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
+	// A proxied file streaming from an upstream that sent no length has none
+	// to declare yet.
+	if file.Size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
+	}
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {
 		return
 	}
-	_, _ = io.Copy(w, rc)
+	if _, err := io.Copy(w, rc); err != nil {
+		// Headers are sent, so cutting the connection is the only way to
+		// tell pip the file is bad: a clean end would hand it bytes that
+		// failed verification or stopped short. net/http treats this panic
+		// value as "abort the response" and the recoverer passes it through.
+		panic(http.ErrAbortHandler)
+	}
 }

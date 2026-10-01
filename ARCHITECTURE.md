@@ -176,6 +176,12 @@ marks them as proxied, which is what keeps invariant I4 enforceable.
 **Virtual** repositories are the developer-facing view. One URL, an explicit ordered list
 of members, hosted first.
 
+**OCI path routing.** An OCI repository name and an image name share one URL path. On
+`/v2/...`, Sindri chooses the longest existing repository name that is a prefix of the
+path; the remainder is the image name within that repository (see ADR 14). PyPI needs no
+equivalent rule because `/simple/`, `/packages/`, and `/upload` already mark where the
+repository name ends.
+
 ### The name-claim rule
 
 When a virtual repository resolves a package name:

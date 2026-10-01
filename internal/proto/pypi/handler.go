@@ -1,9 +1,9 @@
 // Package pypi is the PEP 503/691 hosted index and twine upload adapter
 // mounted at /pypi.
 //
-// Handlers translate the wire protocol into registry calls. Placement is the
-// files row from registry.Publish (ADR 12); invariant I2 is enforced on every
-// download.
+// Handlers translate the wire protocol into resolve/registry calls. Placement
+// is the files row from registry.Publish (ADR 12); invariant I2 is enforced
+// on every download. Proxy and virtual reads go through resolve (M5).
 package pypi
 
 import (
@@ -11,11 +11,12 @@ import (
 	"strings"
 
 	"github.com/spj/sindri/internal/registry"
+	"github.com/spj/sindri/internal/resolve"
 )
 
 // Options wires the PyPI adapter.
 type Options struct {
-	Registry *registry.Registry
+	Resolver *resolve.Resolver
 }
 
 // Handler returns the /pypi handler. Mount it with r.Mount("/pypi", ...).
@@ -23,14 +24,15 @@ type Options struct {
 // A plain handler is used instead of chi path params because repository names
 // may contain slashes mid-path (e.g. team/internal/simple/...).
 func Handler(opts Options) http.Handler {
-	if opts.Registry == nil {
-		panic("pypi.Handler: nil registry")
+	if opts.Resolver == nil {
+		panic("pypi.Handler: nil resolver")
 	}
-	h := &handler{reg: opts.Registry}
+	h := &handler{res: opts.Resolver, reg: opts.Resolver.Registry()}
 	return http.HandlerFunc(h.serve)
 }
 
 type handler struct {
+	res *resolve.Resolver
 	reg *registry.Registry
 }
 

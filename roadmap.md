@@ -323,21 +323,24 @@ and the JSON API declares api-version 1.1 (it carries PEP 700's `versions` and
 
 ---
 
-### M5 — Proxy and virtual repositories
+### M5 — Proxy and virtual repositories ✅
 
 **Goal.** The three repository types work together, and dependency confusion is
 structurally impossible.
 
 **Scope.**
-- `remotes` configuration: upstream URL, credentials reference, positive and negative TTL
-- On-miss upstream fetch that streams to the client while caching into the CAS, so a
+- [x] `remotes` configuration: upstream URL, positive and negative TTL. A credentials
+  reference is stored and applied only to the upstream's own origin, but nothing supplies
+  secrets yet, so the API rejects one: M5 proxies public upstreams only. The secret source
+  is decided and lands in M7 ([ADR 15](docs/adr/0015-upstream-credentials-source-deferred-to-m7.md))
+- [x] On-miss upstream fetch that streams to the client while caching into the CAS, so a
   large first pull is not serialised behind the write
-- Negative caching, upstream timeouts, and graceful behaviour when upstream is down but
+- [x] Negative caching, upstream timeouts, and graceful behaviour when upstream is down but
   content is cached
-- `internal/resolve`: ordered member walk, first hit wins, invariant I5
-- The **name-claim rule** from ARCHITECTURE.md section 4
-- Reconciler-time rejection of lifecycle configuration on a proxy repository, invariant I4
-- Proxy support for both adapters: pypi.org and Docker Hub
+- [x] `internal/resolve`: ordered member walk, first hit wins, invariant I5
+- [x] The **name-claim rule** from ARCHITECTURE.md section 4
+- [x] Reconciler-time rejection of lifecycle configuration on a proxy repository, invariant I4
+- [x] Proxy support for both adapters: pypi.org and Docker Hub
 
 **Out of scope.** Eager background mirroring. Cache eviction policy beyond TTL.
 
@@ -345,7 +348,8 @@ structurally impossible.
 separately from a 503. Treating them alike either hammers a healthy upstream or hides a
 package that appeared five minutes ago.
 
-**Gate.**
+**Gate.** Verified on 2026-09-30. Decisions in
+[ADR 14](docs/adr/0014-proxy-cache-and-virtual-resolution.md).
 ```bash
 make test-integration
 ```
@@ -361,7 +365,35 @@ Integration tests that assert:
 5. Applying a manifest that puts a lifecycle stage on a proxy repository fails validation
 
 Test 4 is a permanent regression guard. It is named explicitly so that nobody deletes it
-while "simplifying tests".
+while "simplifying tests". Its OCI half is
+`TestDependencyConfusion_OCIHostedImageIsNeverServedFromProxy`, guarded the same way.
+
+The five items above were not enough on their own: the first M5 draft passed them while
+hiding every uncached version of a proxied PyPI project, pinning proxied OCI tags forever,
+and buffering whole layers in memory. The integration suite in `internal/resolve` also
+covers, and each test was checked to fail with its bug reintroduced:
+- refresh after TTL expiry (`TestProxyOCI_TagRefreshesAfterTTL`,
+  `TestProxyPyPI_IndexListsUpstreamFilesAfterOneIsCached`)
+- a 5xx never replacing a hit, and stale content served while upstream is down
+  (`TestProxy_StaleIndexServedWhenUpstreamDown`)
+- streaming, verification, HEAD and Range (`TestProxyOCI_BlobStreamsBeforeUpstreamFinishes`,
+  `TestProxyOCI_BadBlobAbortsAndIsNotCached`, `TestProxy_BadDigestNotPlaced`,
+  `TestProxyOCI_HeadAndRangeOnUncachedBlob`)
+- the Docker Hub auth shape and credential scoping (`TestProxyOCI_BearerChallenge`,
+  `TestProxyPyPI_CredentialsStayOnUpstreamOrigin`)
+
+A stub cannot prove the real upstreams work, so the gate also includes a live check against
+Docker Hub and pypi.org, with `make up`, `make build`, and `./bin/sindri serve` running:
+```bash
+curl -fsS -X POST localhost:8080/api/v1/repositories -H "Authorization: Bearer $SINDRI_TOKEN" \
+  -d '{"name":"dockerhub","type":"proxy","protocol":"oci","upstream_url":"https://registry-1.docker.io","ttl_seconds":3600,"negative_ttl_seconds":300}'
+curl -fsS -X POST localhost:8080/api/v1/repositories -H "Authorization: Bearer $SINDRI_TOKEN" \
+  -d '{"name":"pypi-public","type":"proxy","protocol":"pypi","upstream_url":"https://pypi.org/simple","ttl_seconds":3600,"negative_ttl_seconds":300}'
+docker pull host.docker.internal:8080/dockerhub/alpine:latest          # library/ added
+docker pull host.docker.internal:8080/dockerhub/library/alpine:latest
+pip install --index-url http://localhost:8080/pypi/pypi-public/simple/ requests
+pip install --index-url http://localhost:8080/pypi/pypi-public/simple/ 'requests==2.31.0'  # other versions still listed
+```
 
 ---
 
@@ -433,6 +465,11 @@ project either stays light for small teams or acquires the ceremony it was built
 - `sindri config check`: static validation, no database, no server, errors naming file,
   line, and field
 - `sindri config show --expanded`: prints the desugared long form
+- `credentials:` section for proxy upstream secrets, with `${VAR}` substitution, per
+  [ADR 15](docs/adr/0015-upstream-credentials-source-deferred-to-m7.md): a config-backed
+  `remote.Credentials` wired into `serve`, an unknown reference rejected at reconcile time
+  (replacing M5's blanket rejection), secrets redacted by `config show`, and no anonymous
+  read access to a proxy that holds credentials
 
 **Scope, reconciliation.**
 - One reconciler, two triggers: `serve --config` converges on boot and on `SIGHUP`, and

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -134,6 +135,13 @@ func recoverer(log *slog.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if recovered := recover(); recovered != nil {
+					// A handler aborting a response it already started (a
+					// proxied stream that failed verification) is not a
+					// crash: re-panic so net/http drops the connection
+					// quietly instead of appending a 500 to a sent body.
+					if err, ok := recovered.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+						panic(recovered)
+					}
 					LoggerFromContext(r.Context()).ErrorContext(r.Context(), "panic serving request",
 						slog.Any("panic", recovered),
 						slog.String("route", routePattern(r)),

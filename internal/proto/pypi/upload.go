@@ -34,8 +34,13 @@ func (h *handler) handleUpload(w http.ResponseWriter, r *http.Request, repo stri
 		return
 	}
 
-	if _, err := h.reg.RequirePyPIRepository(r.Context(), repo); err != nil {
+	repoRow, err := h.reg.RequirePyPIRepository(r.Context(), repo)
+	if err != nil {
 		mapRegistryError(w, err)
+		return
+	}
+	if repoRow.Type != model.RepoTypeHosted {
+		mapRegistryError(w, fmt.Errorf("%w: %s is %s", registry.ErrReadOnly, repo, repoRow.Type))
 		return
 	}
 

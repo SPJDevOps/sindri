@@ -73,50 +73,6 @@ func New(database *db.DB, store *cas.Store, backend string) *Registry {
 	}
 }
 
-// CreateRepositoryParams is the input to CreateRepository.
-type CreateRepositoryParams struct {
-	Name     string
-	Type     model.RepoType
-	Protocol model.Protocol
-}
-
-// CreateRepository inserts a hosted (or otherwise typed) repository managed
-// by the API. M2 only exercises hosted repositories.
-func (r *Registry) CreateRepository(ctx context.Context, p CreateRepositoryParams) (model.Repository, error) {
-	name := strings.TrimSpace(p.Name)
-	if name == "" {
-		return model.Repository{}, fmt.Errorf("%w: repository name is required", ErrInvalidInput)
-	}
-	if err := validateRepoName(name); err != nil {
-		return model.Repository{}, err
-	}
-	if p.Type == "" {
-		p.Type = model.RepoTypeHosted
-	}
-	if p.Type != model.RepoTypeHosted && p.Type != model.RepoTypeProxy && p.Type != model.RepoTypeVirtual {
-		return model.Repository{}, fmt.Errorf("%w: repository type %q", ErrInvalidInput, p.Type)
-	}
-	if p.Protocol != model.ProtocolOCI && p.Protocol != model.ProtocolPyPI {
-		return model.Repository{}, fmt.Errorf("%w: protocol %q (want oci or pypi)", ErrInvalidInput, p.Protocol)
-	}
-
-	row, err := r.q.CreateRepository(ctx, db.CreateRepositoryParams{
-		Name:      name,
-		Type:      string(p.Type),
-		Protocol:  string(p.Protocol),
-		Config:    []byte("{}"),
-		Locked:    false,
-		ManagedBy: string(model.ManagedByAPI),
-	})
-	if err != nil {
-		if isUniqueViolation(err) {
-			return model.Repository{}, fmt.Errorf("creating repository %s: %w", name, ErrAlreadyExists)
-		}
-		return model.Repository{}, fmt.Errorf("creating repository %s: %w", name, err)
-	}
-	return repositoryFromRow(row), nil
-}
-
 // GetRepository returns one repository by name.
 func (r *Registry) GetRepository(ctx context.Context, name string) (model.Repository, error) {
 	row, err := r.q.GetRepositoryByName(ctx, name)
@@ -226,6 +182,9 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 			return model.File{}, ErrNotFound
 		}
 		return model.File{}, fmt.Errorf("looking up repository %s: %w", p.Repo, err)
+	}
+	if repo.Type != string(model.RepoTypeHosted) {
+		return model.File{}, fmt.Errorf("%w: %s is %s", ErrReadOnly, p.Repo, repo.Type)
 	}
 
 	info, err := r.cas.Put(ctx, p.Body, p.ExpectDigest, p.Size)
@@ -617,20 +576,28 @@ func validateRepoName(name string) error {
 }
 
 func validatePublishParams(p PublishParams) error {
-	if strings.TrimSpace(p.Repo) == "" {
-		return fmt.Errorf("%w: repository is required", ErrInvalidInput)
-	}
-	if strings.TrimSpace(p.Package) == "" {
-		return fmt.Errorf("%w: package name is required", ErrInvalidInput)
-	}
-	if strings.TrimSpace(p.Version) == "" {
-		return fmt.Errorf("%w: version is required", ErrInvalidInput)
-	}
-	if strings.TrimSpace(p.Filename) == "" {
-		return fmt.Errorf("%w: filename is required", ErrInvalidInput)
+	if err := validatePlacementNames(p.Repo, p.Package, p.Version, p.Filename); err != nil {
+		return err
 	}
 	if p.Body == nil {
 		return fmt.Errorf("%w: body is required", ErrInvalidInput)
+	}
+	return nil
+}
+
+// validatePlacementNames checks the coordinates every file placement needs.
+func validatePlacementNames(repo, pkg, version, filename string) error {
+	if strings.TrimSpace(repo) == "" {
+		return fmt.Errorf("%w: repository is required", ErrInvalidInput)
+	}
+	if strings.TrimSpace(pkg) == "" {
+		return fmt.Errorf("%w: package name is required", ErrInvalidInput)
+	}
+	if strings.TrimSpace(version) == "" {
+		return fmt.Errorf("%w: version is required", ErrInvalidInput)
+	}
+	if strings.TrimSpace(filename) == "" {
+		return fmt.Errorf("%w: filename is required", ErrInvalidInput)
 	}
 	return nil
 }

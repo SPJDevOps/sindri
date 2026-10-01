@@ -23,6 +23,8 @@ import (
 	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/proto/pypi"
 	"github.com/spj/sindri/internal/registry"
+	"github.com/spj/sindri/internal/remote"
+	"github.com/spj/sindri/internal/resolve"
 	"github.com/spj/sindri/internal/server"
 	"github.com/spj/sindri/internal/storage/memstore"
 	"github.com/spj/sindri/internal/testsupport"
@@ -261,6 +263,8 @@ func newTestHandler(t *testing.T) http.Handler {
 	blobs := memstore.New()
 	casStore := cas.New(blobs)
 	reg := registry.New(database, casStore, "memory")
+	remoteClient := remote.New(remote.Options{Registry: reg})
+	resolver := resolve.New(reg, remoteClient)
 
 	srv, err := server.New(server.Options{
 		Address:  "127.0.0.1:0",
@@ -271,7 +275,7 @@ func newTestHandler(t *testing.T) http.Handler {
 			Auth:      auth.NewStaticBearer(testToken),
 			RequestID: server.RequestIDFromContext,
 		}),
-		PyPI:   pypi.Handler(pypi.Options{Registry: reg}),
+		PyPI:   pypi.Handler(pypi.Options{Resolver: resolver}),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
