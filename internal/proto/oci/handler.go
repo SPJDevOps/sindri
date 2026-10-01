@@ -536,7 +536,8 @@ func (h *handler) putManifest(w http.ResponseWriter, r *http.Request, repo model
 		return
 	}
 	mediaType := r.Header.Get("Content-Type")
-	man, err := h.reg.PutManifest(r.Context(), writeRepo, writeImage, ref, mediaType, body)
+	man, err := h.reg.PutManifest(r.Context(), writeRepo, writeImage, ref, mediaType, body,
+		pushProvenance(r.Header, body))
 	if err != nil {
 		mapManifestReadError(w, err)
 		return

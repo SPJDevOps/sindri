@@ -17,6 +17,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/spj/sindri/internal/auth"
+	"github.com/spj/sindri/internal/evidence"
+	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/reconcile"
 	"github.com/spj/sindri/internal/registry"
@@ -28,12 +30,20 @@ type ErrorBody struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	RequestID string `json:"request_id,omitempty"`
+	// Missing names the evidence types a refused promotion lacks
+	// (GATE_FAILED only).
+	Missing []string `json:"missing,omitempty"`
 }
 
 // Options wires the management API.
 type Options struct {
 	Registry *registry.Registry
 	Auth     auth.Authenticator
+	// Lifecycle and Evidence serve the subject, promotion, and decision
+	// routes. Both or neither: nil leaves those routes unmounted, which only
+	// tests of other surfaces do; serve always wires them.
+	Lifecycle *lifecycle.Service
+	Evidence  *evidence.Service
 	// RequestID extracts the request id set by the server middleware.
 	RequestID func(context.Context) string
 }
@@ -50,7 +60,17 @@ func Handler(opts Options) http.Handler {
 		opts.RequestID = func(context.Context) string { return "" }
 	}
 
-	a := &api{reg: opts.Registry, auth: opts.Auth, requestID: opts.RequestID}
+	if (opts.Lifecycle == nil) != (opts.Evidence == nil) {
+		panic("api.Handler: Lifecycle and Evidence must be set together")
+	}
+
+	a := &api{
+		reg:       opts.Registry,
+		lifecycle: opts.Lifecycle,
+		evidence:  opts.Evidence,
+		auth:      opts.Auth,
+		requestID: opts.RequestID,
+	}
 
 	r := chi.NewRouter()
 	r.Use(a.requireAuth)
@@ -68,11 +88,17 @@ func Handler(opts Options) http.Handler {
 		r.Delete("/{repo}/packages/{name}/versions/{version}/files/{filename}", a.deleteFile)
 	})
 
+	if a.lifecycle != nil {
+		a.mountIdentity(r)
+	}
+
 	return r
 }
 
 type api struct {
 	reg       *registry.Registry
+	lifecycle *lifecycle.Service
+	evidence  *evidence.Service
 	auth      auth.Authenticator
 	requestID func(context.Context) string
 }
@@ -245,13 +271,14 @@ func (a *api) publishFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	file, err := a.reg.Publish(r.Context(), registry.PublishParams{
-		Repo:      chi.URLParam(r, "repo"),
-		Package:   chi.URLParam(r, "name"),
-		Version:   chi.URLParam(r, "version"),
-		Filename:  chi.URLParam(r, "filename"),
-		MediaType: mediaType,
-		Body:      r.Body,
-		Size:      size,
+		Repo:       chi.URLParam(r, "repo"),
+		Package:    chi.URLParam(r, "name"),
+		Version:    chi.URLParam(r, "version"),
+		Filename:   chi.URLParam(r, "filename"),
+		MediaType:  mediaType,
+		Body:       r.Body,
+		Size:       size,
+		Provenance: model.HeaderProvenance(model.ProvenanceAPIPublish, r.Header.Get),
 	})
 	if err != nil {
 		a.writeRegistryError(w, r, err)
@@ -307,6 +334,8 @@ func (a *api) writeRegistryError(w http.ResponseWriter, r *http.Request, err err
 		a.writeError(w, r, http.StatusNotFound, "NOT_FOUND", "resource not found")
 	case errors.Is(err, registry.ErrAlreadyExists):
 		a.writeError(w, r, http.StatusConflict, "ALREADY_EXISTS", "resource already exists")
+	case errors.Is(err, registry.ErrHasHistory):
+		a.writeError(w, r, http.StatusConflict, "HAS_HISTORY", err.Error())
 	case errors.Is(err, registry.ErrInvalidInput), errors.Is(err, registry.ErrCycle), errors.Is(err, registry.ErrReadOnly):
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 	default:

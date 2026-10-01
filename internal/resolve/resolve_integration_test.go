@@ -24,6 +24,8 @@ import (
 	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/cas"
 	"github.com/spj/sindri/internal/db"
+	"github.com/spj/sindri/internal/evidence"
+	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/proto/oci"
 	"github.com/spj/sindri/internal/proto/pypi"
@@ -94,6 +96,8 @@ func newEnv(t *testing.T, upstream http.HandlerFunc, options ...envOption) *test
 		Blobs:    blobs,
 		API: api.Handler(api.Options{
 			Registry:  reg,
+			Lifecycle: lifecycle.New(database),
+			Evidence:  evidence.New(database, casStore, "memory"),
 			Auth:      authenticator,
 			RequestID: server.RequestIDFromContext,
 		}),

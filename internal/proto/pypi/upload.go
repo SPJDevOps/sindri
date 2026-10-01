@@ -153,6 +153,7 @@ func (h *handler) handleUpload(w http.ResponseWriter, r *http.Request, repo stri
 		Size:         header.Size,
 		ExpectDigest: digest,
 		Immutable:    true,
+		Provenance:   model.HeaderProvenance(model.ProvenancePyPIUpload, r.Header.Get),
 	})
 	if err != nil {
 		mapRegistryError(w, err)

@@ -15,6 +15,8 @@ import (
 	"github.com/spj/sindri/internal/cas"
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/db"
+	"github.com/spj/sindri/internal/evidence"
+	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/proto/oci"
 	"github.com/spj/sindri/internal/proto/pypi"
 	"github.com/spj/sindri/internal/registry"
@@ -106,6 +108,8 @@ func runServe(parent context.Context, explicitConfig string) error {
 	authenticator := auth.NewStaticBearer(cfg.Auth.StaticToken)
 	apiHandler := api.Handler(api.Options{
 		Registry:  reg,
+		Lifecycle: lifecycle.New(database),
+		Evidence:  evidence.New(database, casStore, string(cfg.Storage.Backend)),
 		Auth:      authenticator,
 		RequestID: server.RequestIDFromContext,
 	})

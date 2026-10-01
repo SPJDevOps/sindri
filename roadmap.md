@@ -397,25 +397,25 @@ pip install --index-url http://localhost:8080/pypi/pypi-public/simple/ 'requests
 
 ---
 
-### M6 — Identity, lifecycle, and evidence
+### M6 — Identity, lifecycle, and evidence ✅
 
 **Goal.** The differentiating feature. Artifacts carry trust status, and promotion moves
 no bytes.
 
 **Scope.**
-- Migrations for the identity layer: `subjects`, `subject_owners`, `provenance`,
+- [x] Migrations for the identity layer: `subjects`, `subject_owners`, `provenance`,
   `evidence`, `lifecycle_stages`, `promotion_gates`, `lifecycle_events`
-- `subjects` rows created on publish, with ownership and provenance capture from
+- [x] `subjects` rows created on publish, with ownership and provenance capture from
   push-time metadata and headers
-- Stage definitions, ordered, organisation-configurable
-- `POST /api/v1/subjects/{digest}/promote` writing one append-only event
-- Gate evaluation before promotion: for example, no promotion to `prod` without an
+- [x] Stage definitions, ordered, organisation-configurable
+- [x] `POST /api/v1/subjects/{digest}/promote` writing one append-only event
+- [x] Gate evaluation before promotion: for example, no promotion to `prod` without an
   attached SBOM and signature
-- Evidence attach and list; evidence bodies stored as blobs in the CAS like anything else
-- Revocation as an event, never a delete
-- `GET /api/v1/decisions?digest=&environment=` returning an approval answer from the
+- [x] Evidence attach and list; evidence bodies stored as blobs in the CAS like anything else
+- [x] Revocation as an event, never a delete
+- [x] `GET /api/v1/decisions?digest=&environment=` returning an approval answer from the
   current-state view, on one indexed query
-- Invariant I4 enforced on the promotion path as well as at reconcile time
+- [x] Invariant I4 enforced on the promotion path as well as at reconcile time
 
 **Out of scope.** Running scanners. Cryptographic signature verification, which is
 post-v1; v1 stores and gates on evidence presence and type.
@@ -424,7 +424,8 @@ post-v1; v1 stores and gates on evidence presence and type.
 query feels slow. The view plus an index is the answer. A mutable status column destroys
 the audit trail that makes this feature worth building.
 
-**Gate.**
+**Gate.** Verified on 2026-10-01 with Go 1.27.1, golangci-lint v2.13.2. Also smoke-tested
+against `./bin/sindri serve` on the Compose stack.
 ```bash
 make test-integration
 ```
@@ -439,6 +440,24 @@ An integration test that walks the whole story:
 6. Revoke, then query again: denied, and the original approval event still present
 7. **Assert the blob count in storage is unchanged across all of the above.** Invariant I3
    is only real if a test enforces it.
+
+**What M6 decided.** Stages and gates are set through `PUT /api/v1/lifecycle/stages` until
+M7's reconciler writes the same rows through the same call. The owner is the hosted
+repository (`repository:<name>`), the only owner verifiable while pushes are anonymous.
+A gate is "evidence of this type is present"; stage order is for display only. An
+unknown environment is denied, not 404. The ledger is append-only in the database itself
+(a trigger), and its foreign keys do not cascade, so a repository with promotion history
+cannot be deleted ([ADR 16](docs/adr/0016-lifecycle-gates-and-evidence-in-v1.md)).
+
+The gate is `TestLifecycle_PromotionStory` in `internal/api`. Step 7 is asserted in its
+honest form: attaching evidence necessarily stores the document, so each attach must add
+exactly one blob, and the refused promotion, the promotion, the decisions, and the
+revocation must add zero, counted both in storage and in the `blobs` table. The
+surrounding suite covers append-only enforcement, placement on the promotion path,
+stage removal with history, repository deletion with history, the decision query's use of
+the index, and, in `internal/resolve`, that proxy-cached content gets no subject and a
+proxy repository cannot promote. Those two and the gate test were each checked to fail
+with their bug reintroduced.
 
 ---
 
