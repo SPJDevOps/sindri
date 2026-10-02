@@ -1,6 +1,7 @@
 # 15. Upstream credentials: source decided, wiring deferred to M7
 
 - **Status:** Accepted
+- **Completed by:** [ADR 17](0017-config-kinds-namespaces-and-reconciliation.md) (the `credentials:` section and reference validation) and [ADR 18](0018-authentication-and-rbac-in-v1.md) (no anonymous reads)
 - **Date:** 2026-09-30
 - **Relates to:** [ADR 7](0007-config-surface-short-and-long-form.md),
   [ADR 9](0009-one-configuration-loader-from-m1.md),

@@ -15,22 +15,23 @@ exist?" but **"is exactly this artifact approved for this environment?"**
 Pre-v1, under active construction. See [roadmap.md](roadmap.md) for the milestone plan
 and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
-Through milestone M4, `sindri serve` boots from one YAML file (or none), applies its
+Through milestone M7, `sindri serve` boots from one YAML file (or none), applies its
 embedded migrations to Postgres, stores digest-verified blobs on a filesystem or any
 S3-compatible bucket, and serves two protocols:
 
 - **`/v2`** — the OCI distribution API. `docker push` and `docker pull` work, and the
   upstream distribution-spec push, pull, and content-management workflows pass.
-- **`/pypi`** — hosted PyPI. `twine upload` and `pip install` work. See
+- **`/pypi`** — PyPI. `twine upload` and `pip install` work. See
   [using Sindri as a pip index](#using-sindri-as-a-pip-index).
 
-Alongside them: `/api/v1` for repository, package, and version management, plus
-`/healthz`, `/readyz`, and `/metrics`.
+Repositories are hosted, proxy (pypi.org, Docker Hub, ghcr.io), or virtual. Artifacts
+carry lifecycle state and evidence, and `/api/v1/decisions` answers whether a digest is
+approved for an environment. Repositories, stages, and access are declared in the
+configuration file and reconciled on startup. Every request authenticates, with an
+OpenID Connect token, a machine token for CI, or the bootstrap token. There is no
+anonymous access.
 
-Not there yet: proxy and virtual repositories (M5), lifecycle and evidence (M6), and real
-authentication (M7). **Authentication today is a placeholder:** the management API takes
-one static bearer token, and the protocol adapters do not check identity at all. Run it on
-a trusted network and not on the open internet.
+Not there yet: the web UI, background garbage collection, and a release (M8).
 
 ## What v1 will do
 
@@ -57,12 +58,47 @@ make build
 curl -fsS localhost:8080/readyz
 ```
 
+The default bootstrap token is `sindri-dev-token`, and the server warns while it is in
+use. Set `auth: ${SINDRI_TOKEN}` in `sindri.yaml` for anything but local development.
+
+## Configuration as code
+
+One file declares a whole single-team setup, and `serve` reconciles it on startup and
+on `SIGHUP`, with no apply step. See [`testdata/config/sindri.yaml`](testdata/config/sindri.yaml):
+
+```yaml
+repos:
+  internal-py: { protocol: pypi, read: [team:dev], write: [team:dev] }   # hosted
+  pypi:        { upstream: pypi, read: [authenticated] }                 # proxy, a preset
+  python:      { members: [internal-py, pypi], read: [team:dev] }        # virtual
+
+lifecycle:
+  stages: [dev, prod]
+  gates:
+    prod: [sbom, signature]
+```
+
+```bash
+./bin/sindri config check -f sindri.yaml              # static: no database, no server
+./bin/sindri config show --expanded -f sindri.yaml    # the long form the server acts on
+./bin/sindri serve --config sindri.yaml
+```
+
+Many teams write enveloped manifests instead (`kind: Repository`, `OrgPolicy`,
+`Lifecycle`) and converge them from CI with `sindri apply -f manifests/`. `sindri diff`
+reports drift and exits 1 when there is any. See ARCHITECTURE.md section 8 and
+[ADR 17](docs/adr/0017-config-kinds-namespaces-and-reconciliation.md).
+
+Identity: configure `auth.oidc` and `auth.admins`, and people use their identity
+provider's ID token as the password for docker, pip, and twine. CI uses machine tokens
+from `POST /api/v1/tokens`. See [ADR 18](docs/adr/0018-authentication-and-rbac-in-v1.md).
+
 ## Using Sindri as a pip index
 
 Sindri is usable as a private Python index today, for both publishing and installing.
-Starting from the Quickstart above, declare a repository once — PyPI repositories are
-never auto-created, so a typo in a `--repository-url` fails loudly instead of silently
-creating a second index:
+Starting from the Quickstart above, declare a repository once, in the configuration
+file or through the API. PyPI repositories are never auto-created, so a typo in a
+`--repository-url` fails loudly instead of silently creating a second index:
 
 ```bash
 curl -fsS -X POST localhost:8080/api/v1/repositories \
@@ -76,9 +112,9 @@ Publish with twine, and install with pip:
 ```bash
 python -m twine upload \
   --repository-url http://127.0.0.1:8080/pypi/internal/upload \
-  -u token -p anything dist/*
+  -u token -p "$SINDRI_TOKEN" dist/*
 
-pip install --index-url http://127.0.0.1:8080/pypi/internal/simple/ \
+pip install --index-url "http://token:$SINDRI_TOKEN@127.0.0.1:8080/pypi/internal/simple/" \
   --trusted-host 127.0.0.1:8080 your-package
 ```
 
@@ -94,18 +130,17 @@ index-servers = sindri
 [sindri]
 repository = http://127.0.0.1:8080/pypi/internal/upload
 username = token
-password = anything
+password = <your token>
 ```
 
 Worth knowing before you point real work at it:
 
-- **Any credentials are accepted on upload.** Twine requires a username and password, so
-  Sindri requires the header and ignores it until M7. The simple index and downloads are
-  anonymous. See [ADR 12](docs/adr/0012-pypi-hosted-adapter.md).
-- **Only hosted repositories exist.** There is no pypi.org proxying until M5, so a package
-  whose dependencies are not in your repository needs an `--extra-index-url`. That is
-  exactly the dependency-confusion shape M5 closes: with two indexes, pip chooses by
-  version and not by trust.
+- **Every request authenticates**, the index and downloads included. The username is
+  ignored; the password is the token. Uploading needs the write role on the repository.
+- **Use one virtual index, not `--extra-index-url`.** With two indexes, pip chooses by
+  version and not by trust. A virtual repository listing your hosted repository before a
+  pypi.org proxy never serves a name you publish from the proxy, whatever version the
+  proxy offers. That is the dependency-confusion defence of invariant I5.
 - **A published file is immutable.** Re-uploading identical bytes is a no-op; different
   bytes under a filename already published is a 409, because consumers pin the hash the
   index advertised. Bump the version to republish. See
