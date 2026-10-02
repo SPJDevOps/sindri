@@ -62,7 +62,7 @@ func (r *Registry) CreateRepository(ctx context.Context, p CreateRepositoryParam
 	if name == "" {
 		return model.Repository{}, fmt.Errorf("%w: repository name is required", ErrInvalidInput)
 	}
-	if err := validateRepoName(name); err != nil {
+	if err := ValidateRepoName(name); err != nil {
 		return model.Repository{}, err
 	}
 	if p.Type == "" {

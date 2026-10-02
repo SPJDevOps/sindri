@@ -36,6 +36,16 @@ type Config struct {
 	Database Database `yaml:"database"`
 	Log      Log      `yaml:"log"`
 	Auth     Auth     `yaml:"auth"`
+
+	// Credentials holds upstream secrets that proxy repositories name by key.
+	// Values come from ${VAR} substitution; a secret is never written to the
+	// database or printed by `config show` (ADR 15).
+	Credentials Credentials `yaml:"credentials,omitempty"`
+
+	// Desired is the repos, lifecycle, and defaults sections, desugared into
+	// the long form. Nil when the file declares none of them, in which case
+	// `serve` does not reconcile and repositories stay API-managed.
+	Desired *Manifests `yaml:"-"`
 }
 
 // Default returns the configuration a server runs on with no file present.
@@ -113,6 +123,10 @@ func Parse(raw []byte, name string) (*Config, error) {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 
+	// Desired state is desugared from nodes, not decoded into structs, so its
+	// errors keep their line numbers for `config check`.
+	short := liftShortSections(doc.Content[0])
+
 	// Decode into a zero value and default afterwards, so that a section
 	// written in the file replaces its defaults outright rather than merging
 	// with them: `storage: s3://bucket` must not keep the default path.
@@ -125,13 +139,22 @@ func Parse(raw []byte, name string) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
+	if short.present() {
+		desired, err := desugarShort(name, short)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Desired = desired
+	}
 	return &cfg, nil
 }
 
 // UnmarshalYAML decodes the top level mapping, rejecting unknown sections.
+// The desired-state sections were lifted out by Parse before this runs; they
+// are named here only so a typo's error message lists them.
 func (c *Config) UnmarshalYAML(node *yaml.Node) error {
 	type raw Config
-	return strictDecode(node, (*raw)(c))
+	return strictDecode(node, (*raw)(c), shortSections...)
 }
 
 func (c *Config) applyDefaults() {
@@ -150,6 +173,7 @@ func (c *Config) Validate() error {
 		c.Database.validate,
 		c.Log.validate,
 		c.Auth.validate,
+		c.Credentials.validate,
 	} {
 		if err := check(); err != nil {
 			return err

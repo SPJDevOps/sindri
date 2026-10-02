@@ -1,0 +1,9 @@
+# Organisation-wide stages. The long form of the lifecycle section in
+# testdata/config/sindri.yaml.
+kind: Lifecycle
+spec:
+  stages:
+    - name: dev
+    - name: integration
+    - name: prod
+      gates: [sbom, signature]

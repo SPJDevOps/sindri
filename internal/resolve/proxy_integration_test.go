@@ -596,10 +596,10 @@ func TestProxyPyPI_CredentialsStayOnUpstreamOrigin(t *testing.T) {
 	}
 }
 
-// TestAPI_RejectsCredentialsRefUntilSecretsExist: a credentials_ref is refused
-// when the repository is created, rather than accepted and broken on the first
-// pull (ADR 15).
-func TestAPI_RejectsCredentialsRefUntilSecretsExist(t *testing.T) {
+// TestAPI_RejectsUnknownCredentialsRef: a credentials_ref the server's
+// credentials section does not define is refused when the repository is
+// created, rather than accepted and broken on the first pull (ADR 15).
+func TestAPI_RejectsUnknownCredentialsRef(t *testing.T) {
 	env := newEnv(t, func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
 	body, err := json.Marshal(map[string]any{
 		"name": "docker/fancy", "type": "proxy", "protocol": "oci",
@@ -609,8 +609,9 @@ func TestAPI_RejectsCredentialsRefUntilSecretsExist(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := env.do(t, http.MethodPost, "/api/v1/repositories", body, "application/json")
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "ADR 15") {
-		t.Fatalf("create with credentials_ref: %d %s, want 400 naming ADR 15", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "fancysecret") ||
+		!strings.Contains(rec.Body.String(), "credentials section") {
+		t.Fatalf("create with unknown credentials_ref: %d %s, want 400 naming the reference", rec.Code, rec.Body.String())
 	}
 	if _, err := env.reg.GetRepository(t.Context(), "docker/fancy"); !errors.Is(err, registry.ErrNotFound) {
 		t.Fatalf("rejected repository was created anyway: %v", err)

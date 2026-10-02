@@ -401,7 +401,7 @@ func TestValidateRepository_LifecycleOnProxyFails(t *testing.T) {
 	err := reconcile.ValidateRepository(reconcile.RepositorySpec{
 		Name: "proxy/pypi-public", Type: model.RepoTypeProxy, Protocol: model.ProtocolPyPI,
 		UpstreamURL: "https://example.com", LifecycleStages: []string{"prod"},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected validation failure")
 	}

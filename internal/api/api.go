@@ -46,6 +46,10 @@ type Options struct {
 	Evidence  *evidence.Service
 	// RequestID extracts the request id set by the server middleware.
 	RequestID func(context.Context) string
+	// Credentials lists the credentials references the server defines, so a
+	// repository naming an unknown one is refused when it is created (ADR 15).
+	// Nil means none are defined.
+	Credentials func() map[string]struct{}
 }
 
 // Handler returns the /api/v1 chi router. Mount it with r.Mount("/api/v1", ...).
@@ -59,17 +63,21 @@ func Handler(opts Options) http.Handler {
 	if opts.RequestID == nil {
 		opts.RequestID = func(context.Context) string { return "" }
 	}
+	if opts.Credentials == nil {
+		opts.Credentials = func() map[string]struct{} { return nil }
+	}
 
 	if (opts.Lifecycle == nil) != (opts.Evidence == nil) {
 		panic("api.Handler: Lifecycle and Evidence must be set together")
 	}
 
 	a := &api{
-		reg:       opts.Registry,
-		lifecycle: opts.Lifecycle,
-		evidence:  opts.Evidence,
-		auth:      opts.Auth,
-		requestID: opts.RequestID,
+		reg:         opts.Registry,
+		lifecycle:   opts.Lifecycle,
+		evidence:    opts.Evidence,
+		auth:        opts.Auth,
+		requestID:   opts.RequestID,
+		credentials: opts.Credentials,
 	}
 
 	r := chi.NewRouter()
@@ -96,11 +104,12 @@ func Handler(opts Options) http.Handler {
 }
 
 type api struct {
-	reg       *registry.Registry
-	lifecycle *lifecycle.Service
-	evidence  *evidence.Service
-	auth      auth.Authenticator
-	requestID func(context.Context) string
+	reg         *registry.Registry
+	lifecycle   *lifecycle.Service
+	evidence    *evidence.Service
+	auth        auth.Authenticator
+	requestID   func(context.Context) string
+	credentials func() map[string]struct{}
 }
 
 func (a *api) requireAuth(next http.Handler) http.Handler {
@@ -157,7 +166,7 @@ func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {
 		CredentialsRef:  params.CredentialsRef,
 		Members:         params.Members,
 		LifecycleStages: params.LifecycleStages,
-	}); err != nil {
+	}, a.credentials()); err != nil {
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}

@@ -80,17 +80,17 @@ type Storage struct {
 	Backend Backend `yaml:"backend"`
 
 	// Filesystem
-	Path string `yaml:"path"`
+	Path string `yaml:"path,omitempty"`
 
 	// S3
-	Bucket          string `yaml:"bucket"`
-	Prefix          string `yaml:"prefix"`
-	Region          string `yaml:"region"`
-	Endpoint        string `yaml:"endpoint"`
-	PathStyle       bool   `yaml:"pathStyle"`
-	AccessKeyID     string `yaml:"accessKeyId"`
-	SecretAccessKey string `yaml:"secretAccessKey"`
-	SessionToken    string `yaml:"sessionToken"`
+	Bucket          string `yaml:"bucket,omitempty"`
+	Prefix          string `yaml:"prefix,omitempty"`
+	Region          string `yaml:"region,omitempty"`
+	Endpoint        string `yaml:"endpoint,omitempty"`
+	PathStyle       bool   `yaml:"pathStyle,omitempty"`
+	AccessKeyID     string `yaml:"accessKeyId,omitempty"`
+	SecretAccessKey string `yaml:"secretAccessKey,omitempty"`
+	SessionToken    string `yaml:"sessionToken,omitempty"`
 }
 
 func defaultStorage() Storage {
@@ -306,20 +306,35 @@ func (l *Log) validate() error {
 	return nil
 }
 
-// Auth describes how the management API authenticates callers.
+// Auth describes how callers are authenticated and who is an administrator.
 //
-// Short form: `auth: ${SINDRI_TOKEN}`. Long form: a mapping with static_token.
-// M2 is a static bearer placeholder; M7 replaces the authenticator behind the
-// same config section and middleware seam (ADR 9: one loader).
+// Short form: `auth: ${SINDRI_TOKEN}`, which sets only the bootstrap token.
+// Long form: a mapping. See ADR 18.
 type Auth struct {
+	// StaticToken is the bootstrap administrator credential: what `apply` uses
+	// before an identity provider is configured, and the break-glass path
+	// after. It is checked in constant time and never logged.
 	StaticToken string `yaml:"static_token"`
+
+	// Admins lists identity-provider groups whose members administer the
+	// server. Membership is read from the caller's token on every request and
+	// never stored (ADR 5).
+	Admins []string `yaml:"admins,omitempty"`
+
+	// OIDC configures the identity provider. Absent means only the bootstrap
+	// token and machine tokens authenticate.
+	OIDC *OIDC `yaml:"oidc,omitempty"`
 }
 
+// DevStaticToken is the development default. A server running with it logs a
+// warning, because anyone who has read the README holds an admin credential.
+const DevStaticToken = "sindri-dev-token" //nolint:gosec // G101: development-only default, documented as such
+
 func defaultAuth() Auth {
-	// G101: development-only default token, parallel to the Compose database
-	// credential. Production must set auth.static_token (typically via
-	// ${SINDRI_TOKEN}). It must never appear in a deployment manifest.
-	return Auth{StaticToken: "sindri-dev-token"} //nolint:gosec
+	// Parallel to the Compose database credential. Production sets
+	// auth.static_token, typically via ${SINDRI_TOKEN}. It must never appear in
+	// a deployment manifest.
+	return Auth{StaticToken: DevStaticToken}
 }
 
 // UnmarshalYAML accepts the token on its own or the full mapping.
@@ -337,11 +352,130 @@ func (a *Auth) applyDefaults() {
 	if a.StaticToken == "" {
 		a.StaticToken = defaultAuth().StaticToken
 	}
+	if a.OIDC != nil {
+		a.OIDC.applyDefaults()
+	}
 }
 
 func (a *Auth) validate() error {
 	if strings.TrimSpace(a.StaticToken) == "" {
 		return fmt.Errorf("auth.static_token: must not be empty")
 	}
+	for i, g := range a.Admins {
+		if strings.TrimSpace(g) == "" {
+			return fmt.Errorf("auth.admins[%d]: must not be empty", i)
+		}
+	}
+	if a.OIDC != nil {
+		return a.OIDC.validate()
+	}
 	return nil
+}
+
+// OIDC configures token validation against an OpenID Connect provider, and
+// the browser login flow when RedirectURL is set.
+type OIDC struct {
+	Issuer       string `yaml:"issuer"`
+	ClientID     string `yaml:"clientId"`
+	ClientSecret string `yaml:"clientSecret"`
+	RedirectURL  string `yaml:"redirectUrl"`
+
+	// GroupsClaim names the token claim listing the caller's groups.
+	GroupsClaim string `yaml:"groupsClaim"`
+	// UsernameClaim names the claim recorded as the actor in the ledger.
+	UsernameClaim string `yaml:"usernameClaim"`
+}
+
+// UnmarshalYAML decodes the mapping, rejecting unknown keys.
+func (o *OIDC) UnmarshalYAML(node *yaml.Node) error {
+	type raw OIDC
+	return strictDecode(node, (*raw)(o))
+}
+
+func (o *OIDC) applyDefaults() {
+	if o.GroupsClaim == "" {
+		o.GroupsClaim = "groups"
+	}
+	if o.UsernameClaim == "" {
+		o.UsernameClaim = "email"
+	}
+}
+
+func (o *OIDC) validate() error {
+	if o.Issuer == "" {
+		return fmt.Errorf("auth.oidc.issuer: required")
+	}
+	u, err := url.Parse(o.Issuer)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("auth.oidc.issuer: %q is not a URL", o.Issuer)
+	}
+	plainLoopback := u.Scheme == "http" && isLoopback(u.Hostname())
+	if u.Scheme != "https" && !plainLoopback {
+		return fmt.Errorf("auth.oidc.issuer: must be https (plain http is accepted only for a loopback address)")
+	}
+	if o.ClientID == "" {
+		return fmt.Errorf("auth.oidc.clientId: required")
+	}
+	if o.RedirectURL != "" {
+		r, err := url.Parse(o.RedirectURL)
+		if err != nil || r.Host == "" || (r.Scheme != "https" && r.Scheme != "http") {
+			return fmt.Errorf("auth.oidc.redirectUrl: %q is not an http(s) URL", o.RedirectURL)
+		}
+	}
+	return nil
+}
+
+func isLoopback(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+// Credential is one upstream secret.
+type Credential struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+// UnmarshalYAML decodes the mapping, rejecting unknown keys.
+func (c *Credential) UnmarshalYAML(node *yaml.Node) error {
+	type raw Credential
+	return strictDecode(node, (*raw)(c))
+}
+
+// Credentials maps a reference name to its secret.
+type Credentials map[string]Credential
+
+// Names lists the defined references, which is all the reconciler may see.
+func (cs Credentials) Names() map[string]struct{} {
+	out := make(map[string]struct{}, len(cs))
+	for k := range cs {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+func (cs Credentials) validate() error {
+	for name, c := range cs {
+		if !validRefName(name) {
+			return fmt.Errorf("credentials.%s: names are lowercase letters, digits, '-', and '_'", name)
+		}
+		if c.Password == "" {
+			return fmt.Errorf("credentials.%s.password: required", name)
+		}
+	}
+	return nil
+}
+
+func validRefName(name string) bool {
+	if name == "" || len(name) > 63 {
+		return false
+	}
+	for i, c := range name {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case (c == '-' || c == '_') && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
 }

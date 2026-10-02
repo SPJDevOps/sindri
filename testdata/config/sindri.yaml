@@ -1,0 +1,42 @@
+# The M7 gate's single-team setup: one file, no apply step (ADR 7).
+#
+#   sindri config check -f testdata/config/sindri.yaml
+#   sindri config show --expanded -f testdata/config/sindri.yaml
+#   sindri serve --config testdata/config/sindri.yaml
+#
+# testdata/manifests/ spells the same desired state in the long form. The
+# golden test TestManifests_ShortAndLongFormsAreIdentical and the integration
+# test TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState both fail
+# if the two ever drift.
+listen:   ${SINDRI_LISTEN:-:8080}
+storage:  ${SINDRI_DATA_DIR:-/tmp/sindri-m7-data}
+database: postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable
+auth:     ${SINDRI_TOKEN:-sindri-dev-token}
+
+defaults:
+  proxy:
+    ttl: 30m
+    negativeTtl: 5m
+    read: [authenticated]
+  hosted:
+    read: [team:platform, team:payments]
+    write: [team:platform]
+  virtual:
+    read: [team:platform, team:payments]
+
+repos:
+  # Python: a hosted repository first, then the public index behind it.
+  internal-py: { protocol: pypi }
+  pypi:        { upstream: pypi }
+  python:      { members: [internal-py, pypi] }
+
+  # Containers. `docker` is hosted so that `docker push .../docker/demo/app`
+  # lands somewhere writable; `oci` is the read-through view.
+  docker:      { protocol: oci, lifecycle: [dev, prod] }
+  dockerhub:   { upstream: dockerhub }
+  oci:         { members: [docker, dockerhub] }
+
+lifecycle:
+  stages: [dev, integration, prod]
+  gates:
+    prod: [sbom, signature]

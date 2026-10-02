@@ -573,7 +573,11 @@ var reservedNameSegments = map[string]struct{}{
 	"upload":    {}, // PyPI
 }
 
-func validateRepoName(name string) error {
+// ValidateRepoName applies the one repository-name rule (ADR 13): legal
+// characters, well-formed slashes, and no segment an adapter splits paths on.
+// The reconciler calls it statically, so `config check` reports a bad name
+// without a database.
+func ValidateRepoName(name string) error {
 	for _, c := range name {
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
