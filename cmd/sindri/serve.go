@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -217,5 +218,5 @@ func sameOIDC(a, b *config.OIDC) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return *a == *b
+	return reflect.DeepEqual(*a, *b)
 }

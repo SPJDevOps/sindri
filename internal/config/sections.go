@@ -384,6 +384,10 @@ type OIDC struct {
 	GroupsClaim string `yaml:"groupsClaim"`
 	// UsernameClaim names the claim recorded as the actor in the ledger.
 	UsernameClaim string `yaml:"usernameClaim"`
+	// Scopes requested by the browser login. Default: openid, profile,
+	// email. Providers that release groups only on request (Dex: "groups")
+	// need it added here.
+	Scopes []string `yaml:"scopes,omitempty"`
 }
 
 // UnmarshalYAML decodes the mapping, rejecting unknown keys.
@@ -418,8 +422,13 @@ func (o *OIDC) validate() error {
 	}
 	if o.RedirectURL != "" {
 		r, err := url.Parse(o.RedirectURL)
-		if err != nil || r.Host == "" || (r.Scheme != "https" && r.Scheme != "http") {
-			return fmt.Errorf("auth.oidc.redirectUrl: %q is not an http(s) URL", o.RedirectURL)
+		if err != nil || r.Host == "" {
+			return fmt.Errorf("auth.oidc.redirectUrl: %q is not a URL", o.RedirectURL)
+		}
+		// The session cookie is Secure exactly when this is https, so plain
+		// http is allowed only where nothing else can see the traffic.
+		if r.Scheme != "https" && (r.Scheme != "http" || !isLoopback(r.Hostname())) {
+			return fmt.Errorf("auth.oidc.redirectUrl: must be https (plain http is accepted only for a loopback address)")
 		}
 	}
 	return nil

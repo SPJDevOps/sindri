@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/spj/sindri/internal/api"
@@ -43,6 +44,8 @@ type buildOptions struct {
 	Blobs storage.BlobStore
 	// RemoteOptions adjusts the proxy client; tests point it at stubs.
 	RemoteOptions func(*remote.Options)
+	// OIDCClient reaches the identity provider; tests pass the stub's.
+	OIDCClient *http.Client
 }
 
 // build migrates the database and wires every component. close releases the
@@ -90,6 +93,29 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 	}
 	tokens := auth.NewTokenService(database)
 	chain := auth.NewChain(cfg.Auth.StaticToken, tokens, nil, cfg.Auth.Admins)
+	var sessions http.Handler
+	if o := cfg.Auth.OIDC; o != nil {
+		verifier, err := auth.NewOIDC(ctx, auth.OIDCConfig{
+			Issuer:        o.Issuer,
+			ClientID:      o.ClientID,
+			GroupsClaim:   o.GroupsClaim,
+			UsernameClaim: o.UsernameClaim,
+			HTTPClient:    bo.OIDCClient,
+		})
+		if err != nil {
+			// Not fatal: CI and the operator keep working on machine and
+			// bootstrap tokens, and discovery is retried on demand.
+			logger.WarnContext(ctx, "identity provider discovery failed; user tokens are refused until it succeeds",
+				"issuer", o.Issuer, "error", err)
+		}
+		chain.SetOIDC(verifier)
+		sessions = auth.NewSessions(auth.SessionConfig{
+			ClientID:     o.ClientID,
+			ClientSecret: o.ClientSecret,
+			RedirectURL:  o.RedirectURL,
+			Scopes:       o.Scopes,
+		}, verifier, chain).Handler()
+	}
 	// A virtual repository answers only from members the caller may read.
 	resolver.SetMemberAccess(func(ctx context.Context, m model.Repository) bool {
 		p, _ := auth.PrincipalFromContext(ctx)
@@ -125,6 +151,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		API:               apiHandler,
 		OCI:               ociHandler,
 		PyPI:              pypiHandler,
+		Auth:              sessions,
 		Logger:            logger,
 	})
 	if err != nil {
