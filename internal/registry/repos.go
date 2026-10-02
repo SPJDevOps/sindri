@@ -50,9 +50,12 @@ type CreateRepositoryParams struct {
 
 	// LifecycleStages, when non-empty, is rejected for proxy and virtual
 	// repositories (invariant I4). The management API passes it through
-	// reconcile.ValidateRepository before create; this field exists so the
-	// same shape can be reused once M7 wires the reconciler.
+	// reconcile.ValidateRepository before create. Non-empty restricts
+	// promotion to the listed stages; empty permits every stage.
 	LifecycleStages []string
+
+	// Access lists the groups that may read and write.
+	Access model.Access
 }
 
 // CreateRepository inserts a repository managed by the API. Proxy rows also
@@ -78,6 +81,15 @@ func (r *Registry) CreateRepository(ctx context.Context, p CreateRepositoryParam
 		return model.Repository{}, err
 	}
 
+	var lc *model.RepoLifecycle
+	if len(p.LifecycleStages) > 0 {
+		lc = &model.RepoLifecycle{Stages: p.LifecycleStages}
+	}
+	cfg, err := marshalRepoConfig("", "", p.Access, lc)
+	if err != nil {
+		return model.Repository{}, err
+	}
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return model.Repository{}, fmt.Errorf("beginning create repository transaction: %w", err)
@@ -89,7 +101,7 @@ func (r *Registry) CreateRepository(ctx context.Context, p CreateRepositoryParam
 		Name:      name,
 		Type:      string(p.Type),
 		Protocol:  string(p.Protocol),
-		Config:    []byte("{}"),
+		Config:    cfg,
 		Locked:    false,
 		ManagedBy: string(model.ManagedByAPI),
 	})
@@ -266,15 +278,8 @@ func (r *Registry) ListMembers(ctx context.Context, virtualName string) ([]model
 	}
 	out := make([]model.Repository, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, model.Repository{
-			ID:        row.ID.String(),
-			Name:      row.Name,
-			Type:      model.RepoType(row.Type),
-			Protocol:  model.Protocol(row.Protocol),
-			Locked:    row.Locked,
-			ManagedBy: model.ManagedBy(row.ManagedBy),
-			CreatedAt: row.CreatedAt,
-		})
+		out = append(out, repositoryFromColumns(row.ID, row.Name, row.Type, row.Protocol, row.Config,
+			row.Locked, row.ManagedBy, row.CreatedAt))
 	}
 	return out, nil
 }

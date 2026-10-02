@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/spj/sindri/internal/auth"
+	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
@@ -33,6 +34,9 @@ type ErrorBody struct {
 	// Missing names the evidence types a refused promotion lacks
 	// (GATE_FAILED only).
 	Missing []string `json:"missing,omitempty"`
+	// Details locates each problem in a refused configuration, by file,
+	// line, and field.
+	Details []*config.FieldError `json:"details,omitempty"`
 }
 
 // Options wires the management API.
@@ -50,6 +54,9 @@ type Options struct {
 	// repository naming an unknown one is refused when it is created (ADR 15).
 	// Nil means none are defined.
 	Credentials func() map[string]struct{}
+	// Reconciler serves /config/diff and /config/apply. Nil leaves them
+	// unmounted.
+	Reconciler *reconcile.Reconciler
 }
 
 // Handler returns the /api/v1 chi router. Mount it with r.Mount("/api/v1", ...).
@@ -78,6 +85,7 @@ func Handler(opts Options) http.Handler {
 		auth:        opts.Auth,
 		requestID:   opts.RequestID,
 		credentials: opts.Credentials,
+		reconciler:  opts.Reconciler,
 	}
 
 	r := chi.NewRouter()
@@ -99,6 +107,10 @@ func Handler(opts Options) http.Handler {
 	if a.lifecycle != nil {
 		a.mountIdentity(r)
 	}
+	if a.reconciler != nil {
+		r.Post("/config/diff", a.configDiff)
+		r.Post("/config/apply", a.configApply)
+	}
 
 	return r
 }
@@ -110,6 +122,7 @@ type api struct {
 	auth        auth.Authenticator
 	requestID   func(context.Context) string
 	credentials func() map[string]struct{}
+	reconciler  *reconcile.Reconciler
 }
 
 func (a *api) requireAuth(next http.Handler) http.Handler {
@@ -138,6 +151,8 @@ func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {
 		NegativeTTLSeconds int32    `json:"negative_ttl_seconds"`
 		Members            []string `json:"members"`
 		LifecycleStages    []string `json:"lifecycle_stages"`
+		Read               []string `json:"read"`
+		Write              []string `json:"write"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_JSON", "request body must be JSON")
@@ -157,6 +172,7 @@ func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {
 		NegativeTTL:     body.NegativeTTLSeconds,
 		Members:         body.Members,
 		LifecycleStages: body.LifecycleStages,
+		Access:          model.Access{Read: body.Read, Write: body.Write},
 	}
 	if err := reconcile.ValidateRepository(reconcile.RepositorySpec{
 		Name:            params.Name,
@@ -345,6 +361,8 @@ func (a *api) writeRegistryError(w http.ResponseWriter, r *http.Request, err err
 		a.writeError(w, r, http.StatusConflict, "ALREADY_EXISTS", "resource already exists")
 	case errors.Is(err, registry.ErrHasHistory):
 		a.writeError(w, r, http.StatusConflict, "HAS_HISTORY", err.Error())
+	case errors.Is(err, registry.ErrConfigManaged):
+		a.writeError(w, r, http.StatusConflict, "CONFIG_MANAGED", err.Error())
 	case errors.Is(err, registry.ErrInvalidInput), errors.Is(err, registry.ErrCycle), errors.Is(err, registry.ErrReadOnly):
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 	default:
@@ -384,12 +402,14 @@ type listResponse[T any] struct {
 }
 
 type repositoryResponse struct {
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Protocol  string `json:"protocol"`
-	Locked    bool   `json:"locked"`
-	ManagedBy string `json:"managed_by"`
-	CreatedAt string `json:"created_at"`
+	Name      string       `json:"name"`
+	Type      string       `json:"type"`
+	Protocol  string       `json:"protocol"`
+	Locked    bool         `json:"locked"`
+	ManagedBy string       `json:"managed_by"`
+	CreatedAt string       `json:"created_at"`
+	Namespace string       `json:"namespace,omitempty"`
+	Access    model.Access `json:"access"`
 }
 
 type packageResponse struct {
@@ -416,6 +436,8 @@ func repositoryJSON(repo model.Repository) repositoryResponse {
 		Locked:    repo.Locked,
 		ManagedBy: string(repo.ManagedBy),
 		CreatedAt: repo.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		Namespace: repo.Namespace,
+		Access:    repo.Access,
 	}
 }
 

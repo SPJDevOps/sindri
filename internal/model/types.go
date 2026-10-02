@@ -47,6 +47,51 @@ type Repository struct {
 	Locked    bool
 	ManagedBy ManagedBy
 	CreatedAt time.Time
+
+	// Namespace is the owning team for a repository declared in a team's
+	// manifest, and empty for an organisation repository.
+	Namespace string
+	// Source records which reconciler trigger owns a config-managed row:
+	// SourceFile (serve --config) or SourceApply (sindri apply).
+	Source string
+	// Access lists the groups that may read and write. It travels on the
+	// repository row so authorizing a request needs no second lookup.
+	Access Access
+	// Lifecycle restricts promotion to the listed stages. Nil means every
+	// stage. Only hosted repositories carry it (invariant I4).
+	Lifecycle *RepoLifecycle
+}
+
+// The reconciler triggers that can own a config-managed repository. The two
+// never fight over a row: each refuses to change one the other owns.
+const (
+	SourceFile  = "file"
+	SourceApply = "apply"
+)
+
+// Access lists group grants. Write implies read.
+type Access struct {
+	Read  []string `json:"read,omitempty"`
+	Write []string `json:"write,omitempty"`
+}
+
+// RepoLifecycle restricts which stages a hosted repository promotes into.
+type RepoLifecycle struct {
+	Stages []string `json:"stages"`
+}
+
+// AllowsStage reports whether promotion into stage is permitted. A nil
+// restriction permits every stage.
+func (l *RepoLifecycle) AllowsStage(stage string) bool {
+	if l == nil {
+		return true
+	}
+	for _, s := range l.Stages {
+		if s == stage {
+			return true
+		}
+	}
+	return false
 }
 
 // Package is a named artifact family inside a repository.

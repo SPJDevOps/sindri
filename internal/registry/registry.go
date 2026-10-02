@@ -14,7 +14,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -127,9 +129,19 @@ func (r *Registry) ListRepositories(ctx context.Context, p ListRepositoriesParam
 	return page, nil
 }
 
-// DeleteRepository removes a repository and cascades its placements in the
-// database. Blob bytes are left for garbage collection (never cas.Delete).
+// DeleteRepository removes an API-managed repository and cascades its
+// placements in the database. Blob bytes are left for garbage collection
+// (never cas.Delete). A config-managed repository is refused: removing it from
+// the configuration and pruning is the only way it goes, or the next
+// reconcile would quietly bring it back.
 func (r *Registry) DeleteRepository(ctx context.Context, name string) error {
+	repo, err := r.GetRepository(ctx, name)
+	if err != nil {
+		return err
+	}
+	if repo.ManagedBy == model.ManagedByConfig {
+		return fmt.Errorf("%w: remove %s from the configuration and apply with --prune", ErrConfigManaged, name)
+	}
 	n, err := r.q.DeleteRepositoryByName(ctx, name)
 	if err != nil {
 		if isForeignKeyViolation(err, "lifecycle_events_repo_id_fkey") {
@@ -534,14 +546,23 @@ func (r *Registry) ListVersions(ctx context.Context, p ListVersionsParams) (Page
 }
 
 func repositoryFromRow(row db.Repository) model.Repository {
+	return repositoryFromColumns(row.ID, row.Name, row.Type, row.Protocol, row.Config, row.Locked, row.ManagedBy, row.CreatedAt)
+}
+
+func repositoryFromColumns(id uuid.UUID, name, typ, protocol string, cfg []byte, locked bool, managedBy string, created time.Time) model.Repository {
+	rc := parseRepoConfig(cfg)
 	return model.Repository{
-		ID:        row.ID.String(),
-		Name:      row.Name,
-		Type:      model.RepoType(row.Type),
-		Protocol:  model.Protocol(row.Protocol),
-		Locked:    row.Locked,
-		ManagedBy: model.ManagedBy(row.ManagedBy),
-		CreatedAt: row.CreatedAt,
+		ID:        id.String(),
+		Name:      name,
+		Type:      model.RepoType(typ),
+		Protocol:  model.Protocol(protocol),
+		Locked:    locked,
+		ManagedBy: model.ManagedBy(managedBy),
+		CreatedAt: created,
+		Namespace: rc.Namespace,
+		Source:    rc.Source,
+		Access:    rc.Access,
+		Lifecycle: rc.Lifecycle,
 	}
 }
 

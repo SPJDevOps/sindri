@@ -10,7 +10,7 @@
 # if the two ever drift.
 listen:   ${SINDRI_LISTEN:-:8080}
 storage:  ${SINDRI_DATA_DIR:-/tmp/sindri-m7-data}
-database: postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable
+database: ${SINDRI_DATABASE:-postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable}
 auth:     ${SINDRI_TOKEN:-sindri-dev-token}
 
 defaults:

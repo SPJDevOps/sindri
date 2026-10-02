@@ -66,9 +66,28 @@ type LifecycleStage struct {
 	Position int32     `json:"position"`
 }
 
+type MachineToken struct {
+	ID        uuid.UUID          `json:"id"`
+	Name      string             `json:"name"`
+	TokenHash []byte             `json:"token_hash"`
+	RepoID    pgtype.UUID        `json:"repo_id"`
+	Namespace pgtype.Text        `json:"namespace"`
+	Role      string             `json:"role"`
+	CreatedBy string             `json:"created_by"`
+	CreatedAt time.Time          `json:"created_at"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+}
+
 type ManifestChild struct {
 	ParentDigest string `json:"parent_digest"`
 	ChildDigest  string `json:"child_digest"`
+}
+
+type OrgPolicy struct {
+	ID        int16     `json:"id"`
+	Spec      []byte    `json:"spec"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Package struct {
