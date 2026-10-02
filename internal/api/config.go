@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
@@ -85,8 +86,36 @@ func (a *api) writeReconcileError(w http.ResponseWriter, r *http.Request, err er
 	a.writeJSON(w, r, status, body)
 }
 
-// applyScope decides what the caller may apply. Phase C replaces this with
-// the principal's administrator role and namespace grants.
-func (a *api) applyScope(_ http.ResponseWriter, _ *http.Request) (reconcile.Scope, bool) {
-	return reconcile.Scope{Global: true}, true
+// applyScope decides what the caller may apply. An administrator may apply
+// anything. A namespace administrator, named by the stored OrgPolicy or holding
+// a namespace-scoped admin token, may apply only that namespace's
+// repositories. Anyone else is refused before any validation runs.
+func (a *api) applyScope(w http.ResponseWriter, r *http.Request) (reconcile.Scope, bool) {
+	p := principal(r)
+	if auth.AuthorizeGlobal(p, "apply configuration") == nil {
+		return reconcile.Scope{Global: true}, true
+	}
+	var namespaces []string
+	if t := p.Token; t != nil && t.Role == auth.RoleAdmin && t.Namespace != "" {
+		namespaces = append(namespaces, t.Namespace)
+	}
+	if p.Kind == auth.KindUser {
+		policy, err := a.reconciler.StoredPolicy(r.Context())
+		if err != nil {
+			a.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+			return reconcile.Scope{}, false
+		}
+		if policy != nil {
+			for _, ns := range policy.Namespaces {
+				if p.InGroup(ns.Admins) {
+					namespaces = append(namespaces, ns.Name)
+				}
+			}
+		}
+	}
+	if len(namespaces) == 0 {
+		a.writeError(w, r, http.StatusForbidden, "FORBIDDEN", p.Subject+" may not apply configuration: it needs the admin role or a namespace the OrgPolicy delegates to it")
+		return reconcile.Scope{}, false
+	}
+	return reconcile.Scope{Namespaces: namespaces}, true
 }

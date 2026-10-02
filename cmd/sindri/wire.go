@@ -33,6 +33,7 @@ type app struct {
 	reg         *registry.Registry
 	reconciler  *reconcile.Reconciler
 	credentials *config.CredentialStore
+	auth        *auth.Chain
 	server      *server.Server
 }
 
@@ -87,22 +88,32 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 	if cfg.Auth.StaticToken == config.DevStaticToken {
 		logger.WarnContext(ctx, "auth.static_token is the development default; anyone who has read the README is an administrator of this server")
 	}
-	authenticator := auth.NewStaticBearer(cfg.Auth.StaticToken)
+	tokens := auth.NewTokenService(database)
+	chain := auth.NewChain(cfg.Auth.StaticToken, tokens, nil, cfg.Auth.Admins)
+	// A virtual repository answers only from members the caller may read.
+	resolver.SetMemberAccess(func(ctx context.Context, m model.Repository) bool {
+		p, _ := auth.PrincipalFromContext(ctx)
+		return auth.Authorize(p, m, auth.RoleRead) == nil
+	})
+
 	apiHandler := api.Handler(api.Options{
 		Registry:    reg,
 		Lifecycle:   lifecycle.New(database),
 		Evidence:    evidence.New(database, casStore, string(cfg.Storage.Backend)),
-		Auth:        authenticator,
+		Auth:        chain,
 		RequestID:   server.RequestIDFromContext,
 		Credentials: creds.Names,
 		Reconciler:  reconciler,
+		Tokens:      tokens,
 	})
 	ociHandler := oci.Handler(oci.Options{
 		Resolver: resolver,
 		CAS:      casStore,
+		Auth:     chain,
 	})
 	pypiHandler := pypi.Handler(pypi.Options{
 		Resolver: resolver,
+		Auth:     chain,
 	})
 
 	srv, err := server.New(server.Options{
@@ -127,6 +138,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		reg:         reg,
 		reconciler:  reconciler,
 		credentials: creds,
+		auth:        chain,
 		server:      srv,
 	}, database.Close, nil
 }

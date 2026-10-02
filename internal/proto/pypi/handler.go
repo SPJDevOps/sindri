@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/registry"
 	"github.com/spj/sindri/internal/resolve"
 )
@@ -17,6 +18,9 @@ import (
 // Options wires the PyPI adapter.
 type Options struct {
 	Resolver *resolve.Resolver
+	// Auth authenticates every request. The index, downloads, and uploads
+	// all need credentials; there is no anonymous `pip install` (ADR 18).
+	Auth auth.Authenticator
 }
 
 // Handler returns the /pypi handler. Mount it with r.Mount("/pypi", ...).
@@ -27,8 +31,38 @@ func Handler(opts Options) http.Handler {
 	if opts.Resolver == nil {
 		panic("pypi.Handler: nil resolver")
 	}
+	if opts.Auth == nil {
+		panic("pypi.Handler: nil authenticator")
+	}
 	h := &handler{res: opts.Resolver, reg: opts.Resolver.Registry()}
-	return http.HandlerFunc(h.serve)
+	return auth.Middleware(opts.Auth, denyUnauthenticated)(http.HandlerFunc(h.serve))
+}
+
+// denyUnauthenticated sends the Basic challenge pip and twine answer with the
+// credentials from the index URL, keyring, or .pypirc.
+func denyUnauthenticated(w http.ResponseWriter, _ *http.Request, _ error) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="sindri"`)
+	writeError(w, http.StatusUnauthorized, "authentication required")
+}
+
+// authorize checks the caller against the named repository. A caller who may
+// not read it is told it does not exist.
+func (h *handler) authorize(w http.ResponseWriter, r *http.Request, name string, need auth.Role) bool {
+	repo, err := h.reg.GetRepository(r.Context(), name)
+	if err != nil {
+		mapRegistryError(w, err)
+		return false
+	}
+	p, _ := auth.PrincipalFromContext(r.Context())
+	if err := auth.Authorize(p, repo, need); err != nil {
+		if need == auth.RoleWrite && auth.Authorize(p, repo, auth.RoleRead) == nil {
+			writeError(w, http.StatusForbidden, "the caller may not upload to "+name)
+			return false
+		}
+		writeError(w, http.StatusNotFound, "not found")
+		return false
+	}
+	return true
 }
 
 type handler struct {
@@ -51,6 +85,14 @@ func (h *handler) dispatch(w http.ResponseWriter, r *http.Request, path string) 
 	repo, rest, kind, ok := splitPyPIPath(path)
 	if !ok {
 		writeError(w, http.StatusNotFound, "no route matches this path")
+		return
+	}
+
+	need := auth.RoleRead
+	if kind == pathUpload {
+		need = auth.RoleWrite
+	}
+	if !h.authorize(w, r, repo, need) {
 		return
 	}
 

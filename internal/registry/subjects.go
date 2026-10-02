@@ -11,11 +11,14 @@ import (
 	"github.com/spj/sindri/internal/model"
 )
 
+// OwnerPrefix starts a repository owner reference.
+const OwnerPrefix = "repository:"
+
 // OwnerRef is the owner recorded for a subject published into a repository.
-// While pushes are anonymous the repository is the only owner Sindri can
-// vouch for; M7 adds user and team owners alongside it (ADR 16).
+// Authorization on a subject goes through its owning repositories' access
+// lists (ADR 16, ADR 18).
 func OwnerRef(repoName string) string {
-	return "repository:" + repoName
+	return OwnerPrefix + repoName
 }
 
 // recordSubject makes digest a subject owned by repo and records the

@@ -36,6 +36,7 @@ func fetch(t *testing.T, srv *httptest.Server, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Authorization", "Bearer "+testToken)
 	resp, err := srv.Client().Do(req)
 	if err != nil {
 		return nil, err
@@ -312,6 +313,7 @@ func TestProxyOCI_BlobStreamsBeforeUpstreamFinishes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	req.Header.Set("Authorization", "Bearer "+testToken)
 
 	// Less than the half upstream has sent, so bytes still sitting in a
 	// server write buffer cannot make this flaky. The deadline covers the
@@ -413,6 +415,7 @@ func TestProxyOCI_HeadAndRangeOnUncachedBlob(t *testing.T) {
 	}
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v2/hub/library/x/blobs/"+img.layerDigest, nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Range", "bytes=2-5")
 	rec := httptest.NewRecorder()
 	env.handler.ServeHTTP(rec, req)

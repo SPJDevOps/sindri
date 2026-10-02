@@ -438,6 +438,7 @@ func publishFile(t *testing.T, h http.Handler, repo, pkg, version, filename stri
 func mustDoWithHost(t *testing.T, h http.Handler, path, host, accept string) httpResult {
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Host = host
 	req.Header.Set("X-Forwarded-Proto", "https")
 	if accept != "" {

@@ -154,6 +154,7 @@ func (a *app) reloadLoop(ctx context.Context, path string, running *config.Confi
 			a.logger.ErrorContext(ctx, "reload failed; keeping the running configuration", "error", err)
 			continue
 		}
+		a.auth.SetAdmins(next.Auth.Admins)
 		if running.Desired != nil && next.Desired == nil {
 			a.logger.WarnContext(ctx, "the configuration no longer declares repos or lifecycle; config-managed repositories are left as they are")
 		}
@@ -175,6 +176,9 @@ func restartSections(before, after *config.Config) []string {
 	}
 	if before.Log != after.Log {
 		out = append(out, "log")
+	}
+	if before.Auth.StaticToken != after.Auth.StaticToken || !sameOIDC(before.Auth.OIDC, after.Auth.OIDC) {
+		out = append(out, "auth (only auth.admins reloads)")
 	}
 	return out
 }
@@ -207,4 +211,11 @@ func openBlobStore(ctx context.Context, cfg config.Storage) (storage.BlobStore, 
 	default:
 		return nil, fmt.Errorf("storage.backend: %q is not supported", cfg.Backend)
 	}
+}
+
+func sameOIDC(a, b *config.OIDC) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

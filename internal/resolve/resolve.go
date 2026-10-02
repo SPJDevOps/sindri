@@ -23,6 +23,23 @@ import (
 type Resolver struct {
 	reg    *registry.Registry
 	remote *remote.Client
+	// canRead decides whether the caller in ctx may read a member a virtual
+	// repository would answer from. Nil allows every member.
+	canRead func(context.Context, model.Repository) bool
+}
+
+// SetMemberAccess installs the check applied to every member a virtual
+// repository answers from. Read access to a virtual repository lets a caller
+// address it; each member that answers must be readable too, or a virtual
+// repository would republish a repository its readers were never granted
+// (ADR 18). A member the caller cannot read is a miss, and a name it claims
+// still never falls through to a proxy (invariant I5).
+func (r *Resolver) SetMemberAccess(canRead func(context.Context, model.Repository) bool) {
+	r.canRead = canRead
+}
+
+func (r *Resolver) memberReadable(ctx context.Context, m model.Repository) bool {
+	return r.canRead == nil || r.canRead(ctx, m)
 }
 
 // New wires a Resolver.
@@ -149,6 +166,9 @@ func (r *Resolver) walkMembers(ctx context.Context, virtualName, normalizedName 
 		if owner, claimed, err := r.claimOwner(ctx, members, normalizedName, copyVisited(visiting)); err != nil {
 			return err
 		} else if claimed {
+			if !r.memberReadable(ctx, owner) {
+				return ErrNotFound
+			}
 			hit, err := fn(ctx, owner)
 			if err != nil {
 				return err
@@ -171,6 +191,9 @@ func (r *Resolver) walkMembers(ctx context.Context, virtualName, normalizedName 
 			}
 			return nil
 		default:
+			if !r.memberReadable(ctx, m) {
+				continue
+			}
 			hit, err := fn(ctx, m)
 			if err != nil {
 				return err
@@ -426,6 +449,9 @@ func (r *Resolver) ListPyPIProjects(ctx context.Context, repoName string) ([]str
 			return nil, err
 		}
 		for _, m := range members {
+			if m.Type != model.RepoTypeVirtual && !r.memberReadable(ctx, m) {
+				continue
+			}
 			part, err := r.ListPyPIProjects(ctx, m.Name)
 			if err != nil {
 				return nil, err
