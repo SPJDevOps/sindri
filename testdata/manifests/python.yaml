@@ -34,3 +34,20 @@ spec:
     - ref: proxy/pypi
   access:
     read: [team:platform, team:payments]
+---
+# Test-only: covers upstream.credentials in the golden tests. The upstream is
+# under .invalid (RFC 2606), so the credentials are never sent anywhere. The
+# server applying this must define `mirror` in its credentials section.
+kind: Repository
+metadata:
+  name: pypi-mirror
+spec:
+  type: proxy
+  protocol: pypi
+  upstream:
+    url: https://pypi.mirror.invalid/simple
+    ttl: 30m
+    negativeTtl: 5m
+    credentials: mirror
+  access:
+    read: [authenticated]

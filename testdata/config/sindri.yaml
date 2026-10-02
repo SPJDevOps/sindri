@@ -13,6 +13,14 @@ storage:  ${SINDRI_DATA_DIR:-/tmp/sindri-m7-data}
 database: ${SINDRI_DATABASE:-postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable}
 auth:     ${SINDRI_TOKEN:-sindri-dev-token}
 
+# Used only by pypi-mirror below, which exists so that the golden tests cover
+# upstream.credentials. Its upstream is under .invalid (RFC 2606), so this
+# value is never sent anywhere.
+credentials:
+  mirror:
+    username: gate
+    password: ${SINDRI_MIRROR_PASSWORD:-not-a-secret}
+
 defaults:
   proxy:
     ttl: 30m
@@ -29,6 +37,10 @@ repos:
   internal-py: { protocol: pypi }
   pypi:        { upstream: pypi }
   python:      { members: [internal-py, pypi] }
+  # Test-only: an authenticated mirror that no gate pulls through.
+  pypi-mirror:
+    protocol: pypi
+    upstream: { url: https://pypi.mirror.invalid/simple, credentials: mirror }
 
   # Containers. `docker` is hosted so that `docker push .../docker/demo/app`
   # lands somewhere writable; `oci` is the read-through view.

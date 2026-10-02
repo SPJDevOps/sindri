@@ -68,6 +68,10 @@ func (e *recEnv) apply(t *testing.T, m *config.Manifests, opts reconcile.Options
 	return res
 }
 
+// fixtureCredentials is the credentials reference the gate fixtures use, so
+// an environment that reconciles them must define it.
+const fixtureCredentials = "mirror"
+
 func loadShort(t *testing.T) *config.Manifests {
 	t.Helper()
 	cfg, err := config.Load(filepath.Join("..", "..", "testdata", "config", "sindri.yaml"))
@@ -105,7 +109,7 @@ func parse(t *testing.T, docs string) *config.Manifests {
 // If this fails, the two spellings have drifted into two systems. Fix the
 // desugaring; never relax this comparison.
 func TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState(t *testing.T) {
-	short, long := newRecEnv(t), newRecEnv(t)
+	short, long := newRecEnv(t, fixtureCredentials), newRecEnv(t, fixtureCredentials)
 	short.apply(t, loadShort(t), reconcile.Options{Source: model.SourceFile})
 	long.apply(t, loadLong(t), reconcile.Options{Source: model.SourceApply})
 
@@ -161,9 +165,9 @@ func dumpState(t *testing.T, database *db.DB) []string {
 // Gate test 4, first half: converging twice is a no-op, and a diff after the
 // first apply reports nothing.
 func TestReconcile_SecondRunIsNoOp(t *testing.T) {
-	env := newRecEnv(t)
+	env := newRecEnv(t, fixtureCredentials)
 	first := env.apply(t, loadLong(t), reconcile.Options{})
-	if len(first.Repositories.Created) != 6 || first.Stages == nil {
+	if len(first.Repositories.Created) != 7 || first.Stages == nil {
 		t.Fatalf("first apply: %+v", first)
 	}
 	before := dumpState(t, env.database)
@@ -172,8 +176,8 @@ func TestReconcile_SecondRunIsNoOp(t *testing.T) {
 	if second.Drift() {
 		t.Fatalf("second apply changed something: %+v", second)
 	}
-	if got := len(second.Repositories.Unchanged); got != 6 {
-		t.Fatalf("unchanged = %d, want 6", got)
+	if got := len(second.Repositories.Unchanged); got != 7 {
+		t.Fatalf("unchanged = %d, want 7", got)
 	}
 	if diff := cmp.Diff(before, dumpState(t, env.database)); diff != "" {
 		t.Fatalf("a no-op apply changed the database:\n%s", diff)
@@ -183,7 +187,7 @@ func TestReconcile_SecondRunIsNoOp(t *testing.T) {
 // Gate test 4, second half: a change made behind the reconciler's back is
 // reported by diff, field by field, and diff itself changes nothing.
 func TestReconcile_DiffReportsManualDrift(t *testing.T) {
-	env := newRecEnv(t)
+	env := newRecEnv(t, fixtureCredentials)
 	env.apply(t, loadLong(t), reconcile.Options{})
 
 	ctx := t.Context()
@@ -369,7 +373,7 @@ spec:
 // The reconciler and the management API never fight over a row, and neither
 // do the two reconciler triggers.
 func TestReconcile_RefusesRowsItDoesNotOwn(t *testing.T) {
-	env := newRecEnv(t)
+	env := newRecEnv(t, fixtureCredentials)
 	if _, err := env.reg.CreateRepository(t.Context(), registry.CreateRepositoryParams{
 		Name: "docker", Type: model.RepoTypeHosted, Protocol: model.ProtocolOCI,
 	}); err != nil {

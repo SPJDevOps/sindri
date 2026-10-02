@@ -70,7 +70,9 @@ echo "SIGHUP re-reconciled"
 echo "== long form: a manifest directory from CI"
 LONG_DB="$(fresh_db sindri_m7_long)"
 LONG_CFG="$(mktemp)"
-printf 'listen: 127.0.0.1:%s\nstorage: %s\ndatabase: %s\nauth: %s\n' \
+# The manifests' pypi-mirror names the `mirror` credentials, and apply is
+# refused unless the server defines it.
+printf 'listen: 127.0.0.1:%s\nstorage: %s\ndatabase: %s\nauth: %s\ncredentials:\n  mirror: { username: gate, password: not-a-secret }\n' \
   "${LONG_PORT}" "$(mktemp -d)" "${LONG_DB}" "${SINDRI_TOKEN}" > "${LONG_CFG}"
 "${BIN}" serve --config "${LONG_CFG}" > /tmp/sindri-m7-long.log 2>&1 &
 PIDS+=("$!")
