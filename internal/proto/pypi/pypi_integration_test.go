@@ -21,6 +21,8 @@ import (
 	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/cas"
 	"github.com/spj/sindri/internal/db"
+	"github.com/spj/sindri/internal/evidence"
+	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/proto/pypi"
 	"github.com/spj/sindri/internal/registry"
 	"github.com/spj/sindri/internal/remote"
@@ -176,6 +178,11 @@ func multipartUpload(t *testing.T, h http.Handler, path string, fields map[strin
 
 func doMultipart(t *testing.T, h http.Handler, path string, fields map[string]string, filename string, content []byte, withBasic bool) httpResult {
 	t.Helper()
+	return doMultipartWithHeaders(t, h, path, fields, filename, content, withBasic, nil)
+}
+
+func doMultipartWithHeaders(t *testing.T, h http.Handler, path string, fields map[string]string, filename string, content []byte, withBasic bool, headers map[string]string) httpResult {
+	t.Helper()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	for k, v := range fields {
@@ -198,6 +205,9 @@ func doMultipart(t *testing.T, h http.Handler, path string, fields map[string]st
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	if withBasic {
 		req.SetBasicAuth("token", "anything")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -272,6 +282,8 @@ func newTestHandler(t *testing.T) http.Handler {
 		Blobs:    blobs,
 		API: api.Handler(api.Options{
 			Registry:  reg,
+			Lifecycle: lifecycle.New(database),
+			Evidence:  evidence.New(database, casStore, "memory"),
 			Auth:      auth.NewStaticBearer(testToken),
 			RequestID: server.RequestIDFromContext,
 		}),

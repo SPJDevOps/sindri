@@ -208,9 +208,10 @@ name.
 ### Identity layer
 
 ```sql
-subjects(digest PK, size, kind, created_at)
+subjects(digest PK FK, size, kind, created_at)  -- oci-manifest | oci-index | pypi-dist | file
 subject_owners(digest FK, owner_ref, PRIMARY KEY (digest, owner_ref))
-provenance(digest FK, source_type, source_ref, build_ref, recorded_at)
+provenance(id PK, digest FK, source_type, source_ref, build_ref, recorded_at,
+           UNIQUE NULLS NOT DISTINCT (digest, source_type, source_ref, build_ref))
 
 evidence(
   id PK, subject_digest FK, type,          -- sbom | signature | scan | attestation
@@ -218,19 +219,31 @@ evidence(
   created_at, created_by
 )
 
-lifecycle_stages(id PK, name UNIQUE, position)
-promotion_gates(id PK, stage_id FK, rule jsonb)
+lifecycle_stages(id PK, name UNIQUE, position UNIQUE DEFERRABLE)
+promotion_gates(id PK, stage_id FK, position, rule jsonb)   -- {"evidence": "sbom"}
 
 lifecycle_events(                          -- APPEND ONLY, never updated or deleted
-  id PK, subject_digest FK, repo_id FK, stage_id FK,
+  id PK, subject_digest FK, repo_id FK, stage_id FK,   -- FKs do not cascade
   action,                                  -- approve | revoke
   actor, reason, at
 )
+lifecycle_current                          -- VIEW: latest event per (digest, stage, repo)
 ```
 
-`lifecycle_events` is the ledger of invariant I3. Current state is a view selecting the
-latest event per `(subject_digest, repo_id, stage_id)`. Index that view's key columns: the
-admission-decision endpoint is on the hot path for every deployment in the organisation.
+A subject is created inside the publish transaction of a **hosted** repository, owned by
+`repository:<name>`, with the publisher's provenance claim recorded unverified. Proxy
+caching never creates one (I4). A subject outlives its placements. See ADR 16.
+
+`lifecycle_events` is the ledger of invariant I3. A trigger refuses `UPDATE`, `DELETE`, and
+`TRUNCATE`, and its foreign keys do not cascade, so a repository or stage with history
+cannot be deleted out from under it. Current state is the view `lifecycle_current`, a
+`DISTINCT ON` over `lifecycle_events_current_idx (subject_digest, stage_id, repo_id, at
+DESC, id DESC)`: the admission-decision endpoint is on the hot path for every deployment
+in the organisation, and a test asserts its query uses that index.
+
+Evidence documents are blobs in the CAS with no repository placement; they are read only
+through the subject they are attached to. Gates check that evidence of a type is present;
+v1 does not parse or verify the documents.
 
 ### Placement and protocol layer
 
@@ -346,7 +359,9 @@ such as manifests and evidence documents, where a staging round trip buys nothin
 | `/pypi/{repo}/packages/...` | PyPI file download |
 | `/pypi/{repo}/upload` | PyPI upload, twine's POST |
 | `/api/v1/...` | management API |
-| `/api/v1/decisions/...` | "is this digest approved for this environment" |
+| `/api/v1/lifecycle/stages` | ordered stages and their gates |
+| `/api/v1/subjects/{digest}/...` | identity, evidence, promote, revoke, ledger |
+| `/api/v1/decisions?digest=&environment=` | "is this digest approved for this environment" |
 | `/ui/...` | read-only web interface |
 | `/healthz`, `/readyz` | liveness and readiness |
 | `/metrics` | Prometheus |

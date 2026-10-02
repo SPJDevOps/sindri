@@ -18,6 +18,17 @@ type Blob struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+type Evidence struct {
+	ID            uuid.UUID `json:"id"`
+	SubjectDigest string    `json:"subject_digest"`
+	Type          string    `json:"type"`
+	MediaType     string    `json:"media_type"`
+	BlobDigest    string    `json:"blob_digest"`
+	Metadata      []byte    `json:"metadata"`
+	CreatedAt     time.Time `json:"created_at"`
+	CreatedBy     string    `json:"created_by"`
+}
+
 type File struct {
 	ID         uuid.UUID `json:"id"`
 	VersionID  uuid.UUID `json:"version_id"`
@@ -25,6 +36,34 @@ type File struct {
 	Filename   string    `json:"filename"`
 	MediaType  string    `json:"media_type"`
 	Metadata   []byte    `json:"metadata"`
+}
+
+type LifecycleCurrent struct {
+	ID            int64     `json:"id"`
+	SubjectDigest string    `json:"subject_digest"`
+	RepoID        uuid.UUID `json:"repo_id"`
+	StageID       uuid.UUID `json:"stage_id"`
+	Action        string    `json:"action"`
+	Actor         string    `json:"actor"`
+	Reason        string    `json:"reason"`
+	At            time.Time `json:"at"`
+}
+
+type LifecycleEvent struct {
+	ID            int64     `json:"id"`
+	SubjectDigest string    `json:"subject_digest"`
+	RepoID        uuid.UUID `json:"repo_id"`
+	StageID       uuid.UUID `json:"stage_id"`
+	Action        string    `json:"action"`
+	Actor         string    `json:"actor"`
+	Reason        string    `json:"reason"`
+	At            time.Time `json:"at"`
+}
+
+type LifecycleStage struct {
+	ID       uuid.UUID `json:"id"`
+	Name     string    `json:"name"`
+	Position int32     `json:"position"`
 }
 
 type ManifestChild struct {
@@ -37,6 +76,22 @@ type Package struct {
 	RepoID         uuid.UUID `json:"repo_id"`
 	NormalizedName string    `json:"normalized_name"`
 	DisplayName    string    `json:"display_name"`
+}
+
+type PromotionGate struct {
+	ID       uuid.UUID `json:"id"`
+	StageID  uuid.UUID `json:"stage_id"`
+	Position int32     `json:"position"`
+	Rule     []byte    `json:"rule"`
+}
+
+type Provenance struct {
+	ID         int64       `json:"id"`
+	Digest     string      `json:"digest"`
+	SourceType string      `json:"source_type"`
+	SourceRef  pgtype.Text `json:"source_ref"`
+	BuildRef   pgtype.Text `json:"build_ref"`
+	RecordedAt time.Time   `json:"recorded_at"`
 }
 
 type Remote struct {
@@ -80,6 +135,18 @@ type RepositoryMember struct {
 type SchemaOrigin struct {
 	ID            int16     `json:"id"`
 	InitializedAt time.Time `json:"initialized_at"`
+}
+
+type Subject struct {
+	Digest    string    `json:"digest"`
+	Size      int64     `json:"size"`
+	Kind      string    `json:"kind"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type SubjectOwner struct {
+	Digest   string `json:"digest"`
+	OwnerRef string `json:"owner_ref"`
 }
 
 type Tag struct {

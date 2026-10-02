@@ -44,6 +44,10 @@ var (
 	// is already placed with different bytes. A published artifact is the
 	// thing consumers pinned a hash of, so it does not change under them.
 	ErrFileExists = errors.New("file already published with different content")
+
+	// ErrHasHistory means a delete would remove a repository the lifecycle
+	// ledger refers to. The ledger is append-only, so the repository stays.
+	ErrHasHistory = errors.New("repository has lifecycle history")
 )
 
 // Registry owns placement metadata and gates every blob read.
@@ -128,6 +132,9 @@ func (r *Registry) ListRepositories(ctx context.Context, p ListRepositoriesParam
 func (r *Registry) DeleteRepository(ctx context.Context, name string) error {
 	n, err := r.q.DeleteRepositoryByName(ctx, name)
 	if err != nil {
+		if isForeignKeyViolation(err, "lifecycle_events_repo_id_fkey") {
+			return fmt.Errorf("%w: %s has promotion events and cannot be deleted", ErrHasHistory, name)
+		}
 		return fmt.Errorf("deleting repository %s: %w", name, err)
 	}
 	if n == 0 {
@@ -159,6 +166,10 @@ type PublishParams struct {
 	// bytes (ErrFileExists), and a filename already used by another version
 	// of the same package. Re-publishing identical bytes stays idempotent.
 	Immutable bool
+
+	// Provenance is the publisher's claim about where these bytes came from.
+	// It is recorded on the subject the publish creates, unverified (ADR 16).
+	Provenance model.Provenance
 }
 
 // Publish stores bytes in the CAS and creates placement rows. A digest already
@@ -264,6 +275,14 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		if err != nil {
 			return model.File{}, fmt.Errorf("placing file %s: %w", p.Filename, err)
 		}
+	}
+
+	kind := model.SubjectKindFile
+	if repo.Protocol == string(model.ProtocolPyPI) {
+		kind = model.SubjectKindPyPIDist
+	}
+	if err := recordSubject(ctx, q, repo, info.Digest, info.Size, kind, p.Provenance); err != nil {
+		return model.File{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -628,6 +647,11 @@ func normalizePackageName(name string) string {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func isForeignKeyViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503" && pgErr.ConstraintName == constraint
 }
 
 func textCursor(value string) pgtype.Text {

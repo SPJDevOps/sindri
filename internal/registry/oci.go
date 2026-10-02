@@ -265,7 +265,8 @@ func (r *Registry) GetBlobRange(ctx context.Context, repoName string, digest mod
 // PutManifest stores a manifest or index, records children, places the digest,
 // and optionally binds a tag. image is the OCI image name within the Sindri
 // repository; empty means the repository name is the image (package "_").
-func (r *Registry) PutManifest(ctx context.Context, repoName, image, reference, mediaType string, body []byte) (Manifest, error) {
+// The manifest digest becomes a subject carrying prov (ADR 16).
+func (r *Registry) PutManifest(ctx context.Context, repoName, image, reference, mediaType string, body []byte, prov model.Provenance) (Manifest, error) {
 	if len(body) == 0 {
 		return Manifest{}, fmt.Errorf("%w: manifest body is required", ErrInvalidInput)
 	}
@@ -354,6 +355,14 @@ func (r *Registry) PutManifest(ctx context.Context, repoName, image, reference, 
 		}); err != nil {
 			return Manifest{}, fmt.Errorf("upserting tag %s: %w", reference, err)
 		}
+	}
+
+	kind := model.SubjectKindOCIManifest
+	if isIndexMediaType(resolvedMediaType) {
+		kind = model.SubjectKindOCIIndex
+	}
+	if err := recordSubject(ctx, q, repo, info.Digest, info.Size, kind, prov); err != nil {
+		return Manifest{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -747,6 +756,12 @@ func parseManifestChildren(mediaType string, body []byte) ([]model.Digest, strin
 		}
 		return nil, mt, nil
 	}
+}
+
+// isIndexMediaType reports whether mt names a multi-platform index.
+func isIndexMediaType(mt string) bool {
+	return mt == ocispec.MediaTypeImageIndex ||
+		mt == "application/vnd.docker.distribution.manifest.list.v2+json"
 }
 
 func sniffManifestMediaType(body []byte) string {
