@@ -68,6 +68,7 @@ func TestOCI_PushPullAndPlacementGate(t *testing.T) {
 		OCI: oci.Handler(oci.Options{
 			Resolver: resolver,
 			CAS:      casStore,
+			Auth:     auth.NewStaticBearer(testToken),
 		}),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -214,9 +215,8 @@ func mustDo(t *testing.T, h http.Handler, method, path string, body []byte, cont
 		rdr = bytes.NewReader(body)
 	}
 	req := httptest.NewRequestWithContext(t.Context(), method, path, rdr)
-	if strings.HasPrefix(path, "/api/") {
-		req.Header.Set("Authorization", "Bearer "+testToken)
-	}
+	// Every route needs a credential since M7: there is no anonymous pull.
+	req.Header.Set("Authorization", "Bearer "+testToken)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}

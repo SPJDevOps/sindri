@@ -1,6 +1,7 @@
 # 10. OCI hosted adapter placement and anonymous /v2
 
 - **Status:** Accepted
+- **Superseded in part by:** [ADR 18](0018-authentication-and-rbac-in-v1.md): `/v2` is no longer anonymous
 - **Date:** 2026-09-24
 - **Relates to:** [ADR 3, A content-addressable store with placement](0003-content-addressable-store-with-placement.md),
   [ADR 8, Staged uploads belong to the BlobStore](0008-staged-uploads-belong-to-the-blobstore.md)

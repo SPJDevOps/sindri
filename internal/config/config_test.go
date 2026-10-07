@@ -349,3 +349,26 @@ func chdir(t *testing.T, dir string) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(previous) })
 }
+
+func TestDuration_StringDropsZeroUnits(t *testing.T) {
+	tests := []struct {
+		in   time.Duration
+		want string
+	}{
+		{time.Hour, "1h"},
+		{30 * time.Minute, "30m"},
+		{90 * time.Second, "1m30s"},
+		{time.Hour + 30*time.Second, "1h0m30s"},
+		{45 * time.Second, "45s"},
+		{0, "0s"},
+	}
+	for _, tc := range tests {
+		got := config.Duration(tc.in).String()
+		if got != tc.want {
+			t.Errorf("Duration(%v).String() = %q, want %q", tc.in, got, tc.want)
+		}
+		if back, err := time.ParseDuration(got); err != nil || back != tc.in {
+			t.Errorf("%q does not parse back to %v", got, tc.in)
+		}
+	}
+}

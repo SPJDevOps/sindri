@@ -3,7 +3,8 @@
 #
 # Prerequisites: make up, make build, sindri serve listening on :8080,
 # and a Python with twine, build, and pip available (python3 -m pip install
-# twine build).
+# twine build). Set CREATE_REPO=0 when the repository is declared in the
+# configuration.
 set -euo pipefail
 
 SINDRI_URL="${SINDRI_URL:-http://127.0.0.1:8080}"
@@ -16,16 +17,18 @@ if [[ -z "${PKG_DIR}" ]]; then
   PKG_DIR="${ROOT}/testdata/pypi/demo-package"
 fi
 
-echo "ensuring hosted PyPI repository ${REPO}"
-code="$(curl -sS -o /tmp/sindri-pypi-repo.json -w '%{http_code}' \
-  -X POST "${SINDRI_URL}/api/v1/repositories" \
-  -H "Authorization: Bearer ${SINDRI_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d "{\"name\":\"${REPO}\",\"type\":\"hosted\",\"protocol\":\"pypi\"}")"
-if [[ "${code}" != "201" && "${code}" != "409" ]]; then
-  echo "failed to create repository: HTTP ${code}" >&2
-  cat /tmp/sindri-pypi-repo.json >&2 || true
-  exit 1
+if [[ "${CREATE_REPO:-1}" == "1" ]]; then
+  echo "ensuring hosted PyPI repository ${REPO}"
+  code="$(curl -sS -o /tmp/sindri-pypi-repo.json -w '%{http_code}' \
+    -X POST "${SINDRI_URL}/api/v1/repositories" \
+    -H "Authorization: Bearer ${SINDRI_TOKEN}" \
+    -H 'Content-Type: application/json' \
+    -d "{\"name\":\"${REPO}\",\"type\":\"hosted\",\"protocol\":\"pypi\"}")"
+  if [[ "${code}" != "201" && "${code}" != "409" ]]; then
+    echo "failed to create repository: HTTP ${code}" >&2
+    cat /tmp/sindri-pypi-repo.json >&2 || true
+    exit 1
+  fi
 fi
 
 # A published file is immutable (ADR 12) and a wheel is not byte-reproducible,
@@ -66,9 +69,21 @@ python3 -m venv "${VENV}"
 "${VENV}/bin/pip" install --upgrade pip
 HOST="${SINDRI_URL#*://}"
 HOST="${HOST%%/*}"
+SCHEME="${SINDRI_URL%%://*}"
+
+# Since M7 there is no anonymous install (ADR 18).
+echo "anonymous index request is refused"
+code="$(curl -sS -o /dev/null -w '%{http_code}' "${SINDRI_URL}/pypi/${REPO}/simple/")"
+if [[ "${code}" != "401" ]]; then
+  echo "anonymous index request returned HTTP ${code}, expected 401" >&2
+  exit 1
+fi
+
+# pip sends credentials from the index URL as HTTP Basic; the token is the
+# password.
 echo "pip install demo-package==${VERSION} from ${SINDRI_URL}/pypi/${REPO}/simple/"
 "${VENV}/bin/pip" install \
-  --index-url "${SINDRI_URL}/pypi/${REPO}/simple/" \
+  --index-url "${SCHEME}://token:${SINDRI_TOKEN}@${HOST}/pypi/${REPO}/simple/" \
   --trusted-host "${HOST}" \
   "demo-package==${VERSION}"
 
@@ -79,7 +94,7 @@ if [[ "${installed}" != "${VERSION}" ]]; then
 fi
 
 echo "PEP 691 JSON index"
-curl -fsS -H 'Accept: application/vnd.pypi.simple.v1+json' \
+curl -fsS -u "token:${SINDRI_TOKEN}" -H 'Accept: application/vnd.pypi.simple.v1+json' \
   "${SINDRI_URL}/pypi/${REPO}/simple/demo-package/" | python3 -m json.tool >/dev/null
 
 # A published file never changes under a consumer who pinned its hash.

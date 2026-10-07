@@ -1,6 +1,7 @@
 # 12. PyPI hosted adapter: placement, auth, and download paths
 
 - **Status:** Accepted
+- **Superseded in part by:** [ADR 18](0018-authentication-and-rbac-in-v1.md): the index, downloads, and uploads all authenticate
 - **Date:** 2026-09-26
 - **Relates to:** [ADR 6, OCI and PyPI first](0006-oci-and-pypi-first.md),
   [ADR 10, OCI hosted adapter placement](0010-oci-hosted-adapter-placement.md)

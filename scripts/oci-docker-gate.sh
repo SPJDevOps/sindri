@@ -7,6 +7,7 @@
 # Docker Engine → insecure-registries).
 #
 # Prerequisites: make up, make build, sindri serve listening on :8080.
+# Set CREATE_REPO=0 when the repository is declared in the configuration.
 set -euo pipefail
 
 SINDRI_URL="${SINDRI_URL:-http://127.0.0.1:8080}"
@@ -19,17 +20,24 @@ IMAGE="${REGISTRY_HOST}/${REPO}:${TAG}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "ensuring hosted OCI repository ${REPO}"
-code="$(curl -sS -o /tmp/sindri-demo-repo.json -w '%{http_code}' \
-  -X POST "${SINDRI_URL}/api/v1/repositories" \
-  -H "Authorization: Bearer ${SINDRI_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d "{\"name\":\"${REPO}\",\"type\":\"hosted\",\"protocol\":\"oci\"}")"
-if [[ "${code}" != "201" && "${code}" != "409" ]]; then
-  echo "failed to create repository: HTTP ${code}" >&2
-  cat /tmp/sindri-demo-repo.json >&2 || true
-  exit 1
+if [[ "${CREATE_REPO:-1}" == "1" ]]; then
+  echo "ensuring hosted OCI repository ${REPO}"
+  code="$(curl -sS -o /tmp/sindri-demo-repo.json -w '%{http_code}' \
+    -X POST "${SINDRI_URL}/api/v1/repositories" \
+    -H "Authorization: Bearer ${SINDRI_TOKEN}" \
+    -H 'Content-Type: application/json' \
+    -d "{\"name\":\"${REPO}\",\"type\":\"hosted\",\"protocol\":\"oci\"}")"
+  if [[ "${code}" != "201" && "${code}" != "409" ]]; then
+    echo "failed to create repository: HTTP ${code}" >&2
+    cat /tmp/sindri-demo-repo.json >&2 || true
+    exit 1
+  fi
 fi
+
+# Since M7 there is no anonymous push or pull (ADR 18). The token is the Basic
+# password: the bootstrap token, a machine token, or an identity-provider
+# token.
+echo "${SINDRI_TOKEN}" | docker login "${REGISTRY_HOST}" -u gate --password-stdin
 
 docker build -t "${IMAGE}" "${ROOT}/testdata/demo"
 if ! docker push "${IMAGE}"; then

@@ -1,0 +1,37 @@
+# The long form of the container repositories in testdata/config/sindri.yaml.
+kind: Repository
+metadata:
+  name: docker
+spec:
+  type: hosted
+  protocol: oci
+  access:
+    read: [team:platform, team:payments]
+    write: [team:platform]
+  lifecycle:
+    stages: [dev, prod]
+---
+kind: Repository
+metadata:
+  name: dockerhub
+spec:
+  type: proxy
+  protocol: oci
+  upstream:
+    url: https://registry-1.docker.io
+    ttl: 30m
+    negativeTtl: 5m
+  access:
+    read: [authenticated]
+---
+kind: Repository
+metadata:
+  name: oci
+spec:
+  type: virtual
+  protocol: oci
+  members:
+    - ref: hosted/docker
+    - ref: proxy/dockerhub
+  access:
+    read: [team:platform, team:payments]

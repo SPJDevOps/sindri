@@ -26,10 +26,15 @@ func StartPostgres(t *testing.T) string {
 		tcpostgres.WithDatabase("sindri"),
 		tcpostgres.WithUsername("sindri"),
 		tcpostgres.WithPassword("sindri"),
+		// The log line says Postgres is ready; the port wait says Docker
+		// has published the mapping. Docker Desktop can report the first
+		// before the second, which surfaced as an intermittent
+		// `port "5432/tcp" not found` once several suites ran at once.
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(2*time.Minute),
+			wait.ForAll(
+				wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+				wait.ForListeningPort("5432/tcp"),
+			).WithDeadline(2*time.Minute),
 		),
 	)
 	testcontainers.CleanupContainer(t, container)

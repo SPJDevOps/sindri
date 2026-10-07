@@ -111,68 +111,84 @@ func validateStageName(name string) error {
 // slice order. A stage the ledger refers to cannot be removed: its history
 // would otherwise point at nothing (ErrStageInUse).
 func (s *Service) SetStages(ctx context.Context, specs []StageSpec) ([]Stage, error) {
-	if err := ValidateStages(specs); err != nil {
-		return nil, err
-	}
-	keep := make([]string, 0, len(specs))
-	for _, spec := range specs {
-		keep = append(keep, spec.Name)
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning stage update: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	q := s.q.WithTx(tx)
 
-	inUse, err := q.ListStageNamesWithHistoryNotIn(ctx, keep)
-	if err != nil {
-		return nil, fmt.Errorf("checking stage history: %w", err)
+	if err := SetStagesIn(ctx, s.q.WithTx(tx), specs); err != nil {
+		return nil, err
 	}
-	if len(inUse) > 0 {
-		return nil, fmt.Errorf("%w: cannot remove %s", ErrStageInUse, strings.Join(inUse, ", "))
-	}
-	if _, err := q.DeleteStagesNotIn(ctx, keep); err != nil {
-		return nil, fmt.Errorf("removing stages: %w", err)
-	}
-
-	for i, spec := range specs {
-		row, err := q.UpsertStage(ctx, db.UpsertStageParams{Name: spec.Name, Position: int32(i)}) //nolint:gosec // G115: bounded by request size, far below int32
-		if err != nil {
-			return nil, fmt.Errorf("writing stage %s: %w", spec.Name, err)
-		}
-		if err := q.DeleteGatesForStage(ctx, row.ID); err != nil {
-			return nil, fmt.Errorf("clearing gates of %s: %w", spec.Name, err)
-		}
-		for j, g := range spec.Gates {
-			rule, err := marshalRule(g)
-			if err != nil {
-				return nil, err
-			}
-			if err := q.InsertGate(ctx, db.InsertGateParams{
-				StageID:  row.ID,
-				Position: int32(j), //nolint:gosec // G115: bounded by request size, far below int32
-				Rule:     rule,
-			}); err != nil {
-				return nil, fmt.Errorf("writing gate on %s: %w", spec.Name, err)
-			}
-		}
-	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing stage update: %w", err)
 	}
 	return s.ListStages(ctx)
 }
 
+// SetStagesIn replaces the stage set using q, which the caller binds to a
+// transaction. The reconciler uses it to commit stages together with the
+// repositories that refer to them; the management API uses SetStages. One
+// validator and one writer serve both (ADR 16).
+func SetStagesIn(ctx context.Context, q *db.Queries, specs []StageSpec) error {
+	if err := ValidateStages(specs); err != nil {
+		return err
+	}
+	keep := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		keep = append(keep, spec.Name)
+	}
+
+	inUse, err := q.ListStageNamesWithHistoryNotIn(ctx, keep)
+	if err != nil {
+		return fmt.Errorf("checking stage history: %w", err)
+	}
+	if len(inUse) > 0 {
+		return fmt.Errorf("%w: cannot remove %s", ErrStageInUse, strings.Join(inUse, ", "))
+	}
+	if _, err := q.DeleteStagesNotIn(ctx, keep); err != nil {
+		return fmt.Errorf("removing stages: %w", err)
+	}
+
+	for i, spec := range specs {
+		row, err := q.UpsertStage(ctx, db.UpsertStageParams{Name: spec.Name, Position: int32(i)}) //nolint:gosec // G115: bounded by request size, far below int32
+		if err != nil {
+			return fmt.Errorf("writing stage %s: %w", spec.Name, err)
+		}
+		if err := q.DeleteGatesForStage(ctx, row.ID); err != nil {
+			return fmt.Errorf("clearing gates of %s: %w", spec.Name, err)
+		}
+		for j, g := range spec.Gates {
+			rule, err := marshalRule(g)
+			if err != nil {
+				return err
+			}
+			if err := q.InsertGate(ctx, db.InsertGateParams{
+				StageID:  row.ID,
+				Position: int32(j), //nolint:gosec // G115: bounded by request size, far below int32
+				Rule:     rule,
+			}); err != nil {
+				return fmt.Errorf("writing gate on %s: %w", spec.Name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
 // ListStages returns the stages in position order with their gates.
 func (s *Service) ListStages(ctx context.Context) ([]Stage, error) {
-	rows, err := s.q.ListStages(ctx)
+	return ListStagesIn(ctx, s.q)
+}
+
+// ListStagesIn is ListStages through q, so a caller holding a transaction
+// reads its own uncommitted writes.
+func ListStagesIn(ctx context.Context, q *db.Queries) ([]Stage, error) {
+	rows, err := q.ListStages(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing stages: %w", err)
 	}
-	gates, err := s.q.ListGates(ctx)
+	gates, err := q.ListGates(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing gates: %w", err)
 	}

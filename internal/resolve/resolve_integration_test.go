@@ -104,8 +104,9 @@ func newEnv(t *testing.T, upstream http.HandlerFunc, options ...envOption) *test
 		OCI: oci.Handler(oci.Options{
 			Resolver: resolver,
 			CAS:      casStore,
+			Auth:     auth.NewStaticBearer(testToken),
 		}),
-		PyPI:   pypi.Handler(pypi.Options{Resolver: resolver}),
+		PyPI:   pypi.Handler(pypi.Options{Resolver: resolver, Auth: auth.NewStaticBearer(testToken)}),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -128,9 +129,8 @@ func (e *testEnv) do(t *testing.T, method, path string, body []byte, contentType
 			req.Header.Set("Content-Type", contentType)
 		}
 	}
-	if strings.HasPrefix(path, "/api/") {
-		req.Header.Set("Authorization", "Bearer "+testToken)
-	}
+	// Every route needs a credential since M7: there is no anonymous pull.
+	req.Header.Set("Authorization", "Bearer "+testToken)
 	rec := httptest.NewRecorder()
 	e.handler.ServeHTTP(rec, req)
 	return rec
@@ -401,7 +401,7 @@ func TestValidateRepository_LifecycleOnProxyFails(t *testing.T) {
 	err := reconcile.ValidateRepository(reconcile.RepositorySpec{
 		Name: "proxy/pypi-public", Type: model.RepoTypeProxy, Protocol: model.ProtocolPyPI,
 		UpstreamURL: "https://example.com", LifecycleStages: []string{"prod"},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected validation failure")
 	}

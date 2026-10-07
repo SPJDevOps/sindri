@@ -50,6 +50,12 @@ func (s *Server) router() http.Handler {
 	if s.opts.PyPI != nil {
 		r.Mount("/pypi", s.opts.PyPI)
 	}
+	if s.opts.Auth != nil {
+		r.Mount("/auth", s.opts.Auth)
+	}
+	if s.opts.UI != nil {
+		r.Mount("/ui", s.opts.UI)
+	}
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(r.Context(), w, http.StatusNotFound, ErrorBody{

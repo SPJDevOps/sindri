@@ -54,6 +54,14 @@ type Options struct {
 	// reason as API.
 	PyPI http.Handler
 
+	// Auth is the browser login flow mounted at /auth. Optional: it exists
+	// only when an identity provider is configured.
+	Auth http.Handler
+
+	// UI is the read-only web interface mounted at /ui. The caller wraps it
+	// in auth.GuardUI, so it sees only signed-in GET and HEAD requests.
+	UI http.Handler
+
 	// Logger receives access logs and server errors. Required.
 	Logger *slog.Logger
 

@@ -16,12 +16,17 @@ import (
 // keep its default. Since defaults here decide where blobs are written and
 // which database is used, a silently ignored key is a production incident, not
 // a nit.
-func strictDecode(node *yaml.Node, out any) error {
+//
+// extra names keys the caller handles itself, so they count as known.
+func strictDecode(node *yaml.Node, out any, extra ...string) error {
 	if node.Kind != yaml.MappingNode {
 		return fmt.Errorf("line %d: expected a mapping, got %s", node.Line, kindName(node.Kind))
 	}
 
 	known := yamlFieldNames(reflect.TypeOf(out).Elem())
+	for _, k := range extra {
+		known[k] = struct{}{}
+	}
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		key := node.Content[i]
 		if _, ok := known[key.Value]; !ok {

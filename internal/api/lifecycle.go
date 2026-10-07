@@ -39,15 +39,6 @@ func (a *api) mountIdentity(r chi.Router) {
 	r.Get("/decisions", a.decide)
 }
 
-// actor names who made a change, for the ledger and evidence rows. It is the
-// identity requireAuth accepted; M7 makes it a real user.
-func actor(r *http.Request) string {
-	if id, ok := r.Context().Value(identityCtxKey{}).(auth.Identity); ok && id.Subject != "" {
-		return id.Subject
-	}
-	return "unknown"
-}
-
 // pathDigest parses the {digest} URL parameter at the edge, so the services
 // below never see a malformed one.
 func (a *api) pathDigest(w http.ResponseWriter, r *http.Request) (model.Digest, bool) {
@@ -82,6 +73,9 @@ func (a *api) listStages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) setStages(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r, "change the lifecycle stages") {
+		return
+	}
 	var body stagesBody
 	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	dec.DisallowUnknownFields()
@@ -144,7 +138,7 @@ type stateResponse struct {
 
 func (a *api) getSubject(w http.ResponseWriter, r *http.Request) {
 	digest, ok := a.pathDigest(w, r)
-	if !ok {
+	if !ok || !a.requireSubject(w, r, digest, auth.RoleRead) {
 		return
 	}
 	s, err := a.lifecycle.GetSubject(r.Context(), digest)
@@ -205,7 +199,7 @@ func evidenceJSON(ev evidence.Evidence) evidenceResponse {
 
 func (a *api) attachEvidence(w http.ResponseWriter, r *http.Request) {
 	digest, ok := a.pathDigest(w, r)
-	if !ok {
+	if !ok || !a.requireSubject(w, r, digest, auth.RoleWrite) {
 		return
 	}
 	size := int64(-1)
@@ -238,7 +232,7 @@ func (a *api) attachEvidence(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) listEvidence(w http.ResponseWriter, r *http.Request) {
 	digest, ok := a.pathDigest(w, r)
-	if !ok {
+	if !ok || !a.requireSubject(w, r, digest, auth.RoleRead) {
 		return
 	}
 	list, err := a.evidence.List(r.Context(), digest)
@@ -255,7 +249,7 @@ func (a *api) listEvidence(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) getEvidence(w http.ResponseWriter, r *http.Request) {
 	digest, ok := a.pathDigest(w, r)
-	if !ok {
+	if !ok || !a.requireSubject(w, r, digest, auth.RoleRead) {
 		return
 	}
 	ev, rc, err := a.evidence.Open(r.Context(), digest, chi.URLParam(r, "id"))
@@ -326,6 +320,11 @@ func (a *api) change(w http.ResponseWriter, r *http.Request, apply func(context.
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_JSON", "request body must be {\"repository\", \"stage\", \"reason\"}")
 		return
 	}
+	// Promoting and revoking are writes to the repository whose ledger rows
+	// they append.
+	if _, ok := a.requireRepo(w, r, body.Repository, auth.RoleWrite); !ok {
+		return
+	}
 	ev, err := apply(r.Context(), lifecycle.ChangeParams{
 		Digest:     digest,
 		Repository: body.Repository,
@@ -342,7 +341,7 @@ func (a *api) change(w http.ResponseWriter, r *http.Request, apply func(context.
 
 func (a *api) listEvents(w http.ResponseWriter, r *http.Request) {
 	digest, ok := a.pathDigest(w, r)
-	if !ok {
+	if !ok || !a.requireSubject(w, r, digest, auth.RoleRead) {
 		return
 	}
 	events, err := a.lifecycle.Events(r.Context(), digest)

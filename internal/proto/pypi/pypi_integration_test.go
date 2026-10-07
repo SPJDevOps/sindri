@@ -204,7 +204,7 @@ func doMultipartWithHeaders(t *testing.T, h http.Handler, path string, fields ma
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, &body)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	if withBasic {
-		req.SetBasicAuth("token", "anything")
+		req.SetBasicAuth("token", testToken)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -236,9 +236,8 @@ func mustDo(t *testing.T, h http.Handler, method, path string, body []byte, cont
 		rdr = bytes.NewReader(body)
 	}
 	req := httptest.NewRequestWithContext(t.Context(), method, path, rdr)
-	if strings.HasPrefix(path, "/api/") {
-		req.Header.Set("Authorization", "Bearer "+testToken)
-	}
+	// Every route needs a credential since M7: there is no anonymous pull.
+	req.Header.Set("Authorization", "Bearer "+testToken)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -287,7 +286,7 @@ func newTestHandler(t *testing.T) http.Handler {
 			Auth:      auth.NewStaticBearer(testToken),
 			RequestID: server.RequestIDFromContext,
 		}),
-		PyPI:   pypi.Handler(pypi.Options{Resolver: resolver}),
+		PyPI:   pypi.Handler(pypi.Options{Resolver: resolver, Auth: auth.NewStaticBearer(testToken)}),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {

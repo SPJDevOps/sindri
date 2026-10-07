@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/cas"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/registry"
@@ -20,6 +21,9 @@ import (
 type Options struct {
 	Resolver *resolve.Resolver
 	CAS      *cas.Store
+	// Auth authenticates every request, /v2/ included. There is no anonymous
+	// pull (ADR 18).
+	Auth auth.Authenticator
 }
 
 // Handler returns the /v2 handler. Mount it with r.Mount("/v2", ...).
@@ -34,8 +38,45 @@ func Handler(opts Options) http.Handler {
 	if opts.CAS == nil {
 		panic("oci.Handler: nil cas")
 	}
+	if opts.Auth == nil {
+		panic("oci.Handler: nil authenticator")
+	}
 	h := &handler{res: opts.Resolver, reg: opts.Resolver.Registry(), cas: opts.CAS}
-	return http.HandlerFunc(h.serve)
+	return auth.Middleware(opts.Auth, denyUnauthenticated)(http.HandlerFunc(h.serve))
+}
+
+// denyUnauthenticated answers with the challenge docker and other OCI
+// clients follow: Basic, after which they resend every request with the
+// credentials from `docker login`.
+func denyUnauthenticated(w http.ResponseWriter, _ *http.Request, _ error) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="sindri"`)
+	writeError(w, http.StatusUnauthorized, CodeUnauthorized, "authentication required")
+}
+
+// authorize checks the caller against the repository a request resolved to.
+// A push that would create a repository needs the admin role. A caller who may not read a repository
+// is told the name is unknown, so names are not disclosed to them.
+func (h *handler) authorize(w http.ResponseWriter, r *http.Request, repo model.Repository, need auth.Role) bool {
+	p, _ := auth.PrincipalFromContext(r.Context())
+	if repo.ID == "" {
+		if need == auth.RoleRead {
+			return true // nothing exists to read; the handler answers unknown
+		}
+		if err := auth.AuthorizeGlobal(p, "create a repository by pushing to it"); err != nil {
+			writeError(w, http.StatusForbidden, CodeDenied, "pushing to "+repo.Name+" would create a repository, which needs the admin role")
+			return false
+		}
+		return true
+	}
+	if err := auth.Authorize(p, repo, need); err != nil {
+		if need == auth.RoleWrite && auth.Authorize(p, repo, auth.RoleRead) == nil {
+			writeError(w, http.StatusForbidden, CodeDenied, "requested access to the resource is denied")
+			return false
+		}
+		writeError(w, http.StatusNotFound, CodeNameUnknown, "repository name not known to registry")
+		return false
+	}
+	return true
 }
 
 type handler struct {
@@ -70,6 +111,15 @@ func (h *handler) dispatch(w http.ResponseWriter, r *http.Request, path string) 
 	repo, image, rest, err := h.res.SplitOCIPath(r.Context(), path)
 	if err != nil {
 		writeError(w, http.StatusNotFound, CodeNameUnknown, "repository name not known to registry")
+		return
+	}
+	// Reads need read. Everything else needs write, and so does every upload
+	// route: an upload session's status belongs to whoever is pushing.
+	need := auth.RoleWrite
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && !strings.HasPrefix(rest, "blobs/uploads") {
+		need = auth.RoleRead
+	}
+	if !h.authorize(w, r, repo, need) {
 		return
 	}
 	// clientPath is the original name clients address (repo + image), used in

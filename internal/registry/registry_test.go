@@ -34,12 +34,12 @@ func TestValidateRepoName(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateRepoName(tc.in)
+			err := ValidateRepoName(tc.in)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateRepoName(%q) = %v, wantErr %v", tc.in, err, tc.wantErr)
+				t.Fatalf("ValidateRepoName(%q) = %v, wantErr %v", tc.in, err, tc.wantErr)
 			}
 			if err != nil && !errors.Is(err, ErrInvalidInput) {
-				t.Fatalf("validateRepoName(%q) error does not wrap ErrInvalidInput: %v", tc.in, err)
+				t.Fatalf("ValidateRepoName(%q) error does not wrap ErrInvalidInput: %v", tc.in, err)
 			}
 		})
 	}

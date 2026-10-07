@@ -461,7 +461,7 @@ with their bug reintroduced.
 
 ---
 
-### M7 — Config as code, reconciler, OIDC and RBAC
+### M7 — Config as code, reconciler, OIDC and RBAC ✅
 
 **Goal.** Governance as code, in a form a one-person team will actually write. Real
 authentication. Guardrails teams cannot route around.
@@ -470,43 +470,43 @@ Read ARCHITECTURE.md section 8 in full before starting. This milestone is where 
 project either stays light for small teams or acquires the ceremony it was built to avoid.
 
 **Scope, configuration.**
-- Extend `sindri.yaml` from M1 with `repos:`, `lifecycle:`, and `defaults:` sections
-- **Short form** with type inference: `members` means virtual, `upstream` means proxy,
-  neither means hosted, both is a named error
-- Virtual protocol inferred from members, with all members required to share one protocol
-- Named upstream presets: `pypi`, `dockerhub`, `ghcr`, `npm`, `maven-central`, pinned in
-  the binary, each overridable by an explicit object
-- **Long form** `Repository` and `OrgPolicy` kinds, multi-document manifest directories
-- **One-way, total desugaring** into the long form; nothing downstream may branch on which
-  form was written
-- `defaults:` keyed by repository type. No `extends:`, per ADR 7
-- Bare member names resolve locally; a prefix is required to cross a namespace boundary
-- `sindri config check`: static validation, no database, no server, errors naming file,
-  line, and field
-- `sindri config show --expanded`: prints the desugared long form
-- `credentials:` section for proxy upstream secrets, with `${VAR}` substitution, per
-  [ADR 15](docs/adr/0015-upstream-credentials-source-deferred-to-m7.md): a config-backed
-  `remote.Credentials` wired into `serve`, an unknown reference rejected at reconcile time
-  (replacing M5's blanket rejection), secrets redacted by `config show`, and no anonymous
-  read access to a proxy that holds credentials
+- [x] Extend `sindri.yaml` from M1 with `repos:`, `lifecycle:`, and `defaults:` sections
+- [x] **Short form** with type inference: `members` means virtual, `upstream` means proxy,
+    neither means hosted, both is a named error
+- [x] Virtual protocol inferred from members, with all members required to share one protocol
+- [x] Named upstream presets: `pypi`, `dockerhub`, `ghcr`, `npm`, `maven-central`, pinned in
+    the binary, each overridable by an explicit object
+- [x] **Long form** `Repository` and `OrgPolicy` kinds, multi-document manifest directories
+- [x] **One-way, total desugaring** into the long form; nothing downstream may branch on which
+    form was written
+- [x] `defaults:` keyed by repository type. No `extends:`, per ADR 7
+- [x] Bare member names resolve locally; a prefix is required to cross a namespace boundary
+- [x] `sindri config check`: static validation, no database, no server, errors naming file,
+    line, and field
+- [x] `sindri config show --expanded`: prints the desugared long form
+- [x] `credentials:` section for proxy upstream secrets, with `${VAR}` substitution, per
+    [ADR 15](docs/adr/0015-upstream-credentials-source-deferred-to-m7.md): a config-backed
+    `remote.Credentials` wired into `serve`, an unknown reference rejected at reconcile time
+    (replacing M5's blanket rejection), secrets redacted by `config show`, and no anonymous
+    read access to a proxy that holds credentials
 
 **Scope, reconciliation.**
-- One reconciler, two triggers: `serve --config` converges on boot and on `SIGHUP`, and
-  `sindri apply -f <dir>` converges from CI against a running server
-- `sindri diff -f <dir>` reports drift without changing anything
-- Config-managed and API-managed repositories distinguished so the two never fight over a
-  row
-- `OrgPolicy` modes `centralized`, `delegated`, `hybrid`; an absent `OrgPolicy` means
-  `delegated` with no mandatory repositories
-- `locked: true` repositories: referenceable, never overridable
-- Invariant I4 enforced here: lifecycle configuration on a proxy repository is rejected at
-  reconcile time
+- [x] One reconciler, two triggers: `serve --config` converges on boot and on `SIGHUP`, and
+    `sindri apply -f <dir>` converges from CI against a running server
+- [x] `sindri diff -f <dir>` reports drift without changing anything
+- [x] Config-managed and API-managed repositories distinguished so the two never fight over a
+    row
+- [x] `OrgPolicy` modes `centralized`, `delegated`, `hybrid`; an absent `OrgPolicy` means
+    `delegated` with no mandatory repositories
+- [x] `locked: true` repositories: referenceable, never overridable
+- [x] Invariant I4 enforced here: lifecycle configuration on a proxy repository is rejected at
+    reconcile time
 
 **Scope, identity.**
-- OIDC authorization code flow, token validation, JWKS caching with refresh
-- Group-to-role mapping; group membership resolved live at request time, never stored
-- RBAC enforced on every route: both adapters, the management API, and the UI
-- Machine tokens for CI, scoped to a repository and a role
+- [x] OIDC authorization code flow, token validation, JWKS caching with refresh
+- [x] Group-to-role mapping; group membership resolved live at request time, never stored
+- [x] RBAC enforced on every route: both adapters, the management API, and the UI
+- [x] Machine tokens for CI, scoped to a repository and a role
 
 **Out of scope.** Git polling; v1 reconciles on boot or from CI, and an operator can come
 later without changing the format. SAML and LDAP are commercial.
@@ -528,7 +528,10 @@ installs must stay a lookup.
 something re-applied, which recreates exactly the invisible-admin problem
 config-as-code exists to remove.
 
-**Gate.**
+**Gate.** Verified on 2026-10-02 with Go 1.27.1, golangci-lint v2.13.2, by
+`scripts/m7-config-gate.sh` against the Compose stack, which includes a real
+`docker login`, push, and pull. The twine and pip gate (`scripts/pypi-twine-gate.sh`)
+was re-run with credentials.
 ```bash
 # Short form: a complete setup in one file, no apply step
 ./bin/sindri config check  -f testdata/config/sindri.yaml
@@ -559,6 +562,52 @@ Integration tests, against a stub OIDC provider, that assert:
 9. Adding a user to a group in the identity provider grants access with **no** re-apply
 
 Test 1 is the one that keeps the two forms honest for the life of the project.
+
+The tests that cover each gate item:
+
+| # | Test |
+|---|---|
+| 1 | `TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState` (`internal/reconcile`) and the tree-level `TestManifests_ShortAndLongFormsAreIdentical` (`internal/config`) |
+| 2 | `TestDesugar_Rejects/MembersAndUpstream` and `.../VirtualMembersDisagreeOnProtocol`, plus `TestValidateSet_Rejects/VirtualMixesProtocols` for the long form |
+| 3 | `TestServe_ReconcilesOnBootAndOnSIGHUP` (`cmd/sindri`) |
+| 4 | `TestReconcile_SecondRunIsNoOp`, `TestReconcile_DiffReportsManualDrift` |
+| 5 | `TestReconcile_TeamCannotOverrideLockedOrgRepository` |
+| 6 | `TestReconcile_RejectsLifecycleOnProxy` |
+| 7 | `TestRBAC_TeamPaymentsCanPullCannotPush` (`cmd/sindri`, stub OIDC provider) |
+| 8 | `TestRBAC_AnonymousPullAndInstallRefused` |
+| 9 | `TestRBAC_GroupChangeAtIdPGrantsAccessWithoutReapply` |
+
+Tests 1, 8, and 9 were each checked to fail with their bug reintroduced:
+
+- **Test 1:** a desugarer that drops `defaults.proxy.ttl`.
+- **Test 8:** an OCI adapter that lets an anonymous GET through.
+- **Test 9:** an OIDC verifier that caches groups by user.
+
+**What M7 decided.** The configuration decisions are in
+[ADR 17](docs/adr/0017-config-kinds-namespaces-and-reconciliation.md) and the identity
+decisions in [ADR 18](docs/adr/0018-authentication-and-rbac-in-v1.md).
+
+Configuration:
+- A namespace prefixes the repository name.
+- Long-form members are type-qualified (`hosted/internal-py`), and a bare ref never
+  leaves its namespace.
+- There are three kinds: `Repository`, `OrgPolicy`, and `Lifecycle`. `defaults:` is
+  short-form sugar only.
+- A config row records which trigger owns it, and neither trigger changes the other's.
+  The gate therefore runs the long form against a second, empty database.
+- Pruning needs `--prune`, and `serve --config` never deletes.
+
+Identity:
+- People use an identity-provider ID token as the Basic password.
+- Groups are read from each request's token and stored nowhere.
+- Machine tokens are scoped to a repository, a namespace, or the server.
+- There is no anonymous access at all.
+- A virtual repository answers only from members the caller can read.
+
+Two things this milestone could not finish:
+- The UI is guarded (`auth.GuardUI`, `server.Options.UI`) but not built; that is M8.
+- Owners beyond `repository:<name>` (ADR 16) were not added, since authorization works
+  through the owning repository.
 
 ---
 

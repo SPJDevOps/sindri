@@ -145,6 +145,10 @@ func (s *Service) change(ctx context.Context, p ChangeParams, action Action) (Ev
 
 	switch action {
 	case ActionApprove:
+		if !repoAllowsStage(repo.Config, stage.Name) {
+			return Event{}, fmt.Errorf("%w: %s may promote only into the stages its lifecycle lists, and %s is not one of them",
+				ErrNotPromotable, repo.Name, stage.Name)
+		}
 		if err := evaluateGates(ctx, q, p.Digest, stage); err != nil {
 			return Event{}, err
 		}
@@ -187,6 +191,22 @@ func (s *Service) change(ctx context.Context, p ChangeParams, action Action) (Ev
 		Reason:     row.Reason,
 		At:         row.At,
 	}, nil
+}
+
+// repoAllowsStage reads the repository's lifecycle restriction from its config
+// column (written by the registry, see registry.repoConfig). Absent means every
+// stage. Revocation is never restricted: withdrawing trust must always work.
+func repoAllowsStage(cfg []byte, stage string) bool {
+	var rc struct {
+		LifecycleStages *[]string `json:"lifecycleStages"`
+	}
+	if err := json.Unmarshal(cfg, &rc); err != nil {
+		return false // an unreadable restriction denies, it does not allow
+	}
+	if rc.LifecycleStages == nil {
+		return true
+	}
+	return (&model.RepoLifecycle{Stages: *rc.LifecycleStages}).AllowsStage(stage)
 }
 
 // resolveTarget checks everything a ledger write depends on: the subject

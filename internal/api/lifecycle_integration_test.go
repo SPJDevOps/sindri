@@ -442,7 +442,7 @@ func newIdentityEnv(t *testing.T) *identityEnv {
 			Auth:      auth.NewStaticBearer(testToken),
 			RequestID: server.RequestIDFromContext,
 		}),
-		OCI:    oci.Handler(oci.Options{Resolver: resolver, CAS: casStore}),
+		OCI:    oci.Handler(oci.Options{Resolver: resolver, CAS: casStore, Auth: auth.NewStaticBearer(testToken)}),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -566,6 +566,7 @@ func pushTestImage(t *testing.T, h http.Handler, repo, tag, seed string, annotat
 		t.Fatal(err)
 	}
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/v2/"+repo+"/manifests/"+tag, bytes.NewReader(manifest))
+	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Content-Type", ocispec.MediaTypeImageManifest)
 	for k, v := range headers {
 		req.Header.Set(k, v)

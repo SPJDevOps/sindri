@@ -30,6 +30,8 @@ const (
 	CodeSizeInvalid       = "SIZE_INVALID"
 	CodeUnsupported       = "UNSUPPORTED"
 	CodeUnknown           = "UNKNOWN"
+	CodeUnauthorized      = "UNAUTHORIZED"
+	CodeDenied            = "DENIED"
 )
 
 // errorResponse is the OCI distribution error envelope.
@@ -75,7 +77,7 @@ func mapRegistryError(w http.ResponseWriter, err error) {
 	case errors.Is(err, storage.ErrUploadNotFound):
 		writeError(w, http.StatusNotFound, CodeBlobUploadUnknown, "blob upload unknown to registry")
 	default:
-		writeError(w, http.StatusInternalServerError, CodeUnsupported, "internal error")
+		writeError(w, http.StatusInternalServerError, CodeUnknown, "internal error")
 	}
 }
 

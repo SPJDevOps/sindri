@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -40,5 +41,37 @@ func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
 // Duration returns the value as a time.Duration.
 func (d Duration) Duration() time.Duration { return time.Duration(d) }
 
-// String renders the Go duration form.
-func (d Duration) String() string { return time.Duration(d).String() }
+// String renders the Go duration form without zero trailing units, so an
+// hour prints as 1h rather than 1h0m0s. It still parses with
+// time.ParseDuration.
+func (d Duration) String() string {
+	s := time.Duration(d).String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
+
+// MarshalJSON writes the duration as a Go duration string, so the expanded
+// manifests a CLI sends to the server read the way they were written.
+func (d Duration) MarshalJSON() ([]byte, error) { return []byte(`"` + d.String() + `"`), nil }
+
+// UnmarshalJSON accepts a Go duration string.
+func (d *Duration) UnmarshalJSON(raw []byte) error {
+	s := string(raw)
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return fmt.Errorf("duration %s needs a unit and quotes, for example \"30s\"", s)
+	}
+	parsed, err := time.ParseDuration(s[1 : len(s)-1])
+	if err != nil {
+		return fmt.Errorf("%s is not a duration: %w", s, err)
+	}
+	if parsed < 0 {
+		return fmt.Errorf("duration %s must not be negative", s)
+	}
+	*d = Duration(parsed)
+	return nil
+}

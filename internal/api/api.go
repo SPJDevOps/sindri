@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/spj/sindri/internal/auth"
+	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
@@ -33,6 +34,9 @@ type ErrorBody struct {
 	// Missing names the evidence types a refused promotion lacks
 	// (GATE_FAILED only).
 	Missing []string `json:"missing,omitempty"`
+	// Details locates each problem in a refused configuration, by file,
+	// line, and field.
+	Details []*config.FieldError `json:"details,omitempty"`
 }
 
 // Options wires the management API.
@@ -46,6 +50,15 @@ type Options struct {
 	Evidence  *evidence.Service
 	// RequestID extracts the request id set by the server middleware.
 	RequestID func(context.Context) string
+	// Credentials lists the credentials references the server defines, so a
+	// repository naming an unknown one is refused when it is created (ADR 15).
+	// Nil means none are defined.
+	Credentials func() map[string]struct{}
+	// Reconciler serves /config/diff and /config/apply. Nil leaves them
+	// unmounted.
+	Reconciler *reconcile.Reconciler
+	// Tokens serves /tokens. Nil leaves it unmounted.
+	Tokens *auth.TokenService
 }
 
 // Handler returns the /api/v1 chi router. Mount it with r.Mount("/api/v1", ...).
@@ -59,21 +72,27 @@ func Handler(opts Options) http.Handler {
 	if opts.RequestID == nil {
 		opts.RequestID = func(context.Context) string { return "" }
 	}
+	if opts.Credentials == nil {
+		opts.Credentials = func() map[string]struct{} { return nil }
+	}
 
 	if (opts.Lifecycle == nil) != (opts.Evidence == nil) {
 		panic("api.Handler: Lifecycle and Evidence must be set together")
 	}
 
 	a := &api{
-		reg:       opts.Registry,
-		lifecycle: opts.Lifecycle,
-		evidence:  opts.Evidence,
-		auth:      opts.Auth,
-		requestID: opts.RequestID,
+		reg:         opts.Registry,
+		lifecycle:   opts.Lifecycle,
+		evidence:    opts.Evidence,
+		auth:        opts.Auth,
+		requestID:   opts.RequestID,
+		credentials: opts.Credentials,
+		reconciler:  opts.Reconciler,
+		tokens:      opts.Tokens,
 	}
 
 	r := chi.NewRouter()
-	r.Use(a.requireAuth)
+	r.Use(auth.Middleware(a.auth, a.denyUnauthenticated))
 
 	r.Route("/repositories", func(r chi.Router) {
 		r.Get("/", a.listRepositories)
@@ -91,34 +110,34 @@ func Handler(opts Options) http.Handler {
 	if a.lifecycle != nil {
 		a.mountIdentity(r)
 	}
+	if a.reconciler != nil {
+		r.Post("/config/diff", a.configDiff)
+		r.Post("/config/apply", a.configApply)
+	}
+	if a.tokens != nil {
+		r.Get("/tokens", a.listTokens)
+		r.Post("/tokens", a.createToken)
+		r.Delete("/tokens/{id}", a.revokeToken)
+	}
 
 	return r
 }
 
 type api struct {
-	reg       *registry.Registry
-	lifecycle *lifecycle.Service
-	evidence  *evidence.Service
-	auth      auth.Authenticator
-	requestID func(context.Context) string
+	reg         *registry.Registry
+	lifecycle   *lifecycle.Service
+	evidence    *evidence.Service
+	auth        auth.Authenticator
+	requestID   func(context.Context) string
+	credentials func() map[string]struct{}
+	reconciler  *reconcile.Reconciler
+	tokens      *auth.TokenService
 }
-
-func (a *api) requireAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, err := a.auth.Authenticate(r.Context(), r)
-		if err != nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="sindri"`)
-			a.writeError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "bearer token required")
-			return
-		}
-		ctx := context.WithValue(r.Context(), identityCtxKey{}, id)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-type identityCtxKey struct{}
 
 func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r, "create repositories") {
+		return
+	}
 	var body struct {
 		Name               string   `json:"name"`
 		Type               string   `json:"type"`
@@ -129,6 +148,8 @@ func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {
 		NegativeTTLSeconds int32    `json:"negative_ttl_seconds"`
 		Members            []string `json:"members"`
 		LifecycleStages    []string `json:"lifecycle_stages"`
+		Read               []string `json:"read"`
+		Write              []string `json:"write"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_JSON", "request body must be JSON")
@@ -148,6 +169,7 @@ func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {
 		NegativeTTL:     body.NegativeTTLSeconds,
 		Members:         body.Members,
 		LifecycleStages: body.LifecycleStages,
+		Access:          model.Access{Read: body.Read, Write: body.Write},
 	}
 	if err := reconcile.ValidateRepository(reconcile.RepositorySpec{
 		Name:            params.Name,
@@ -157,7 +179,7 @@ func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {
 		CredentialsRef:  params.CredentialsRef,
 		Members:         params.Members,
 		LifecycleStages: params.LifecycleStages,
-	}); err != nil {
+	}, a.credentials()); err != nil {
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
@@ -183,9 +205,14 @@ func (a *api) listRepositories(w http.ResponseWriter, r *http.Request) {
 		a.writeRegistryError(w, r, err)
 		return
 	}
+	// A page lists only what the caller may read; the cursor still walks
+	// every name, so paging stays stable as grants change.
+	p := principal(r)
 	items := make([]repositoryResponse, 0, len(page.Items))
 	for _, repo := range page.Items {
-		items = append(items, repositoryJSON(repo))
+		if auth.Authorize(p, repo, auth.RoleRead) == nil {
+			items = append(items, repositoryJSON(repo))
+		}
 	}
 	a.writeJSON(w, r, http.StatusOK, listResponse[repositoryResponse]{
 		Items:      items,
@@ -194,15 +221,17 @@ func (a *api) listRepositories(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) getRepository(w http.ResponseWriter, r *http.Request) {
-	repo, err := a.reg.GetRepository(r.Context(), chi.URLParam(r, "name"))
-	if err != nil {
-		a.writeRegistryError(w, r, err)
+	repo, ok := a.requireRepo(w, r, chi.URLParam(r, "name"), auth.RoleRead)
+	if !ok {
 		return
 	}
 	a.writeJSON(w, r, http.StatusOK, repositoryJSON(repo))
 }
 
 func (a *api) deleteRepository(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r, "delete repositories") {
+		return
+	}
 	if err := a.reg.DeleteRepository(r.Context(), chi.URLParam(r, "name")); err != nil {
 		a.writeRegistryError(w, r, err)
 		return
@@ -211,6 +240,9 @@ func (a *api) deleteRepository(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listPackages(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireRepo(w, r, chi.URLParam(r, "repo"), auth.RoleRead); !ok {
+		return
+	}
 	limit, err := parseLimit(r)
 	if err != nil {
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
@@ -236,6 +268,9 @@ func (a *api) listPackages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listVersions(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireRepo(w, r, chi.URLParam(r, "repo"), auth.RoleRead); !ok {
+		return
+	}
 	limit, err := parseLimit(r)
 	if err != nil {
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
@@ -262,6 +297,9 @@ func (a *api) listVersions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) publishFile(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireRepo(w, r, chi.URLParam(r, "repo"), auth.RoleWrite); !ok {
+		return
+	}
 	mediaType := r.Header.Get("Content-Type")
 	size := int64(-1)
 	if cl := r.Header.Get("Content-Length"); cl != "" {
@@ -288,6 +326,9 @@ func (a *api) publishFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) getFile(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireRepo(w, r, chi.URLParam(r, "repo"), auth.RoleRead); !ok {
+		return
+	}
 	file, rc, err := a.reg.GetFile(r.Context(),
 		chi.URLParam(r, "repo"),
 		chi.URLParam(r, "name"),
@@ -315,6 +356,9 @@ func (a *api) getFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) deleteFile(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireRepo(w, r, chi.URLParam(r, "repo"), auth.RoleWrite); !ok {
+		return
+	}
 	err := a.reg.DeleteFile(r.Context(),
 		chi.URLParam(r, "repo"),
 		chi.URLParam(r, "name"),
@@ -336,6 +380,8 @@ func (a *api) writeRegistryError(w http.ResponseWriter, r *http.Request, err err
 		a.writeError(w, r, http.StatusConflict, "ALREADY_EXISTS", "resource already exists")
 	case errors.Is(err, registry.ErrHasHistory):
 		a.writeError(w, r, http.StatusConflict, "HAS_HISTORY", err.Error())
+	case errors.Is(err, registry.ErrConfigManaged):
+		a.writeError(w, r, http.StatusConflict, "CONFIG_MANAGED", err.Error())
 	case errors.Is(err, registry.ErrInvalidInput), errors.Is(err, registry.ErrCycle), errors.Is(err, registry.ErrReadOnly):
 		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 	default:
@@ -375,12 +421,14 @@ type listResponse[T any] struct {
 }
 
 type repositoryResponse struct {
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Protocol  string `json:"protocol"`
-	Locked    bool   `json:"locked"`
-	ManagedBy string `json:"managed_by"`
-	CreatedAt string `json:"created_at"`
+	Name      string       `json:"name"`
+	Type      string       `json:"type"`
+	Protocol  string       `json:"protocol"`
+	Locked    bool         `json:"locked"`
+	ManagedBy string       `json:"managed_by"`
+	CreatedAt string       `json:"created_at"`
+	Namespace string       `json:"namespace,omitempty"`
+	Access    model.Access `json:"access"`
 }
 
 type packageResponse struct {
@@ -407,6 +455,8 @@ func repositoryJSON(repo model.Repository) repositoryResponse {
 		Locked:    repo.Locked,
 		ManagedBy: string(repo.ManagedBy),
 		CreatedAt: repo.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		Namespace: repo.Namespace,
+		Access:    repo.Access,
 	}
 }
 

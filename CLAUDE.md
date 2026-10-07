@@ -68,6 +68,10 @@ storage suite lives in `internal/storage/storagetest` and is run per backend by
 `internal/storage/conformance_integration_test.go`. Test fakes run it too, so a fake cannot
 behave differently from the thing it fakes.
 
+**Full-stack integration tests live in `cmd/sindri`** and run `serve` through the same
+wiring as the binary (`wire.go`), with seams for reload signals, the bound address, the
+blob store, and the identity provider. The stub provider is `internal/auth/oidctest`.
+
 **Integration tests get their dependencies from `internal/testsupport`**, which is built
 only under the `integration` tag and starts real Postgres and real MinIO through
 testcontainers. Container images are pinned there; MinIO comes from
@@ -89,6 +93,16 @@ Sugar may make hosted, proxy, and virtual repositories cheap to declare. It may 
 them invisible: that separation is the dependency-confusion defence. See
 ARCHITECTURE.md section 8 and ADR 7.
 
+There are two golden tests. `TestManifests_ShortAndLongFormsAreIdentical` compares the
+loaded trees. `TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState` compares the
+database each form produces. A new configuration field is not done until
+`testdata/config/sindri.yaml` and `testdata/manifests/` both use it.
+
+The reconciler owns rows with `managed_by = config`, and records which trigger owns
+each (`serve --config` or `sindri apply`). The API, the reconciler, and the two
+triggers never change a row another owns. The reconciler never deletes without
+`--prune` (ADR 17).
+
 ## Security rules
 
 This is a registry. Supply-chain security is the product, so these are not style points.
@@ -103,6 +117,10 @@ This is a registry. Supply-chain security is the product, so these are not style
 4. **Never log credentials, tokens, or full request bodies.** Log a request id.
 5. **Validate at write time**, not on the download path.
 6. `gosec` findings are bugs. Fix them or annotate with a written justification.
+7. **Every route authorizes through `auth.Authorize`.** There is no anonymous path in
+   v1, and a new route that skips the check is a security bug, not an omission
+   (ADR 18). Group membership comes from the caller's token on each request; never
+   store or cache it.
 
 ## Operational rules
 

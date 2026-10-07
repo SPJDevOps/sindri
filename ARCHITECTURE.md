@@ -255,7 +255,7 @@ repositories(
   protocol,                                -- oci | pypi
   config jsonb, locked bool, managed_by,   -- config | api
   created_at
-)
+)  -- config: {namespace, source: file|apply, access: {read, write}, lifecycleStages}
 repository_members(virtual_repo_id FK, member_repo_id FK, position,
                    PRIMARY KEY (virtual_repo_id, member_repo_id))
 remotes(repo_id PK FK, upstream_url, credentials_ref,
@@ -273,6 +273,23 @@ manifest_children(parent_digest FK, child_digest FK,
 repository_blobs(repo_id FK, digest FK,
                  PRIMARY KEY (repo_id, digest))   -- OCI blob membership (I2)
 ```
+
+`repositories.config` carries what authorization and the reconciler read on
+the request path. That covers the owning team's namespace, which reconciler
+trigger owns the row, the groups granted read and write, and the stages a
+hosted repository may promote into. A pull then costs one row lookup, and that
+row already holds its access list (ADR 17, ADR 18).
+
+```sql
+org_policy(id = 1, spec jsonb, updated_at)           -- the last applied OrgPolicy
+machine_tokens(id PK, name, token_hash UNIQUE,       -- SHA-256 only, never the token
+               repo_id FK NULL, namespace NULL,      -- at most one scope
+               role,                                 -- read | write | admin
+               created_by, created_at, expires_at, revoked_at)
+```
+
+No table holds group membership. Groups are read from the caller's token on
+every request (ADR 5).
 
 `normalized_name` is the protocol's canonical form, lowercased with separators folded for
 PyPI per PEP 503. Uniqueness is on the normalized form so that `Foo.Bar` and `foo-bar`
@@ -362,6 +379,9 @@ such as manifests and evidence documents, where a staging round trip buys nothin
 | `/api/v1/lifecycle/stages` | ordered stages and their gates |
 | `/api/v1/subjects/{digest}/...` | identity, evidence, promote, revoke, ledger |
 | `/api/v1/decisions?digest=&environment=` | "is this digest approved for this environment" |
+| `/api/v1/config/diff`, `/api/v1/config/apply` | the server half of `sindri diff` and `sindri apply` |
+| `/api/v1/tokens` | machine tokens for CI: issue, list, revoke |
+| `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/whoami` | browser sign-in through the identity provider |
 | `/ui/...` | read-only web interface |
 | `/healthz`, `/readyz` | liveness and readiness |
 | `/metrics` | Prometheus |
@@ -370,6 +390,28 @@ such as manifests and evidence documents, where a staging round trip buys nothin
 process killed for someone else's problem. `/readyz` checks the database, and the blob
 store when the backend offers a cheap probe. Both report which check failed, never why:
 the cause goes to the log, tied to the same request id.
+
+### Authentication and authorization
+
+Every route except `/healthz`, `/readyz`, `/metrics`, and `/auth/*` needs a
+credential. There is no anonymous pull in v1. A credential arrives as a Bearer
+token or as the password of HTTP Basic, which is what docker, pip, and twine
+send. Its shape picks the verifier:
+
+- a `sindri_` machine token, looked up by hash
+- an identity-provider JWT, verified against the provider's cached JWKS
+- the bootstrap token
+
+Users' groups come from their token on each request and are never stored.
+
+`auth.Authorize(principal, repository, role)` is the one authorization
+function, and every surface calls it: both adapters, the management API, and
+the UI guard. It is pure and reads only the repository row. Write implies read
+and admin implies everything. A caller who cannot read a repository is told it
+does not exist. A virtual repository answers only from members the caller can
+read, and a name claimed by an unreadable hosted member is a miss, never a
+proxy fall-through (I5). The browser session cookie is honoured only on GET and
+HEAD, by the read-only UI and `/auth/whoami`. See ADR 18.
 
 Routing uses `chi`. The stdlib `ServeMux` cannot express the OCI routes, because an OCI
 repository name legitimately contains slashes in the middle of a path
@@ -455,6 +497,13 @@ An absent `OrgPolicy` means `mode: delegated` with no mandatory repositories. A 
 team therefore never writes one, and adopting governance later is adding a file rather
 than migrating a format.
 
+The long form has three kinds: `Repository`, `OrgPolicy`, and `Lifecycle`. The short
+`lifecycle:` section desugars into the last. A team's repositories carry
+`metadata.namespace`, which prefixes the name: `namespace: payments`, `name: python` is
+the repository `payments/python`. `OrgPolicy.spec.namespaces` names who may apply each
+namespace. They may change only that namespace, and never a `locked` repository
+(ADR 17).
+
 ### 8.2 Inference rules
 
 Repository type is inferred from which key is present, so `type:` is never required:
@@ -473,7 +522,10 @@ all.
 
 Bare member names resolve within the same file. A prefix (`org/`, another team's
 namespace) is required to reach across a boundary, which makes every cross-boundary
-reference visibly one.
+reference visibly one. In the long form a member is `ref: <type>/<ref>`, so the
+expanded form names every member's type. Inside namespace `payments`,
+`hosted/internal` is `payments/internal`, `hosted/org/base` is the organisation's
+`base`, and `hosted/search/index` is team `search`'s `index`.
 
 `upstream` accepts a named preset (`pypi`, `dockerhub`, `ghcr`, `npm`, `maven-central`)
 or an explicit object. Presets carry the upstream URL and sensible TTLs so that nobody
@@ -512,7 +564,14 @@ The config file is read-only to the process, so it mounts read-only into a conta
 
 Repositories created through the management API are marked API-managed and are
 distinguished from config-managed ones, so the reconciler and the API never fight over the
-same row.
+same row. Among config-managed rows, each records which trigger owns it, and neither
+trigger changes the other's.
+
+A reconcile is one transaction: policy, stages, and repositories commit together.
+`sindri diff` is the same reconcile, rolled back. A config-managed repository that the
+configuration no longer lists is reported as orphaned. Only `sindri apply --prune` deletes
+it, so removing a line from a manifest never silently deletes packages. A repository's
+type and protocol are immutable. Changing either is a deliberate delete and re-create.
 
 ### 8.5 Power without inheritance chains
 

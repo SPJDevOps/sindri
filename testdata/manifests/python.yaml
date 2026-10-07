@@ -1,0 +1,53 @@
+# The long form of the Python repositories in testdata/config/sindri.yaml,
+# with every inference and default written out.
+kind: Repository
+metadata:
+  name: internal-py
+spec:
+  type: hosted
+  protocol: pypi
+  access:
+    read: [team:platform, team:payments]
+    write: [team:platform]
+---
+kind: Repository
+metadata:
+  name: pypi
+spec:
+  type: proxy
+  protocol: pypi
+  upstream:
+    url: https://pypi.org/simple
+    ttl: 30m
+    negativeTtl: 5m
+  access:
+    read: [authenticated]
+---
+kind: Repository
+metadata:
+  name: python
+spec:
+  type: virtual
+  protocol: pypi
+  members:
+    - ref: hosted/internal-py
+    - ref: proxy/pypi
+  access:
+    read: [team:platform, team:payments]
+---
+# Test-only: covers upstream.credentials in the golden tests. The upstream is
+# under .invalid (RFC 2606), so the credentials are never sent anywhere. The
+# server applying this must define `mirror` in its credentials section.
+kind: Repository
+metadata:
+  name: pypi-mirror
+spec:
+  type: proxy
+  protocol: pypi
+  upstream:
+    url: https://pypi.mirror.invalid/simple
+    ttl: 30m
+    negativeTtl: 5m
+    credentials: mirror
+  access:
+    read: [authenticated]

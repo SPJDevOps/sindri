@@ -25,15 +25,8 @@ func (h *handler) handleUpload(w http.ResponseWriter, r *http.Request, repo stri
 		return
 	}
 
-	// Twine always sends Basic credentials. M4 accepts any Basic header
-	// without validating identity (ADR 12); M7 wires real auth.
-	user, _, ok := r.BasicAuth()
-	if !ok || user == "" {
-		w.Header().Set("WWW-Authenticate", `Basic realm="sindri"`)
-		writeError(w, http.StatusUnauthorized, "basic authentication required")
-		return
-	}
-
+	// Twine's Basic credentials were verified, and the write role checked,
+	// before dispatch reached here (ADR 18).
 	repoRow, err := h.reg.RequirePyPIRepository(r.Context(), repo)
 	if err != nil {
 		mapRegistryError(w, err)

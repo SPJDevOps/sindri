@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run the upstream OCI distribution-spec conformance suite against a local
 # Sindri instance. Creates the conformance namespace via the management API
-# first (M3 does not auto-create repositories).
+# first. Since M7 every route needs a credential; the suite sends the token as
+# the Basic password, the same way docker does.
 #
 # Usage:
 #   make up && make build
@@ -44,6 +45,8 @@ echo "running conformance against ${OCI_ROOT_URL} namespace=${OCI_NAMESPACE}"
 docker run --rm \
   -e OCI_ROOT_URL="${OCI_ROOT_URL}" \
   -e OCI_NAMESPACE="${OCI_NAMESPACE}" \
+  -e OCI_USERNAME=conformance \
+  -e OCI_PASSWORD="${SINDRI_TOKEN}" \
   -e OCI_TEST_PUSH=1 \
   -e OCI_TEST_PULL=1 \
   -e OCI_TEST_CONTENT_MANAGEMENT=1 \
