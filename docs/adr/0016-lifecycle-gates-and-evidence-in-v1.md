@@ -89,6 +89,9 @@ are deployed.
   `/subjects/{digest}/evidence/{id}`, which is scoped by subject.
 - Garbage collection (M8) must treat `subjects` and `evidence.blob_digest` as roots. The
   foreign keys to `blobs` make a mistake here fail loudly rather than corrupt anything.
+  *Refined by [ADR 19](0019-garbage-collection-roots-write-intent-and-sweep.md): a
+  subject is a root only when it has ledger history or evidence, so an untagged,
+  unpromoted image is collected.*
 - Gate configuration changes are not audited. Only the promotions they allowed are.
   Auditing policy changes is a follow-up that fits the commercial audit-retention
   feature.

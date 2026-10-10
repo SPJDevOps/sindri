@@ -611,43 +611,112 @@ Two things this milestone could not finish:
 
 ---
 
-### M8 — Read-only UI, background worker, release
+### M8a — Background worker, garbage collection, retention, audit ✅
+
+**Goal.** Sindri reclaims what nobody references and never what somebody does. M8 was split
+in two because this half can lose data and deserves a gate of its own.
+
+**Scope.**
+- [x] A `jobs` queue table and a worker, with the API and the worker linked only through the
+  database, so the post-v1 split modes are configuration rather than a rewrite
+- [x] Write intent: every writer touches a `blobs` row (`last_seen_at`) before writing or
+  relying on bytes, which closes the in-flight push race and ADR 13's orphaned bytes
+- [x] Garbage collection: roots are tags, PyPI files, proxy cache hits, evidence, and subjects
+  with lifecycle events or evidence; reachability over `manifest_children`; a grace period on
+  `last_seen_at`; a per-candidate sweep that re-checks under a row lock and deletes bytes
+  before it commits
+- [x] `sindri gc --dry-run` and `sindri gc` against a running server (`/api/v1/gc`,
+  `/api/v1/jobs/{id}`), admin only
+- [x] Retention: stale proxy cache eviction (`ttl` plus `proxyStaleAfter`), upload session
+  cleanup in storage (`BlobStore.PurgeUploads`) and in process memory
+- [x] `GET /api/v1/audit` over `lifecycle_events`, filtered to readable repositories, and the
+  same filter applied to `/subjects/{digest}/events`
+- [x] `worker:` section in the one configuration loader
+
+**Out of scope.** The UI and release work, which are M8b. A storage listing to find bytes
+written by pre-M8 binaries without a row: a documented leak, never a safety problem.
+
+**Watch out for.** Garbage collection deleting a blob that an in-flight push already
+referenced is the classic registry data-loss bug. The grace period alone does not prevent
+it; the write intent, the row lock, and the bytes-before-commit order do. Each has a test
+that was checked to fail with its guard removed.
+
+**Gate.** Verified on 2026-10-11 with Go 1.27.2 (lint under Go 1.27.1, the toolchain
+`make tools` builds golangci-lint v2.13.2 with), Docker 29.8, against the Compose stack.
+```bash
+make generate && git diff --exit-code internal/db
+make ci && make test-integration
+make up && make build && ./scripts/m8-gc-gate.sh
+# gc --dry-run lists an untagged, unpromoted image (manifest, config, layer);
+# gc deletes it; a tagged and a promoted image both survive, pull by digest,
+# and docker pull still works; a second dry run lists nothing
+```
+
+The tests that guard each part, and the bug each was shown to catch when it was put
+back in (★):
+
+| Concern | Test | ★ Reintroduced bug |
+|---|---|---|
+| In-flight push | `TestGC_InFlightPushSurvivesConcurrentCollection` | reserve after `CommitUpload`: row kept, bytes lost |
+| Dedup write | `TestGC_PushThatDedupsAgainstACollectedBlobRewritesItsBytes` | no touch before the dedup `Stat`; bytes deleted after commit |
+| Sweep re-check | `TestGC_SweepSkipsABlobReferencedAfterTheMarkSnapshot` | re-check removed |
+| Grace re-check | `TestGC_SweepRechecksTheGracePeriod` | sweep ignores `last_seen_at` |
+| Byte delete order | `TestGC_FailedByteDeleteRollsBackRows` | bytes deleted after the commit |
+| Roots | `TestGC_PromotedUntaggedManifestSurvives`, `TestGC_EvidenceBlobAndItsSubjectSurvive` | ledger, evidence dropped from the roots |
+| Closure | `TestGC_LayersOfATaggedIndexSurviveThroughEveryLevel`, `TestGCMark_MatchesReferenceReachabilityOnRandomGraphs` | non-recursive walk |
+| Queue | `TestQueue_ClaimIsExclusiveUnderConcurrency`, `TestQueue_SingletonEnqueueReturnsTheActiveJob` | no `SKIP LOCKED`; dedupe key ignored |
+| Worker | `TestWorker_LostLeaseCancelsTheHandler`, `TestServe_WorkerStopsBeforeTheDatabaseCloses` | lost lease ignored; pool closed before the worker |
+| Retention | `TestEvictProxyCache_HostedRepositoriesAreNeverTouched` | proxy-type filter removed |
+| Audit | `TestAudit_NonAdminSeesOnlyEventsOfReadableRepositories`, `TestEvents_HidesEventsInUnreadableRepositories` | repository filter removed, on `/audit`, `/events`, and subject states |
+| OCI edge | `TestOCI_PushPullAndPlacementGate` (dangling layer) | `MANIFEST_BLOB_UNKNOWN` mapping removed: a 500 |
+| Config | `TestLoad_ShortAndLongFormsAreIdentical` (now with `worker:`) | `worker: false` desugars differently |
+
+The storage conformance suite gained four `PurgeUploads` cases, run on the filesystem,
+S3 (MinIO), and memstore backends, including purging what a crashed process left behind.
+Two mutations first survived and the tests were strengthened until they did not: a grace
+mutation that broke the query rather than the behaviour, and a shutdown-order mutation the
+first version of the worker test could not see.
+
+**What M8a decided.** [ADR 19](docs/adr/0019-garbage-collection-roots-write-intent-and-sweep.md)
+and [ADR 20](docs/adr/0020-queue-table-and-background-worker.md).
+
+- Subjects are roots only with ledger history or evidence (refining ADR 16).
+- Every proxy cache hit is a root. Retention, not the collector, decides when a cached
+  copy goes: after `ttl` plus `proxyStaleAfter`, and never with `ttl: 0`.
+- Scheduled collection is off by default.
+- Audit is open to any caller, filtered per event. That filter now also applies to
+  `/subjects/{digest}/events` and the subject view, which used to name repositories the
+  caller could not read.
+- Upload sessions in process memory expire on a ticker, the one background task outside
+  the queue.
+
+Two things this milestone left:
+
+- Bytes written by a pre-M8 binary whose placement failed have no row and are never
+  collected. That is a storage leak, and reclaiming it would need a storage listing.
+- Running an M7 binary beside an M8 collector is unsafe; upgrade every server first.
+
+---
+
+### M8b — Read-only UI and release
 
 **Goal.** Sindri is something a stranger can run, see, and operate.
 
 **Scope.**
-- Embedded read-only UI: repository list, package and version browse, artifact detail with
+- [ ] Embedded read-only UI: repository list, package and version browse, artifact detail with
   digest, owner, provenance, evidence, and per-environment lifecycle status. Go templates
-  plus htmx, no Node build
-- Worker on a queue table, with the API and worker kept separable so the post-v1 split
-  modes are configuration rather than a rewrite
-- Garbage collection: reachability from tags and lifecycle states over
-  `manifest_children`, with a dry-run mode and a grace period for in-flight uploads
-- Retention jobs: proxy cache TTL eviction, upload session cleanup
-- `GET /api/v1/audit` over `lifecycle_events`
-- `goreleaser` for multi-architecture binaries and a container image, `docker-compose.yml`
-  that runs Sindri itself, quickstart documentation
-- `SECURITY.md`, `CONTRIBUTING.md`
+  plus htmx, no Node build. Every route authorizes; artifact pages check placement (I2)
+- [ ] `goreleaser` for multi-architecture binaries and a container image, a Compose file that
+  runs Sindri itself with a development identity provider, quickstart documentation
+- [ ] `SECURITY.md`, `CONTRIBUTING.md`
 
 **Out of scope.** Administration in the UI. Dashboards. Metrics UI.
 
-**Watch out for.** Garbage collection deleting a blob that an in-flight push already
-referenced is the classic registry data-loss bug. Use a grace period on blob age and take
-the reachability snapshot inside one transaction.
-
 **Gate.**
 ```bash
-# Quickstart, exactly as documented, on a machine with only Docker
-docker compose up -d
-docker push localhost:8080/demo/app:1.0
-open http://localhost:8080/ui/
-
-# Garbage collection safety
-./bin/sindri gc --dry-run            # lists an untagged, unpromoted blob
-./bin/sindri gc                      # deletes it
-# a promoted blob and a tagged blob both survive; asserted in an integration test
-
+make ci && make test-integration
 goreleaser release --snapshot --clean  # binaries and image build
+./scripts/m8-quickstart-gate.sh        # docs/quickstart.md, verbatim, in a fresh docker:dind
 ```
 The quickstart gate means what it says: run it in a clean VM or a fresh container, with no
 Go toolchain and no warm caches. Quickstarts that only work on the author's machine are

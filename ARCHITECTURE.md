@@ -143,7 +143,9 @@ internal/
   remote/                proxy upstream fetch and caching
   resolve/               virtual repository ordered resolution
   reconcile/             YAML to database convergence
-  worker/                garbage collection, indexing, background jobs
+  queue/                 the jobs table: enqueue, claim under a lease, complete
+  gc/                    garbage collection: mark and sweep (ADR 19)
+  worker/                runs queued jobs and schedules recurring ones (ADR 20)
 web/                     Go templates and static assets, embedded
 deploy/compose/          local and single-node deployment
 docs/adr/                architecture decision records
@@ -248,7 +250,8 @@ v1 does not parse or verify the documents.
 ### Placement and protocol layer
 
 ```sql
-blobs(digest PK, size, storage_backend, created_at)
+blobs(digest PK, size, storage_backend, created_at,
+      last_seen_at)                        -- write intent; GC grace (ADR 19)
 
 repositories(
   id PK, name UNIQUE, type,                -- hosted | proxy | virtual
@@ -320,6 +323,38 @@ Garbage collection is then a reachability query from tags and lifecycle states, 
 far safer than reference counting: a refcount that drifts either leaks storage forever or
 deletes live data, and it cannot be recomputed after the fact.
 
+### Garbage collection
+
+The roots are tags, PyPI files, proxy cache hits, evidence, and every subject
+with ledger history. Anything they do not reach through `manifest_children`,
+and that was last seen before the grace period, is a candidate. That includes
+an untagged, unpromoted image and a layer no manifest names. Placement in
+`repository_blobs` is not a root.
+
+Every writer touches `blobs.last_seen_at` before it writes bytes or relies on
+bytes it found. The sweep deletes one candidate per transaction, and for each
+one it:
+
+1. locks the row
+2. re-checks every reference and the grace period
+3. deletes the rows, then the bytes, then commits
+
+A push racing the collector either commits its intent first and is seen, or
+blocks on the lock and writes the bytes again afterwards. See ADR 19.
+
+### Background work
+
+```sql
+jobs(id PK, kind, args jsonb, state,       -- queued | running | succeeded | failed
+     dedupe_key,                           -- one active job per key
+     attempts, max_attempts, run_after,
+     lease_owner, lease_expires_at,        -- a dead worker's lease runs out
+     created_by, created_at, started_at, finished_at, last_error, result jsonb)
+```
+
+Jobs are claimed with `FOR UPDATE SKIP LOCKED` under a lease, and every time
+the queue uses comes from the database clock. See ADR 20.
+
 ---
 
 ## 6. Storage
@@ -340,6 +375,10 @@ type BlobStore interface {
 	Append(ctx context.Context, id UploadID, r io.Reader) (offset int64, err error)
 	CommitUpload(ctx context.Context, id UploadID, digest model.Digest) error
 	AbortUpload(ctx context.Context, id UploadID) error
+
+	// Discards staged uploads idle since before olderThan, including what a
+	// crashed process left behind. See ADR 20.
+	PurgeUploads(ctx context.Context, olderThan time.Time) (int, error)
 }
 ```
 
@@ -381,6 +420,8 @@ such as manifests and evidence documents, where a staging round trip buys nothin
 | `/api/v1/decisions?digest=&environment=` | "is this digest approved for this environment" |
 | `/api/v1/config/diff`, `/api/v1/config/apply` | the server half of `sindri diff` and `sindri apply` |
 | `/api/v1/tokens` | machine tokens for CI: issue, list, revoke |
+| `/api/v1/audit` | the lifecycle ledger, newest first, filtered to readable repositories |
+| `/api/v1/gc`, `/api/v1/gc/candidates`, `/api/v1/jobs/{id}` | garbage collection and its dry run, administrators only |
 | `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/whoami` | browser sign-in through the identity provider |
 | `/ui/...` | read-only web interface |
 | `/healthz`, `/readyz` | liveness and readiness |
@@ -630,6 +671,13 @@ while the code still enforces it.
 story. `--api-only` and `--worker-only` split the same binary for Kubernetes and are
 post-v1, but no v1 design may assume that API and worker share a process. Background work
 goes through a queue table from the start.
+
+**Worker.** `serve` runs a worker unless `worker: false`. It runs garbage
+collection when one is requested, or on `worker.gc.interval` when that is set;
+it is off by default. Every `worker.retention.interval` it evicts stale proxy
+cache entries and purges abandoned uploads. The only background work outside
+the queue is expiring upload sessions held in a process's memory, which no
+other process could reach. See ADR 20.
 
 **Observability.** Structured logs via `log/slog`, Prometheus metrics, a request id on
 every log line and response.
