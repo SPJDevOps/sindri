@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/spj/sindri/internal/api"
 	"github.com/spj/sindri/internal/auth"
@@ -13,16 +14,19 @@ import (
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/evidence"
+	"github.com/spj/sindri/internal/gc"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/proto/oci"
 	"github.com/spj/sindri/internal/proto/pypi"
+	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/reconcile"
 	"github.com/spj/sindri/internal/registry"
 	"github.com/spj/sindri/internal/remote"
 	"github.com/spj/sindri/internal/resolve"
 	"github.com/spj/sindri/internal/server"
 	"github.com/spj/sindri/internal/storage"
+	"github.com/spj/sindri/internal/worker"
 )
 
 // app is a wired server: everything `serve` builds from one configuration.
@@ -36,6 +40,10 @@ type app struct {
 	credentials *config.CredentialStore
 	auth        *auth.Chain
 	server      *server.Server
+	blobs       storage.BlobStore
+	cas         *cas.Store
+	queue       *queue.Queue
+	collector   *gc.Collector
 }
 
 // buildOptions carries what differs between `serve` and a test.
@@ -46,6 +54,12 @@ type buildOptions struct {
 	RemoteOptions func(*remote.Options)
 	// OIDCClient reaches the identity provider; tests pass the stub's.
 	OIDCClient *http.Client
+	// WorkerPoll overrides how often an idle worker looks for jobs; tests
+	// shorten it.
+	WorkerPoll time.Duration
+	// ExtraHandlers adds job kinds to the worker; tests use it to hold a
+	// job running while the server stops.
+	ExtraHandlers map[string]worker.Handler
 }
 
 // build migrates the database and wires every component. close releases the
@@ -76,8 +90,21 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		}
 	}
 
-	casStore := cas.New(blobs)
+	// Every write records its intent on the blobs table first, which is what
+	// makes the garbage collector safe beside it (ADR 19).
+	casStore := cas.New(blobs, cas.WithReserver(db.NewBlobReserver(database, string(cfg.Storage.Backend))))
 	reg := registry.New(database, casStore, string(cfg.Storage.Backend))
+	jobs := queue.New(database)
+	collector, err := gc.New(gc.Options{
+		Database: database,
+		CAS:      casStore,
+		Grace:    cfg.Worker.GC.Grace.Duration(),
+		Logger:   logger,
+	})
+	if err != nil {
+		database.Close()
+		return nil, nil, err
+	}
 	creds := config.NewCredentialStore(cfg.Credentials)
 
 	remoteOpts := remote.Options{Registry: reg, Logger: logger, Credentials: creds}
@@ -131,6 +158,8 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		Credentials: creds.Names,
 		Reconciler:  reconciler,
 		Tokens:      tokens,
+		GC:          collector,
+		Queue:       jobs,
 	})
 	ociHandler := oci.Handler(oci.Options{
 		Resolver: resolver,
@@ -167,6 +196,10 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		credentials: creds,
 		auth:        chain,
 		server:      srv,
+		blobs:       blobs,
+		cas:         casStore,
+		queue:       jobs,
+		collector:   collector,
 	}, database.Close, nil
 }
 

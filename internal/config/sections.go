@@ -488,3 +488,109 @@ func validRefName(name string) bool {
 	}
 	return true
 }
+
+// Worker configures the background worker and the jobs it schedules (ADR 20).
+//
+// Short form: `worker: false` turns it off, `worker: true` is the default.
+// Long form: a mapping with any of the fields below.
+type Worker struct {
+	// Enabled runs a worker inside `serve`. A server with it off still
+	// enqueues work, such as `sindri gc`, for a worker elsewhere to claim.
+	Enabled   bool            `yaml:"enabled"`
+	GC        WorkerGC        `yaml:"gc"`
+	Retention WorkerRetention `yaml:"retention"`
+}
+
+// WorkerGC configures garbage collection (ADR 19).
+type WorkerGC struct {
+	// Interval schedules collection. Zero, the default, never schedules it:
+	// "untagged and unpromoted is garbage" is a policy to adopt after a dry
+	// run, not one to inherit by upgrading. `sindri gc` works either way.
+	Interval Duration `yaml:"interval"`
+	// Grace protects every blob seen more recently than this, whatever
+	// references it.
+	Grace Duration `yaml:"grace"`
+}
+
+// WorkerRetention configures the cleanup jobs.
+type WorkerRetention struct {
+	Interval Duration `yaml:"interval"`
+	// UploadMaxIdle is how long a staged upload may go unwritten before it
+	// is discarded.
+	UploadMaxIdle Duration `yaml:"uploadMaxIdle"`
+	// ProxyStaleAfter is how long past its TTL a proxy cache entry is kept to
+	// serve through an upstream outage before retention evicts it.
+	ProxyStaleAfter Duration `yaml:"proxyStaleAfter"`
+}
+
+func defaultWorker() Worker {
+	return Worker{
+		Enabled: true,
+		GC:      WorkerGC{Grace: Duration(24 * time.Hour)},
+		Retention: WorkerRetention{
+			Interval:        Duration(time.Hour),
+			UploadMaxIdle:   Duration(24 * time.Hour),
+			ProxyStaleAfter: Duration(7 * 24 * time.Hour),
+		},
+	}
+}
+
+// UnmarshalYAML accepts a boolean or the full mapping. In the mapping an
+// absent enabled means true, the same as an absent section.
+func (w *Worker) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		var enabled bool
+		if err := node.Decode(&enabled); err != nil {
+			return fmt.Errorf("line %d: worker must be true, false, or a mapping", node.Line)
+		}
+		*w = Worker{Enabled: enabled}
+		return nil
+	}
+
+	var raw struct {
+		Enabled   *bool           `yaml:"enabled"`
+		GC        WorkerGC        `yaml:"gc"`
+		Retention WorkerRetention `yaml:"retention"`
+	}
+	if err := strictDecode(node, &raw); err != nil {
+		return err
+	}
+	*w = Worker{Enabled: raw.Enabled == nil || *raw.Enabled, GC: raw.GC, Retention: raw.Retention}
+	return nil
+}
+
+// UnmarshalYAML rejects unknown keys.
+func (g *WorkerGC) UnmarshalYAML(node *yaml.Node) error {
+	type raw WorkerGC
+	return strictDecode(node, (*raw)(g))
+}
+
+// UnmarshalYAML rejects unknown keys.
+func (r *WorkerRetention) UnmarshalYAML(node *yaml.Node) error {
+	type raw WorkerRetention
+	return strictDecode(node, (*raw)(r))
+}
+
+func (w *Worker) applyDefaults() {
+	d := defaultWorker()
+	if w.GC.Grace == 0 {
+		w.GC.Grace = d.GC.Grace
+	}
+	if w.Retention.Interval == 0 {
+		w.Retention.Interval = d.Retention.Interval
+	}
+	if w.Retention.UploadMaxIdle == 0 {
+		w.Retention.UploadMaxIdle = d.Retention.UploadMaxIdle
+	}
+	if w.Retention.ProxyStaleAfter == 0 {
+		w.Retention.ProxyStaleAfter = d.Retention.ProxyStaleAfter
+	}
+}
+
+func (w *Worker) validate() error {
+	if w.Retention.UploadMaxIdle.Duration() < time.Minute {
+		return fmt.Errorf("worker.retention.uploadMaxIdle: %s would discard uploads clients are still sending; use at least 1m",
+			w.Retention.UploadMaxIdle)
+	}
+	return nil
+}

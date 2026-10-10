@@ -89,6 +89,10 @@ func serve(parent context.Context, explicitConfig string, hooks serveHooks) erro
 		return err
 	}
 	defer closeApp()
+	// Deferred after closeApp so it runs before it: the worker hands a job
+	// back through the database on its way out.
+	stopBackground := a.startBackground(ctx, cfg, hooks.build)
+	defer stopBackground()
 
 	// Reconcile before listening: a client that can connect sees the
 	// repositories the file declares, with no apply step (ADR 7).
@@ -177,6 +181,9 @@ func restartSections(before, after *config.Config) []string {
 	}
 	if before.Log != after.Log {
 		out = append(out, "log")
+	}
+	if before.Worker != after.Worker {
+		out = append(out, "worker")
 	}
 	if before.Auth.StaticToken != after.Auth.StaticToken || !sameOIDC(before.Auth.OIDC, after.Auth.OIDC) {
 		out = append(out, "auth (only auth.admins reloads)")

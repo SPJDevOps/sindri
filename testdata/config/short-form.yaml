@@ -4,3 +4,4 @@ storage:  s3://sindri-blobs/registry
 database: postgres://sindri:sindri@db:5432/sindri?sslmode=disable
 log:      debug
 auth:     ${SINDRI_TOKEN:-sindri-dev-token}
+worker:   false

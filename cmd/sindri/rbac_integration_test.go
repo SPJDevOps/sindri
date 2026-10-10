@@ -117,6 +117,9 @@ func TestRBAC_AnonymousPullAndInstallRefused(t *testing.T) {
 		{"PyPIProjectIndex", "/pypi/internal-py/simple/demo-package/", "Basic"},
 		{"PyPIDownload", "/pypi/internal-py/packages/demo-package/demo_package-1.0-py3-none-any.whl", "Basic"},
 		{"ManagementAPI", "/api/v1/repositories", "Bearer"},
+		{"Audit", "/api/v1/audit", "Bearer"},
+		{"GCCandidates", "/api/v1/gc/candidates", "Bearer"},
+		{"Job", "/api/v1/jobs/1", "Bearer"},
 	}
 	creds := []struct {
 		name string
