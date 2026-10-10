@@ -229,6 +229,89 @@ func (q *Queries) InsertGate(ctx context.Context, arg InsertGateParams) error {
 	return err
 }
 
+const listAuditEvents = `-- name: ListAuditEvents :many
+SELECT e.id, e.subject_digest, e.action, e.actor, e.reason, e.at,
+       r.name AS repo_name, s.name AS stage_name
+FROM lifecycle_events e
+JOIN repositories r ON r.id = e.repo_id
+JOIN lifecycle_stages s ON s.id = e.stage_id
+WHERE ($1::uuid[] IS NULL OR e.repo_id = ANY ($1::uuid[]))
+  AND ($2::bigint IS NULL OR e.id < $2::bigint)
+  AND ($3::text IS NULL OR e.subject_digest = $3::text)
+  AND ($4::text IS NULL OR s.name = $4::text)
+  AND ($5::text IS NULL OR e.actor = $5::text)
+  AND ($6::text IS NULL OR e.action = $6::text)
+  AND ($7::timestamptz IS NULL OR e.at >= $7::timestamptz)
+  AND ($8::timestamptz IS NULL OR e.at < $8::timestamptz)
+ORDER BY e.id DESC
+LIMIT $9
+`
+
+type ListAuditEventsParams struct {
+	RepoIds       []uuid.UUID        `json:"repo_ids"`
+	BeforeID      pgtype.Int8        `json:"before_id"`
+	SubjectDigest pgtype.Text        `json:"subject_digest"`
+	StageName     pgtype.Text        `json:"stage_name"`
+	Actor         pgtype.Text        `json:"actor"`
+	Action        pgtype.Text        `json:"action"`
+	Since         pgtype.Timestamptz `json:"since"`
+	Until         pgtype.Timestamptz `json:"until"`
+	PageLimit     int32              `json:"page_limit"`
+}
+
+type ListAuditEventsRow struct {
+	ID            int64     `json:"id"`
+	SubjectDigest string    `json:"subject_digest"`
+	Action        string    `json:"action"`
+	Actor         string    `json:"actor"`
+	Reason        string    `json:"reason"`
+	At            time.Time `json:"at"`
+	RepoName      string    `json:"repo_name"`
+	StageName     string    `json:"stage_name"`
+}
+
+// The audit trail (GET /api/v1/audit), newest first by id, which is stable
+// where timestamps tie. A null repo_ids means every repository, for an
+// administrator; anyone else passes the repositories they may read.
+func (q *Queries) ListAuditEvents(ctx context.Context, arg ListAuditEventsParams) ([]ListAuditEventsRow, error) {
+	rows, err := q.db.Query(ctx, listAuditEvents,
+		arg.RepoIds,
+		arg.BeforeID,
+		arg.SubjectDigest,
+		arg.StageName,
+		arg.Actor,
+		arg.Action,
+		arg.Since,
+		arg.Until,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAuditEventsRow{}
+	for rows.Next() {
+		var i ListAuditEventsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SubjectDigest,
+			&i.Action,
+			&i.Actor,
+			&i.Reason,
+			&i.At,
+			&i.RepoName,
+			&i.StageName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCurrentApprovals = `-- name: ListCurrentApprovals :many
 SELECT c.repo_id, r.name AS repo_name, c.actor, c.reason, c.at
 FROM lifecycle_current c

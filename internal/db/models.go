@@ -16,6 +16,7 @@ type Blob struct {
 	Size           int64     `json:"size"`
 	StorageBackend string    `json:"storage_backend"`
 	CreatedAt      time.Time `json:"created_at"`
+	LastSeenAt     time.Time `json:"last_seen_at"`
 }
 
 type Evidence struct {
@@ -36,6 +37,25 @@ type File struct {
 	Filename   string    `json:"filename"`
 	MediaType  string    `json:"media_type"`
 	Metadata   []byte    `json:"metadata"`
+}
+
+type Job struct {
+	ID             int64              `json:"id"`
+	Kind           string             `json:"kind"`
+	Args           []byte             `json:"args"`
+	State          string             `json:"state"`
+	DedupeKey      pgtype.Text        `json:"dedupe_key"`
+	Attempts       int32              `json:"attempts"`
+	MaxAttempts    int32              `json:"max_attempts"`
+	RunAfter       time.Time          `json:"run_after"`
+	LeaseOwner     pgtype.Text        `json:"lease_owner"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+	CreatedBy      string             `json:"created_by"`
+	CreatedAt      time.Time          `json:"created_at"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	LastError      pgtype.Text        `json:"last_error"`
+	Result         []byte             `json:"result"`
 }
 
 type LifecycleCurrent struct {

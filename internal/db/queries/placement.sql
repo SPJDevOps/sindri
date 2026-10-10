@@ -22,11 +22,32 @@ DELETE FROM repositories
 WHERE name = $1;
 
 -- name: UpsertBlob :one
+-- Every placement touches last_seen_at, so a blob being placed right now is
+-- inside the collector's grace period (ADR 19).
 INSERT INTO blobs (digest, size, storage_backend)
 VALUES ($1, $2, $3)
 ON CONFLICT (digest) DO UPDATE
-SET size = EXCLUDED.size
+SET size = EXCLUDED.size,
+    last_seen_at = now()
 RETURNING *;
+
+-- name: ReserveBlob :exec
+-- The write intent for bytes whose digest has been computed from the bytes
+-- themselves. It runs, and commits, before the bytes are written, so every
+-- byte object the CAS holds has a row the collector can see, and a blob the
+-- collector is deleting blocks this until it has finished (ADR 19).
+INSERT INTO blobs (digest, size, storage_backend)
+VALUES ($1, $2, $3)
+ON CONFLICT (digest) DO UPDATE
+SET size = EXCLUDED.size,
+    last_seen_at = now();
+
+-- name: TouchBlob :execrows
+-- The write intent for a claimed digest the server has not verified yet. It
+-- only refreshes an existing row: an unverified claim never creates one.
+UPDATE blobs
+SET last_seen_at = now()
+WHERE digest = $1;
 
 -- name: InsertBlobPlaceholder :exec
 -- Records a blob a proxied manifest references before its bytes are fetched,

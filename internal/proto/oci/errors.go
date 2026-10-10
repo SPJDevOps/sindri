@@ -21,17 +21,18 @@ const apiVersion = "registry/2.0"
 
 // OCI error codes from the distribution specification.
 const (
-	CodeBlobUnknown       = "BLOB_UNKNOWN"
-	CodeBlobUploadUnknown = "BLOB_UPLOAD_UNKNOWN"
-	CodeDigestInvalid     = "DIGEST_INVALID"
-	CodeManifestInvalid   = "MANIFEST_INVALID"
-	CodeManifestUnknown   = "MANIFEST_UNKNOWN"
-	CodeNameUnknown       = "NAME_UNKNOWN"
-	CodeSizeInvalid       = "SIZE_INVALID"
-	CodeUnsupported       = "UNSUPPORTED"
-	CodeUnknown           = "UNKNOWN"
-	CodeUnauthorized      = "UNAUTHORIZED"
-	CodeDenied            = "DENIED"
+	CodeBlobUnknown         = "BLOB_UNKNOWN"
+	CodeBlobUploadUnknown   = "BLOB_UPLOAD_UNKNOWN"
+	CodeDigestInvalid       = "DIGEST_INVALID"
+	CodeManifestBlobUnknown = "MANIFEST_BLOB_UNKNOWN"
+	CodeManifestInvalid     = "MANIFEST_INVALID"
+	CodeManifestUnknown     = "MANIFEST_UNKNOWN"
+	CodeNameUnknown         = "NAME_UNKNOWN"
+	CodeSizeInvalid         = "SIZE_INVALID"
+	CodeUnsupported         = "UNSUPPORTED"
+	CodeUnknown             = "UNKNOWN"
+	CodeUnauthorized        = "UNAUTHORIZED"
+	CodeDenied              = "DENIED"
 )
 
 // errorResponse is the OCI distribution error envelope.
@@ -68,6 +69,10 @@ func mapRegistryError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, CodeBlobUnknown, "blob unknown to registry")
 	case errors.Is(err, registry.ErrReadOnly):
 		writeError(w, http.StatusMethodNotAllowed, CodeUnsupported, "repository does not accept pushes")
+	case errors.Is(err, registry.ErrBlobUnknown):
+		// A layer the manifest names was never pushed, or was collected
+		// before the manifest arrived; the client pushes it again.
+		writeError(w, http.StatusBadRequest, CodeManifestBlobUnknown, err.Error())
 	case errors.Is(err, registry.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, CodeManifestInvalid, err.Error())
 	case errors.Is(err, cas.ErrDigestMismatch), errors.Is(err, model.ErrInvalidDigest):

@@ -182,6 +182,26 @@ func TestOCI_PushPullAndPlacementGate(t *testing.T) {
 	if gotChunk.StatusCode != http.StatusOK || gotChunk.Body != string(chunkPayload) {
 		t.Fatalf("chunked blob GET: %d %q", gotChunk.StatusCode, gotChunk.Body)
 	}
+
+	// A manifest naming a layer the registry does not hold, never pushed or
+	// collected before the manifest arrived, gets the code that makes a
+	// client push the layer again, not a 500.
+	dangling := manifest
+	dangling.Layers = []ocispec.Descriptor{{
+		MediaType: ocispec.MediaTypeImageLayer,
+		Digest:    digest.Digest(digestOf([]byte("never pushed"))),
+		Size:      12,
+	}}
+	danglingBody, err := json.Marshal(dangling)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	unknown := mustDo(t, client, http.MethodPut, "/v2/demo/app/manifests/dangling",
+		danglingBody, ocispec.MediaTypeImageManifest)
+	if unknown.StatusCode != http.StatusBadRequest || !strings.Contains(unknown.Body, oci.CodeManifestBlobUnknown) {
+		t.Fatalf("PUT manifest with an unknown layer: %d %s, want 400 %s",
+			unknown.StatusCode, unknown.Body, oci.CodeManifestBlobUnknown)
+	}
 }
 
 func pushBlob(t *testing.T, h http.Handler, repo string, payload []byte, digest string) {

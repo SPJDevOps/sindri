@@ -50,6 +50,11 @@ var (
 	// ErrHasHistory means a delete would remove a repository the lifecycle
 	// ledger refers to. The ledger is append-only, so the repository stays.
 	ErrHasHistory = errors.New("repository has lifecycle history")
+
+	// ErrBlobUnknown means a manifest references a blob Sindri does not hold,
+	// either never pushed or collected before the manifest arrived. The OCI
+	// adapter answers MANIFEST_BLOB_UNKNOWN, and the client pushes it again.
+	ErrBlobUnknown = errors.New("manifest references an unknown blob")
 )
 
 // Registry owns placement metadata and gates every blob read.
@@ -101,6 +106,22 @@ type ListRepositoriesParams struct {
 type Page[T any] struct {
 	Items      []T
 	NextCursor string
+}
+
+// AllRepositories returns every repository, unpaged. It is for callers that
+// must decide per repository, such as the audit trail filtering events to the
+// repositories a caller may read; a registry has tens or hundreds of
+// repositories, not millions.
+func (r *Registry) AllRepositories(ctx context.Context) ([]model.Repository, error) {
+	rows, err := r.q.ListAllRepositories(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing repositories: %w", err)
+	}
+	out := make([]model.Repository, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, repositoryFromRow(row))
+	}
+	return out, nil
 }
 
 // ListRepositories returns repositories ordered by name.

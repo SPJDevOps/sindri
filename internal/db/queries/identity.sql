@@ -130,3 +130,23 @@ JOIN repositories r ON r.id = e.repo_id
 JOIN lifecycle_stages s ON s.id = e.stage_id
 WHERE e.subject_digest = $1
 ORDER BY e.at, e.id;
+
+-- name: ListAuditEvents :many
+-- The audit trail (GET /api/v1/audit), newest first by id, which is stable
+-- where timestamps tie. A null repo_ids means every repository, for an
+-- administrator; anyone else passes the repositories they may read.
+SELECT e.id, e.subject_digest, e.action, e.actor, e.reason, e.at,
+       r.name AS repo_name, s.name AS stage_name
+FROM lifecycle_events e
+JOIN repositories r ON r.id = e.repo_id
+JOIN lifecycle_stages s ON s.id = e.stage_id
+WHERE (sqlc.narg('repo_ids')::uuid[] IS NULL OR e.repo_id = ANY (sqlc.narg('repo_ids')::uuid[]))
+  AND (sqlc.narg('before_id')::bigint IS NULL OR e.id < sqlc.narg('before_id')::bigint)
+  AND (sqlc.narg('subject_digest')::text IS NULL OR e.subject_digest = sqlc.narg('subject_digest')::text)
+  AND (sqlc.narg('stage_name')::text IS NULL OR s.name = sqlc.narg('stage_name')::text)
+  AND (sqlc.narg('actor')::text IS NULL OR e.actor = sqlc.narg('actor')::text)
+  AND (sqlc.narg('action')::text IS NULL OR e.action = sqlc.narg('action')::text)
+  AND (sqlc.narg('since')::timestamptz IS NULL OR e.at >= sqlc.narg('since')::timestamptz)
+  AND (sqlc.narg('until')::timestamptz IS NULL OR e.at < sqlc.narg('until')::timestamptz)
+ORDER BY e.id DESC
+LIMIT sqlc.arg('page_limit');

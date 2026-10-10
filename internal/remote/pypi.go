@@ -41,7 +41,7 @@ func (c *Client) FetchPyPIIndex(ctx context.Context, repoName, project string) (
 	if err != nil {
 		return PyPIIndex{}, err
 	}
-	key := cacheKeyPyPIIndex(project)
+	key := registry.CacheKeyPyPIIndex(project)
 	now := time.Now().UTC()
 	entry, entryErr := c.reg.GetCacheEntry(ctx, repoName, key)
 	decision := EvaluateCache(entry, now, remote.TTL, remote.NegativeTTL, entryErr)
@@ -96,7 +96,7 @@ func (c *Client) fetchAndCachePyPIIndex(ctx context.Context, repoName, project s
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	key := cacheKeyPyPIIndex(project)
+	key := registry.CacheKeyPyPIIndex(project)
 	if resp.StatusCode != http.StatusOK {
 		err := classify(resp.StatusCode)
 		if errors.Is(err, ErrUpstreamNotFound) {

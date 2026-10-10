@@ -77,7 +77,7 @@ func (c *Client) FetchOCIManifest(ctx context.Context, repoName, image, referenc
 		return registry.Manifest{}, err
 	}
 
-	key := cacheKeyOCIManifest(image, reference)
+	key := registry.CacheKeyOCIManifest(image, reference)
 	entry, entryErr := c.reg.GetCacheEntry(ctx, repoName, key)
 	switch EvaluateCache(entry, time.Now().UTC(), remote.TTL, remote.NegativeTTL, entryErr) {
 	case CacheFreshHit:
@@ -114,7 +114,7 @@ func (c *Client) fetchAndCacheOCIManifest(ctx context.Context, repoName, image, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	key := cacheKeyOCIManifest(image, reference)
+	key := registry.CacheKeyOCIManifest(image, reference)
 	if resp.StatusCode != http.StatusOK {
 		err := classify(resp.StatusCode)
 		if errors.Is(err, ErrUpstreamNotFound) {

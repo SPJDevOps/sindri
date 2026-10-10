@@ -334,6 +334,9 @@ func (r *Registry) PutManifest(ctx context.Context, repoName, image, reference, 
 			ParentDigest: info.Digest.String(),
 			ChildDigest:  child.String(),
 		}); err != nil {
+			if isForeignKeyViolation(err, "manifest_children_child_digest_fkey") {
+				return Manifest{}, fmt.Errorf("%w: %s", ErrBlobUnknown, child)
+			}
 			return Manifest{}, fmt.Errorf("recording child %s of %s: %w", child, info.Digest, err)
 		}
 	}

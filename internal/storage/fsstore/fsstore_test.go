@@ -19,7 +19,20 @@ import (
 func TestFSStore_Conformance(t *testing.T) {
 	storagetest.RunSuite(t, func(t *testing.T) storage.BlobStore {
 		return newStore(t)
-	})
+	}, storagetest.WithReopen(reopenFS))
+}
+
+// reopenFS is a second store over the same root, as a restarted process sees it.
+func reopenFS(t *testing.T) (storage.BlobStore, func() storage.BlobStore) {
+	root := t.TempDir()
+	open := func() storage.BlobStore {
+		s, err := fsstore.New(root)
+		if err != nil {
+			t.Fatalf("fsstore.New: %v", err)
+		}
+		return s
+	}
+	return open(), open
 }
 
 func TestNew_RejectsAnEmptyRoot(t *testing.T) {

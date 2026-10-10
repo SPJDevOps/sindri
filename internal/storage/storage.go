@@ -9,6 +9,7 @@ package storage
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/spj/sindri/internal/model"
 )
@@ -71,6 +72,13 @@ type BlobStore interface {
 	// AbortUpload discards a staged upload. Aborting an upload that is already
 	// gone is not an error.
 	AbortUpload(ctx context.Context, id UploadID) error
+
+	// PurgeUploads discards every staged upload last written to before
+	// olderThan, including staging state a crashed process left behind, and
+	// reports how many it removed. It never touches committed blobs. A purged
+	// upload behaves as unknown: Append and CommitUpload return
+	// ErrUploadNotFound, and the client starts again.
+	PurgeUploads(ctx context.Context, olderThan time.Time) (int, error)
 }
 
 // Prober is implemented by stores that can cheaply check they are reachable.

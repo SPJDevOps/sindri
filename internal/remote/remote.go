@@ -262,16 +262,6 @@ func (c *Client) newCachingBody(ctx context.Context, resp *http.Response, cancel
 	}
 }
 
-// cacheKeyPyPIIndex is the remote_cache key for a project's simple index.
-func cacheKeyPyPIIndex(project string) string {
-	return "pypi:index:" + project
-}
-
-// cacheKeyOCIManifest is the remote_cache key for an OCI tag or digest ref.
-func cacheKeyOCIManifest(image, reference string) string {
-	return "oci:manifest:" + image + ":" + reference
-}
-
 // CacheDecision classifies a cache entry against the remote's TTLs.
 type CacheDecision int
 

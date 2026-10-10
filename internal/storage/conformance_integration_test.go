@@ -23,37 +23,49 @@ import (
 func TestBlobStore_Conformance(t *testing.T) {
 	minio := testsupport.StartMinIO(t)
 
+	openFS := func(t *testing.T, root string) storage.BlobStore {
+		s, err := fsstore.New(root)
+		if err != nil {
+			t.Fatalf("fsstore.New: %v", err)
+		}
+		return s
+	}
+	openS3 := func(t *testing.T, prefix string) storage.BlobStore {
+		s, err := s3store.New(t.Context(), minio.Config(prefix))
+		if err != nil {
+			t.Fatalf("s3store.New: %v", err)
+		}
+		return s
+	}
+
 	backends := []struct {
 		name     string
 		newStore storagetest.NewStoreFunc
+		reopen   storagetest.ReopenFunc
 	}{
 		{
-			name: "Filesystem",
-			newStore: func(t *testing.T) storage.BlobStore {
-				s, err := fsstore.New(t.TempDir())
-				if err != nil {
-					t.Fatalf("fsstore.New: %v", err)
-				}
-				return s
+			name:     "Filesystem",
+			newStore: func(t *testing.T) storage.BlobStore { return openFS(t, t.TempDir()) },
+			reopen: func(t *testing.T) (storage.BlobStore, func() storage.BlobStore) {
+				root := t.TempDir()
+				return openFS(t, root), func() storage.BlobStore { return openFS(t, root) }
 			},
 		},
 		{
 			name: "S3",
-			newStore: func(t *testing.T) storage.BlobStore {
-				// One container, one prefix per case, so the cases stay
-				// independent without paying for a container each.
-				s, err := s3store.New(t.Context(), minio.Config(prefixFor(t)))
-				if err != nil {
-					t.Fatalf("s3store.New: %v", err)
-				}
-				return s
+			// One container, one prefix per case, so the cases stay
+			// independent without paying for a container each.
+			newStore: func(t *testing.T) storage.BlobStore { return openS3(t, prefixFor(t)) },
+			reopen: func(t *testing.T) (storage.BlobStore, func() storage.BlobStore) {
+				prefix := prefixFor(t)
+				return openS3(t, prefix), func() storage.BlobStore { return openS3(t, prefix) }
 			},
 		},
 	}
 
 	for _, backend := range backends {
 		t.Run(backend.name, func(t *testing.T) {
-			storagetest.RunSuite(t, backend.newStore)
+			storagetest.RunSuite(t, backend.newStore, storagetest.WithReopen(backend.reopen))
 		})
 	}
 }
