@@ -698,29 +698,70 @@ Two things this milestone left:
 
 ---
 
-### M8b — Read-only UI and release
+### M8b — Read-only UI and release ✅
 
 **Goal.** Sindri is something a stranger can run, see, and operate.
 
 **Scope.**
-- [ ] Embedded read-only UI: repository list, package and version browse, artifact detail with
+- [x] Embedded read-only UI: repository list, package and version browse, artifact detail with
   digest, owner, provenance, evidence, and per-environment lifecycle status. Go templates
   plus htmx, no Node build. Every route authorizes; artifact pages check placement (I2)
-- [ ] `goreleaser` for multi-architecture binaries and a container image, a Compose file that
+- [x] `goreleaser` for multi-architecture binaries and a container image, a Compose file that
   runs Sindri itself with a development identity provider, quickstart documentation
-- [ ] `SECURITY.md`, `CONTRIBUTING.md`
+- [x] `SECURITY.md`, `CONTRIBUTING.md`
 
 **Out of scope.** Administration in the UI. Dashboards. Metrics UI.
 
-**Gate.**
+**Gate.** Verified on 2026-10-12 with Go 1.27.2 (lint under 1.27.1), goreleaser v2.18.3,
+Docker 29.8.
 ```bash
 make ci && make test-integration
-goreleaser release --snapshot --clean  # binaries and image build
+goreleaser release --snapshot --clean                  # 4 archives, linux/amd64 and arm64 images
+docker run --rm ghcr.io/spjdevops/sindri:<snapshot>-arm64 version   # ldflags stamped, user 65532
 ./scripts/m8-quickstart-gate.sh        # docs/quickstart.md, verbatim, in a fresh docker:dind
 ```
 The quickstart gate means what it says: run it in a clean VM or a fresh container, with no
 Go toolchain and no warm caches. Quickstarts that only work on the author's machine are
 the most common first impression a project gets wrong.
+
+The gate starts a `docker:dind` daemon with no images and loads only the Sindri image built
+from the checkout, since no release exists yet. It then:
+
+- reads the Compose file and the commands out of `docs/quickstart.md`
+- fails if that Compose file differs from `deploy/quickstart/compose.yaml`
+- runs the commands as written
+- signs in through Dex the way a browser does, and checks that the signed-in page lists
+  the pushed image
+
+The UI was also checked by eye: screenshots in light and dark mode, at desktop and phone
+width, from the golden renders with the real stylesheet and fonts. That check found a
+filler cell in the repository grid and a digest title set in the display font. Both were
+fixed.
+
+The tests that guard the UI, each shown to catch its bug when it was put back in (★):
+
+| Concern | Test | ★ Reintroduced bug |
+|---|---|---|
+| List | `TestUI_RepositoryListShowsOnlyReadable` | unreadable repositories listed |
+| Pages | `TestUI_UnreadableRepositoryPagesAre404` | repository authorization removed |
+| I2 | `TestUI_ArtifactPageRequiresPlacementInTheRepository` | placement check removed |
+| Other teams | `TestUI_ArtifactPageHidesOwnersAndStatesInUnreadableRepositories`, `TestUI_VirtualRepositoryListsOnlyReadableMembers` | foreign states and members shown |
+| New routes | `TestUI_EveryRouteHasAnAuthorizationCase` | a route added without a case |
+| CSP | `TestTemplates_NoInlineScriptOrStyleOrHandlers` | an inline `style=` |
+| Vendored files | `TestVendoredAssets_MatchRecordedChecksums` | a checksum that does not match |
+
+End to end, `TestServe_UIBrowserSignInShowsOnlyReadableRepos` signs in through the stub
+identity provider and checks that the UI never changes anything, with a token or with the
+session cookie. `TestServe_UIWithoutSignInExplains` covers a server without OIDC.
+
+**What M8b decided.** [ADR 21](docs/adr/0021-read-only-ui-and-quickstart.md).
+
+- The UI is rendered on the server from the API's services. Pages within a repository
+  follow `/-/`, and `-` is now a reserved name segment.
+- Evidence is shown as metadata only.
+- Without OIDC the UI explains how to configure it, and never sends a Basic challenge.
+- The quickstart runs Dex with a mock connector, sharing a network namespace with Sindri.
+- Releases ship on distroless `nonroot`, with `sindri probe` as the healthcheck.
 
 ---
 
@@ -734,7 +775,7 @@ the most common first impression a project gets wrong.
 - [ ] Promotion asserted to copy zero bytes
 - [ ] Invariant I2 asserted: no blob reachable through a repository it is not placed in
 - [ ] RBAC enforced on every route, with an anonymous-access test per adapter
-- [ ] Quickstart verified on a clean machine with only Docker
+- [x] Quickstart verified on a clean machine with only Docker
 - [ ] A single-team setup works from one short-form `sindri.yaml` with no apply step
 - [ ] Short form and long form asserted to produce identical database state
 - [ ] Upgrade path documented: replace the binary, migrations self-apply

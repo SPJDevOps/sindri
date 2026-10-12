@@ -123,6 +123,11 @@ This is a registry. Supply-chain security is the product, so these are not style
    v1, and a new route that skips the check is a security bug, not an omission
    (ADR 18). Group membership comes from the caller's token on each request; never
    store or cache it.
+8. **The UI is read-only and shows only what the caller may read.** Every page
+   authorizes like the API and answers 404 for a repository the caller cannot
+   read. Artifact pages check placement first. Templates carry no inline
+   script, style, or event handlers: the Content-Security-Policy is `'self'`
+   only, and a test enforces it (ADR 21).
 
 ## Operational rules
 

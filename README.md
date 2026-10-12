@@ -15,7 +15,7 @@ exist?" but **"is exactly this artifact approved for this environment?"**
 Pre-v1, under active construction. See [roadmap.md](roadmap.md) for the milestone plan
 and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
-Through milestone M8a, `sindri serve` boots from one YAML file (or none), applies its
+Through milestone M8, `sindri serve` boots from one YAML file (or none), applies its
 embedded migrations to Postgres, stores digest-verified blobs on a filesystem or any
 S3-compatible bucket, and serves two protocols:
 
@@ -35,7 +35,10 @@ A background worker evicts stale proxy cache entries and abandoned uploads. `sin
 reclaims blobs nothing references, safely beside pushes in flight, and `/api/v1/audit`
 reads the promotion ledger.
 
-Not there yet: the web UI and a release (M8b).
+A read-only web UI at `/ui/` shows repositories, packages, tags, and each artifact's
+digest, owners, provenance, evidence, and lifecycle state per environment, limited to
+what the signed-in person may read. Releases ship as binaries for Linux and macOS and as
+a multi-architecture image.
 
 ## What v1 will do
 
@@ -50,10 +53,23 @@ Not there yet: the web UI and a release (M8b).
 
 ## Quickstart
 
-Not yet available. It arrives with milestone M8b and will be verified from a clean
-machine with nothing installed but Docker.
+With nothing but Docker, [docs/quickstart.md](docs/quickstart.md) runs Sindri, Postgres,
+and a development identity provider from one Compose file:
 
-To run what exists today from source, with Go and Docker installed:
+```bash
+curl -fsSLO https://raw.githubusercontent.com/SPJDevOps/sindri/main/deploy/quickstart/compose.yaml
+export SINDRI_TOKEN=$(openssl rand -hex 16)
+docker compose up -d --wait
+echo "$SINDRI_TOKEN" | docker login localhost:8080 -u admin --password-stdin
+docker pull alpine:3.20 && docker tag alpine:3.20 localhost:8080/demo/app:1.0
+docker push localhost:8080/demo/app:1.0
+open http://localhost:8080/ui/
+```
+
+The quickstart is verified on every milestone in a fresh Docker daemon by
+`scripts/m8-quickstart-gate.sh`, which runs the document's own commands.
+
+To run from source instead, with Go and Docker installed:
 
 ```bash
 make up            # Postgres on 55432, MinIO on 59000
@@ -166,6 +182,11 @@ The original pitch is in [pitch.md](pitch.md). In short: Nexus and Artifactory h
 heavy, and Harbor is strong on OCI but was not designed to be multi-protocol. Small and
 mid-sized teams end up stitching together Harbor, Verdaccio, and a homegrown PyPI server
 because nothing sits in the middle. That gap is the target.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as
+[SECURITY.md](SECURITY.md) describes, never in a public issue.
 
 ## License
 
