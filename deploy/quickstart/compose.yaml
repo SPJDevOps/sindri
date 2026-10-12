@@ -1,0 +1,100 @@
+# Sindri quickstart: a registry with a web UI on one machine, nothing to
+# install but Docker. docs/quickstart.md walks through it.
+#
+#   export SINDRI_TOKEN=$(openssl rand -hex 16)
+#   docker compose up -d --wait
+#
+# DEVELOPMENT ONLY. Dex here signs in anyone who opens the browser as an
+# example user in the `authors` group, and `authors` administer this server.
+# The database password is in this file. Never deploy this as it is: point
+# auth.oidc at your identity provider and the database at a managed Postgres.
+name: sindri-quickstart
+
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    environment:
+      POSTGRES_USER: sindri
+      POSTGRES_PASSWORD: sindri
+      POSTGRES_DB: sindri
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sindri -d sindri"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # The identity provider for the UI. Its mock connector signs everyone in as
+  # one example user, with no password, which is what makes this a demo.
+  dex:
+    image: ghcr.io/dexidp/dex:v2.46.0@sha256:933fcd3f523338c847b88ef84a7145fb2fcb7b9917f08418612afeaaa2001777
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    configs:
+      - source: dex
+        target: /etc/dex/config.yaml
+    # Sindri shares this network namespace, so it reaches Dex at the same
+    # http://localhost:5556 the browser uses, and the token issuer matches.
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:5556:5556"
+
+  sindri:
+    image: ${SINDRI_IMAGE:-ghcr.io/spjdevops/sindri:latest}
+    network_mode: "service:dex"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dex:
+        condition: service_started
+    environment:
+      SINDRI_TOKEN: ${SINDRI_TOKEN:?export SINDRI_TOKEN first, for example SINDRI_TOKEN=$(openssl rand -hex 16)}
+    configs:
+      - source: sindri
+        target: /etc/sindri/sindri.yaml
+    volumes:
+      - blobs:/var/lib/sindri
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/sindri", "probe", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+configs:
+  sindri:
+    content: |
+      listen: :8080
+      storage: /var/lib/sindri
+      database: postgres://sindri:sindri@postgres:5432/sindri?sslmode=disable
+      auth:
+        # The bootstrap administrator token: docker login uses it below.
+        static_token: $${SINDRI_TOKEN}
+        admins: [authors]
+        oidc:
+          issuer: http://localhost:5556/dex
+          clientId: sindri
+          clientSecret: quickstart-not-a-secret
+          redirectUrl: http://localhost:8080/auth/callback
+          scopes: [openid, profile, email, groups]
+  dex:
+    content: |
+      issuer: http://localhost:5556/dex
+      storage:
+        type: memory
+      web:
+        http: 0.0.0.0:5556
+      oauth2:
+        skipApprovalScreen: true
+      staticClients:
+        - id: sindri
+          name: Sindri
+          secret: quickstart-not-a-secret
+          redirectURIs: ["http://localhost:8080/auth/callback"]
+      connectors:
+        - type: mockCallback
+          id: mock
+          name: Example user
+
+volumes:
+  postgres:
+  blobs:

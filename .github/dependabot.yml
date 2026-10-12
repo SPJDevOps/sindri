@@ -1,9 +1,12 @@
 # Dependabot version updates for Sindri.
 #
-# Three ecosystems exist in this repository and all three are covered:
+# Five ecosystems exist in this repository and all five are covered:
 #   - github-actions   the workflows under .github/workflows
 #   - gomod            the single module at the repository root
-#   - docker-compose   the local development stack in deploy/compose
+#   - docker-compose   the development stack (deploy/compose) and the
+#                      quickstart (deploy/quickstart)
+#   - docker           the image's distroless base and the source build's
+#                      golang builder (/Dockerfile, deploy/docker/Dockerfile)
 #
 # Not covered, deliberately:
 #   - testdata/demo/Dockerfile is `FROM scratch`; there is nothing to update,
@@ -97,7 +100,9 @@ updates:
 
   # --------------------------------------------------------- docker compose --
   - package-ecosystem: "docker-compose"
-    directory: "/deploy/compose"
+    directories:
+      - "/deploy/compose"
+      - "/deploy/quickstart"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -128,3 +133,26 @@ updates:
       # Both spellings are listed because the registry is in flux.
       - dependency-name: "quay.io/minio/*"
       - dependency-name: "bitnamilegacy/minio*"
+
+  # ---------------------------------------------------------------- docker ---
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+      - "/deploy/docker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "deps"
+    cooldown:
+      default-days: 5
+    ignore:
+      # The golang builder must match GO_VERSION in ci.yml, which is pinned to
+      # what golangci-lint can read. Bump the three together, by hand.
+      - dependency-name: "golang"

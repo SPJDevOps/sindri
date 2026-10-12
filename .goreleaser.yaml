@@ -1,0 +1,75 @@
+# goreleaser v2. Snapshot locally with:
+#
+#   goreleaser release --snapshot --clean
+#
+# Releases run from .github/workflows/release.yml on a v* tag.
+version: 2
+
+project_name: sindri
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: sindri
+    main: ./cmd/sindri
+    binary: sindri
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/spj/sindri/internal/version.Version={{ .Version }}
+      - -X github.com/spj/sindri/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/spj/sindri/internal/version.Date={{ .Date }}
+    # Reproducible: the binary's timestamps come from the commit, not the
+    # machine that built it.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: sindri
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - SECURITY.md
+      - deploy/quickstart/compose.yaml
+
+checksum:
+  name_template: checksums.txt
+
+dockers_v2:
+  - id: sindri
+    images:
+      - ghcr.io/spjdevops/sindri
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .IsSnapshot }}latest{{ end }}"
+    dockerfile: deploy/docker/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    extra_files:
+      - deploy/docker/data
+    labels:
+      org.opencontainers.image.title: Sindri
+      org.opencontainers.image.description: A self-hosted artifact registry for OCI and PyPI with lifecycle and evidence
+      org.opencontainers.image.source: https://github.com/SPJDevOps/sindri
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
