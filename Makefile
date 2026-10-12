@@ -93,7 +93,12 @@ tools:
 	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 	go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 
-## up: Start local Postgres and MinIO for development.
+## run: Build and serve against the `make up` stack, with UI sign-in through Dex.
+.PHONY: run
+run: build
+	$(BIN_DIR)/$(BINARY) serve --config deploy/compose/sindri.yaml
+
+## up: Start local Postgres, MinIO, and Dex for development.
 .PHONY: up
 up:
 	docker compose -f $(COMPOSE_FILE) up -d

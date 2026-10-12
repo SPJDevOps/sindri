@@ -72,14 +72,17 @@ The quickstart is verified on every milestone in a fresh Docker daemon by
 To run from source instead, with Go and Docker installed:
 
 ```bash
-make up            # Postgres on 55432, MinIO on 59000
-make build
-./bin/sindri serve # no configuration file needed; defaults match the Compose stack
-curl -fsS localhost:8080/readyz
+make up    # Postgres on 55432, MinIO on 59000, Dex on 5556
+make run   # builds, then serves deploy/compose/sindri.yaml on :8080
+open http://localhost:8080/ui/
 ```
 
-The default bootstrap token is `sindri-dev-token`, and the server warns while it is in
-use. Set `auth: ${SINDRI_TOKEN}` in `sindri.yaml` for anything but local development.
+The browser signs in through the development Dex as an example administrator, the same
+as in the quickstart. `docker login localhost:8080` takes the bootstrap token
+`sindri-dev-token` as its password, and the server warns while that default is in use.
+`./bin/sindri serve` with no configuration file also works, but without `auth.oidc` the UI
+can only explain how to enable sign-in. Set `auth: ${SINDRI_TOKEN}` and point `auth.oidc` at
+your own identity provider for anything but local development.
 
 ## Configuration as code
 
