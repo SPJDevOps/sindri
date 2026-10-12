@@ -30,6 +30,10 @@ func TestValidateRepoName(t *testing.T) {
 		{name: "reserved oci tags", in: "team/tags/x", wantErr: true},
 		{name: "reserved regardless of case", in: "team/Packages", wantErr: true},
 		{name: "reserved word as substring is fine", in: "team/packages-internal"},
+		// The UI separates a repository name from the page within it with
+		// /-/, so a lone dash segment would make /ui/r/team/-/... ambiguous.
+		{name: "reserved ui separator", in: "team/-/x", wantErr: true},
+		{name: "dash inside a segment is fine", in: "team/-x-"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

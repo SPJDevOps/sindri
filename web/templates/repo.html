@@ -1,0 +1,35 @@
+{{define "content"}}
+<h1 class="page-title">{{.Repo.Name}}</h1>
+<div class="pills"><span class="pill{{if .Repo.Upstream}} upstream{{end}}">{{.Repo.Type}}</span><span class="pill">{{.Repo.Protocol}}</span>{{if .Repo.Locked}}<span class="pill">locked</span>{{end}}<span class="pill">managed by {{.Repo.ManagedBy}}</span></div>
+{{if .Upstream}}
+<div class="section callout upstream"><strong>Proxy of {{.Upstream}}.</strong> Content here was fetched from outside and cached. It carries no owner, provenance, or lifecycle state, and it can never be promoted.</div>
+{{end}}
+{{if .IsVirtual}}
+<section class="section">
+  <h2 class="section-title">Members</h2>
+  <p class="hint">Resolution walks these in order and the first hit wins. A name claimed by a hosted member is never served from a proxy.</p>
+  <div class="rows">
+  {{range $i, $m := .Members}}
+    <div class="row"><a class="primary mono" href="{{$m.Href}}">{{$m.Name}}</a><span class="secondary">{{$m.Type}}</span></div>
+  {{else}}
+    <div class="row empty">No member you may read.</div>
+  {{end}}
+  </div>
+</section>
+{{else}}
+<section class="section">
+  <h2 class="section-title">{{if eq .Repo.Protocol "oci"}}Images{{else}}Packages{{end}}</h2>
+  <div class="rows" id="packages">
+  {{template "package-rows" .}}
+  </div>
+</section>
+{{end}}
+{{end}}
+
+{{define "package-rows"}}{{range .Packages}}
+    <div class="row"><a class="primary mono" href="{{.Href}}">{{.Name}}</a></div>
+{{else}}{{if not .Cursor}}
+    <div class="row empty">Nothing published here yet.</div>
+{{end}}{{end}}{{if .More}}
+    <div class="more"><button type="button" hx-get="{{.More}}" hx-target="closest .more" hx-swap="outerHTML">Load more</button></div>
+{{end}}{{end}}

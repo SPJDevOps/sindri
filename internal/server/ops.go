@@ -55,6 +55,9 @@ func (s *Server) router() http.Handler {
 	}
 	if s.opts.UI != nil {
 		r.Mount("/ui", s.opts.UI)
+		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/ui/", http.StatusFound)
+		})
 	}
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {

@@ -17,9 +17,11 @@ import (
 	"github.com/spj/sindri/internal/storage"
 )
 
-// ociPackageName is the singleton package that carries tags when the Sindri
+// OCIRootPackage is the singleton package that carries tags when the Sindri
 // repository name is the OCI image name (no remainder after prefix match).
-const ociPackageName = "_"
+const OCIRootPackage = "_"
+
+const ociPackageName = OCIRootPackage
 
 // ErrWrongProtocol means the named repository exists but speaks a different
 // protocol than the caller requires (OCI vs PyPI).

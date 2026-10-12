@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -176,8 +177,13 @@ func (s *Sessions) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, pl.Next, http.StatusFound)
 }
 
-func (s *Sessions) logout(w http.ResponseWriter, _ *http.Request) {
+func (s *Sessions) logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, s.cookie(SessionCookie, "", "/", -1))
+	// The UI's sign-out control posts through htmx, which follows this
+	// header rather than a redirect status.
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", "/ui/")
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -231,9 +237,15 @@ func (s SessionAuthenticator) Authenticate(ctx context.Context, r *http.Request)
 }
 
 // GuardUI wraps the read-only UI: every page needs a signed-in principal, by
-// session cookie or token, and only GET and HEAD reach it. M8 mounts its
-// handler through this.
-func GuardUI(chain *Chain, ui http.Handler) http.Handler {
+// session cookie or token, and only GET and HEAD reach it.
+//
+// login says whether browser sign-in (auth.oidc with a redirect URL) is
+// configured. Without it there is no /auth/login to send a browser to, so a
+// signed-out visit gets a page saying how to enable it. It never gets a Basic
+// challenge: a browser caches Basic credentials and attaches them to
+// cross-site requests, and every write route accepts Basic, because that is
+// what docker, pip, and twine send (ADR 21).
+func GuardUI(chain *Chain, ui http.Handler, login bool) http.Handler {
 	readOnly := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -243,13 +255,33 @@ func GuardUI(chain *Chain, ui http.Handler) http.Handler {
 		ui.ServeHTTP(w, r)
 	})
 	return Middleware(SessionAuthenticator{Chain: chain}, func(w http.ResponseWriter, r *http.Request, _ error) {
-		if r.Method == http.MethodGet {
+		switch {
+		case r.Method == http.MethodGet && login:
 			http.Redirect(w, r, "/auth/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
-			return
+		case r.Method == http.MethodGet:
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Content-Security-Policy", "default-src 'none'")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, signInNotConfigured)
+		default:
+			denyJSON(w, r, nil)
 		}
-		denyJSON(w, r, nil)
 	})(readOnly)
 }
+
+// signInNotConfigured is served without the UI's stylesheet: assets sit
+// behind sign-in too, and this page exists because there is none.
+const signInNotConfigured = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign-in is not configured · Sindri</title></head>
+<body>
+<h1>Sign-in is not configured</h1>
+<p>The Sindri web interface signs people in through an OpenID Connect identity provider.
+This server has none: set <code>auth.oidc</code>, including <code>redirectUrl</code>, in sindri.yaml and restart.</p>
+<p>docker, pip, twine, and the management API keep working with machine tokens and the bootstrap token.</p>
+</body></html>
+`
 
 // safeNext keeps the post-login redirect on this server: a path, never a
 // scheme-relative or absolute URL that would make /auth/login an open
