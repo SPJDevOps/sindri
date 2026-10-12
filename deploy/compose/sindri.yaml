@@ -5,7 +5,10 @@
 # then open http://localhost:8080/ui/. Dex signs you in as an example user,
 # who administers this server. DEVELOPMENT ONLY: never point a deployment at
 # this file.
-listen: ${SINDRI_LISTEN:-:8080}
+# Loopback only: the bootstrap token below is public knowledge, so this
+# server must not be reachable from the network. Docker Desktop's daemon
+# still reaches it as host.docker.internal:8080.
+listen: ${SINDRI_LISTEN:-127.0.0.1:8080}
 # Relative paths resolve against this file, so this is ./data at the
 # repository root, which git ignores.
 storage: ${SINDRI_DATA_DIR:-../../data}

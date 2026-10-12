@@ -78,8 +78,10 @@ open http://localhost:8080/ui/
 ```
 
 The browser signs in through the development Dex as an example administrator, the same
-as in the quickstart. `docker login localhost:8080` takes the bootstrap token
-`sindri-dev-token` as its password, and the server warns while that default is in use.
+as in the quickstart. The server listens on loopback only, because its bootstrap token
+`sindri-dev-token` is public, and it warns while that default is in use. `docker login`
+takes the token as its password, at `localhost:8080` on Linux; Docker Desktop's daemon runs
+in a VM, so there use `host.docker.internal:8080` and list it under `insecure-registries`.
 `./bin/sindri serve` with no configuration file also works, but without `auth.oidc` the UI
 can only explain how to enable sign-in. Set `auth: ${SINDRI_TOKEN}` and point `auth.oidc` at
 your own identity provider for anything but local development.
