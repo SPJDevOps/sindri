@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -30,6 +32,10 @@ type upload struct {
 	parts       []types.CompletedPart
 	buf         []byte
 	size        int64
+	// lastActive is when the upload was created or last appended to, for
+	// PurgeUploads. Guarded by the store's mu, not the upload's, so that a
+	// purge can read it without waiting behind a slow Append.
+	lastActive time.Time
 }
 
 // CreateUpload registers a staging area. No object exists until the first part
@@ -42,7 +48,7 @@ func (s *Store) CreateUpload(_ context.Context) (storage.UploadID, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.uploads[id] = &upload{key: s.stagingKey(id)}
+	s.uploads[id] = &upload{key: s.stagingKey(id), lastActive: time.Now()}
 
 	return id, nil
 }
@@ -56,6 +62,8 @@ func (s *Store) Append(ctx context.Context, id storage.UploadID, r io.Reader) (i
 
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	s.touch(u)
+	defer s.touch(u)
 
 	chunk := make([]byte, 32<<10)
 	for {
@@ -215,8 +223,161 @@ func (s *Store) lookup(id storage.UploadID) (*upload, error) {
 	return u, nil
 }
 
+// touch records activity on u.
+func (s *Store) touch(u *upload) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u.lastActive = time.Now()
+}
+
 func (s *Store) forget(id storage.UploadID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.uploads, id)
+}
+
+// PurgeUploads discards staged uploads idle since before olderThan.
+//
+// Two kinds of state are purged. Sessions this process holds are dropped from
+// memory, which also frees the up to one part of bytes each buffers, and their
+// multipart uploads are aborted. Then the bucket is listed for staging state
+// no live session owns, which is what a crashed process leaves behind: open
+// multipart uploads under the staging prefix, and staging objects a commit
+// completed but never copied to their content addressed key.
+//
+// S3 records when a multipart upload was initiated, not when it was last
+// written to, so remote state belonging to a session this process still holds
+// is never judged by that date.
+func (s *Store) PurgeUploads(ctx context.Context, olderThan time.Time) (int, error) {
+	n := 0
+	for _, id := range s.idleSessions(olderThan) {
+		u, err := s.lookup(id)
+		if err != nil {
+			continue // committed or aborted since
+		}
+		// An upload whose lock is held is mid-Append or mid-Commit, which is
+		// activity: leave it.
+		if !u.mu.TryLock() {
+			continue
+		}
+		s.forget(id)
+		multipartID := u.multipartID
+		u.mu.Unlock()
+		n++
+		if multipartID == "" {
+			continue
+		}
+		if err := s.abortMultipart(ctx, u.key, multipartID); err != nil {
+			return n, err
+		}
+	}
+
+	live := s.liveKeys()
+	orphans, err := s.purgeOrphanMultiparts(ctx, olderThan, live)
+	n += orphans
+	if err != nil {
+		return n, err
+	}
+	objects, err := s.purgeOrphanObjects(ctx, olderThan, live)
+	n += objects
+	return n, err
+}
+
+func (s *Store) idleSessions(olderThan time.Time) []storage.UploadID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []storage.UploadID
+	for id, u := range s.uploads {
+		if u.lastActive.Before(olderThan) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// liveKeys is the staging key of every session this process still holds.
+func (s *Store) liveKeys() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keys := make(map[string]bool, len(s.uploads))
+	for _, u := range s.uploads {
+		keys[u.key] = true
+	}
+	return keys
+}
+
+func (s *Store) stagingPrefix() string { return s.key("staging") + "/" }
+
+func (s *Store) purgeOrphanMultiparts(ctx context.Context, olderThan time.Time, live map[string]bool) (int, error) {
+	n := 0
+	prefix := s.stagingPrefix()
+	// No Prefix on the request: MinIO answers ListMultipartUploads with a
+	// prefix only when the prefix is a whole object key, and returns nothing
+	// for a directory-like one, which would leave every orphan in place. The
+	// listing is filtered here instead, which AWS and MinIO agree on.
+	in := &s3.ListMultipartUploadsInput{Bucket: aws.String(s.bucket)}
+	for {
+		out, err := s.client.ListMultipartUploads(ctx, in)
+		if err != nil {
+			return n, fmt.Errorf("listing staged multipart uploads: %w", err)
+		}
+		for _, mu := range out.Uploads {
+			key := aws.ToString(mu.Key)
+			if !strings.HasPrefix(key, prefix) || live[key] || mu.Initiated == nil || !mu.Initiated.Before(olderThan) {
+				continue
+			}
+			if err := s.abortMultipart(ctx, key, aws.ToString(mu.UploadId)); err != nil {
+				return n, err
+			}
+			n++
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			return n, nil
+		}
+		in.KeyMarker = out.NextKeyMarker
+		in.UploadIdMarker = out.NextUploadIdMarker
+	}
+}
+
+func (s *Store) purgeOrphanObjects(ctx context.Context, olderThan time.Time, live map[string]bool) (int, error) {
+	n := 0
+	p := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(s.stagingPrefix()),
+	})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
+		if err != nil {
+			return n, fmt.Errorf("listing staged objects: %w", err)
+		}
+		for _, obj := range out.Contents {
+			key := aws.ToString(obj.Key)
+			if live[key] || obj.LastModified == nil || !obj.LastModified.Before(olderThan) {
+				continue
+			}
+			if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+				Bucket: aws.String(s.bucket),
+				Key:    aws.String(key),
+			}); err != nil {
+				return n, fmt.Errorf("removing staged object %s: %w", key, err)
+			}
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *Store) abortMultipart(ctx context.Context, key, uploadID string) error {
+	if _, err := s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(s.bucket),
+		Key:      aws.String(key),
+		UploadId: aws.String(uploadID),
+	}); err != nil {
+		var noSuch *types.NoSuchUpload
+		if errors.As(err, &noSuch) {
+			return nil
+		}
+		return fmt.Errorf("aborting staged multipart upload %s: %w", key, err)
+	}
+	return nil
 }

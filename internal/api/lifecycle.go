@@ -37,6 +37,7 @@ func (a *api) mountIdentity(r chi.Router) {
 	})
 
 	r.Get("/decisions", a.decide)
+	r.Get("/audit", a.audit)
 }
 
 // pathDigest parses the {digest} URL parameter at the edge, so the services
@@ -146,12 +147,17 @@ func (a *api) getSubject(w http.ResponseWriter, r *http.Request) {
 		a.writeLifecycleError(w, r, err)
 		return
 	}
+	all, readable, _, err := a.readableRepositories(r)
+	if err != nil {
+		a.writeRegistryError(w, r, err)
+		return
+	}
 	resp := subjectResponse{
 		Digest:     s.Digest.String(),
 		Kind:       string(s.Kind),
 		Size:       s.Size,
 		CreatedAt:  timestamp(s.CreatedAt),
-		Owners:     s.Owners,
+		Owners:     visibleOwners(s.Owners, all, readable),
 		Provenance: make([]provenanceResponse, 0, len(s.Provenance)),
 		States:     make([]stateResponse, 0, len(s.States)),
 	}
@@ -164,6 +170,9 @@ func (a *api) getSubject(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	for _, st := range s.States {
+		if !all && !readable[st.Repository] {
+			continue
+		}
 		resp.States = append(resp.States, stateResponse{
 			Repository: st.Repository,
 			Stage:      st.Stage,
@@ -349,9 +358,18 @@ func (a *api) listEvents(w http.ResponseWriter, r *http.Request) {
 		a.writeLifecycleError(w, r, err)
 		return
 	}
+	// Reading one owner of a subject is not reading every repository it was
+	// promoted in: events elsewhere would disclose those repositories' names.
+	all, readable, _, err := a.readableRepositories(r)
+	if err != nil {
+		a.writeRegistryError(w, r, err)
+		return
+	}
 	items := make([]eventResponse, 0, len(events))
 	for _, ev := range events {
-		items = append(items, eventJSON(ev))
+		if all || readable[ev.Repository] {
+			items = append(items, eventJSON(ev))
+		}
 	}
 	a.writeJSON(w, r, http.StatusOK, listResponse[eventResponse]{Items: items})
 }

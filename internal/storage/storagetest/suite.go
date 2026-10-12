@@ -15,6 +15,7 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/storage"
@@ -27,9 +28,31 @@ type NewStoreFunc func(t *testing.T) storage.BlobStore
 // the suite exercises the multipart path rather than only single puts.
 const partSizeCrossing = 10 << 20
 
+// ReopenFunc returns a store and a function that opens a second store over the
+// same persistent state, as a restarted process would. It is how the suite
+// checks that state a crashed process left behind can still be cleaned up.
+type ReopenFunc func(t *testing.T) (first storage.BlobStore, reopen func() storage.BlobStore)
+
+// Option adjusts RunSuite.
+type Option func(*suiteOptions)
+
+type suiteOptions struct {
+	reopen ReopenFunc
+}
+
+// WithReopen enables the cases that need a second store over the same state.
+// A backend whose state dies with the process, such as memstore, omits it.
+func WithReopen(f ReopenFunc) Option {
+	return func(o *suiteOptions) { o.reopen = f }
+}
+
 // RunSuite runs every conformance case against the store newStore returns.
-func RunSuite(t *testing.T, newStore NewStoreFunc) {
+func RunSuite(t *testing.T, newStore NewStoreFunc, opts ...Option) {
 	t.Helper()
+	var o suiteOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 
 	cases := []struct {
 		name string
@@ -50,6 +73,9 @@ func RunSuite(t *testing.T, newStore NewStoreFunc) {
 		{"UnknownUploadIsErrUploadNotFound", testUnknownUpload},
 		{"ConcurrentPutsOfOneDigestAllSucceed", testConcurrentPut},
 		{"LargeBlobRoundTripsThroughStaging", testLargeStagedBlob},
+		{"PurgeUploadsRemovesIdleSessions", testPurgeRemovesIdle},
+		{"PurgeUploadsKeepsRecentSessions", testPurgeKeepsRecent},
+		{"PurgeUploadsNeverTouchesCommittedBlobs", testPurgeKeepsBlobs},
 	}
 
 	for _, tc := range cases {
@@ -57,6 +83,13 @@ func RunSuite(t *testing.T, newStore NewStoreFunc) {
 			tc.run(t, newStore(t))
 		})
 	}
+
+	t.Run("PurgeUploadsAfterReopenRemovesOrphans", func(t *testing.T) {
+		if o.reopen == nil {
+			t.Skip("this backend keeps no state across a restart")
+		}
+		testPurgeAfterReopen(t, o.reopen)
+	})
 }
 
 func testPutGetRoundTrip(t *testing.T, s storage.BlobStore) {
@@ -460,4 +493,119 @@ func pseudoRandom(n int) []byte {
 	r := rand.New(rand.NewSource(1)) //nolint:gosec // test fixture, not a secret
 	_, _ = r.Read(b)
 	return b
+}
+
+// purgeMargin keeps the purge cases clear of clock skew between this process
+// and an object store whose timestamps come from its own clock.
+const purgeMargin = time.Minute
+
+func testPurgeRemovesIdle(t *testing.T, s storage.BlobStore) {
+	ctx := t.Context()
+	id, err := s.CreateUpload(ctx)
+	if err != nil {
+		t.Fatalf("CreateUpload: %v", err)
+	}
+	if _, err := s.Append(ctx, id, bytes.NewReader([]byte("abandoned halfway"))); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	n, err := s.PurgeUploads(ctx, time.Now().Add(purgeMargin))
+	if err != nil {
+		t.Fatalf("PurgeUploads: %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("PurgeUploads removed %d uploads, want at least 1", n)
+	}
+	if _, err := s.Append(ctx, id, bytes.NewReader([]byte("more"))); !errors.Is(err, storage.ErrUploadNotFound) {
+		t.Fatalf("Append after purge = %v, want ErrUploadNotFound", err)
+	}
+	if err := s.CommitUpload(ctx, id, digestOf([]byte("abandoned halfway"))); !errors.Is(err, storage.ErrUploadNotFound) {
+		t.Fatalf("CommitUpload after purge = %v, want ErrUploadNotFound", err)
+	}
+}
+
+func testPurgeKeepsRecent(t *testing.T, s storage.BlobStore) {
+	ctx := t.Context()
+	payload := []byte("still being pushed")
+	id, err := s.CreateUpload(ctx)
+	if err != nil {
+		t.Fatalf("CreateUpload: %v", err)
+	}
+	if _, err := s.Append(ctx, id, bytes.NewReader(payload)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	n, err := s.PurgeUploads(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("PurgeUploads: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("PurgeUploads removed %d uploads active within the last hour", n)
+	}
+	if err := s.CommitUpload(ctx, id, digestOf(payload)); err != nil {
+		t.Fatalf("CommitUpload after a purge that should have kept it: %v", err)
+	}
+	if got := mustGet(t, ctx, s, digestOf(payload)); !bytes.Equal(got, payload) {
+		t.Fatalf("Get = %q, want %q", got, payload)
+	}
+}
+
+func testPurgeKeepsBlobs(t *testing.T, s storage.BlobStore) {
+	ctx := t.Context()
+	put := []byte("committed with Put")
+	if err := s.Put(ctx, digestOf(put), bytes.NewReader(put), int64(len(put))); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	staged := pseudoRandom(partSizeCrossing + 1)
+	id, err := s.CreateUpload(ctx)
+	if err != nil {
+		t.Fatalf("CreateUpload: %v", err)
+	}
+	if _, err := s.Append(ctx, id, bytes.NewReader(staged)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := s.CommitUpload(ctx, id, digestOf(staged)); err != nil {
+		t.Fatalf("CommitUpload: %v", err)
+	}
+
+	if _, err := s.PurgeUploads(ctx, time.Now().Add(purgeMargin)); err != nil {
+		t.Fatalf("PurgeUploads: %v", err)
+	}
+	if got := mustGet(t, ctx, s, digestOf(put)); !bytes.Equal(got, put) {
+		t.Fatal("a purge changed a blob written with Put")
+	}
+	if got := mustGet(t, ctx, s, digestOf(staged)); !bytes.Equal(got, staged) {
+		t.Fatal("a purge changed a blob committed from staging")
+	}
+}
+
+// A process that crashed mid-upload leaves staging state no live session
+// knows about. A restarted process must still be able to clean it up.
+func testPurgeAfterReopen(t *testing.T, reopen ReopenFunc) {
+	ctx := t.Context()
+	first, again := reopen(t)
+	id, err := first.CreateUpload(ctx)
+	if err != nil {
+		t.Fatalf("CreateUpload: %v", err)
+	}
+	// Past one part, so an object store has a real multipart upload open.
+	if _, err := first.Append(ctx, id, bytes.NewReader(pseudoRandom(partSizeCrossing+1))); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	second := again()
+	n, err := second.PurgeUploads(ctx, time.Now().Add(purgeMargin))
+	if err != nil {
+		t.Fatalf("PurgeUploads after a restart: %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("PurgeUploads after a restart removed %d uploads, want the orphan", n)
+	}
+	n, err = second.PurgeUploads(ctx, time.Now().Add(purgeMargin))
+	if err != nil {
+		t.Fatalf("second PurgeUploads: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("a second purge found %d more uploads: the first left the orphan behind", n)
+	}
 }

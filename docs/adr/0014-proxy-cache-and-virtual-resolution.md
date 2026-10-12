@@ -68,7 +68,10 @@ never be pulled. The placeholder row takes its size from the descriptor and is
 inserted with `ON CONFLICT DO NOTHING`, so it never rewrites the size of a blob
 that already exists. A placeholder has no bytes behind it: M8's garbage
 collector must treat an unplaced `blobs` row as absent, never as something to
-delete from storage.
+delete from storage. *Refined by
+[ADR 19](0019-garbage-collection-roots-write-intent-and-sweep.md): an
+unreachable placeholder is collected like any other row, and deleting a blob
+that has no bytes is a success.*
 
 **Docker Hub's `library/`.** A Docker client adds `library/` to single-segment
 names only when talking to Docker Hub itself. A proxy whose upstream host is a

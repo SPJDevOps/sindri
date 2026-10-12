@@ -15,7 +15,7 @@ exist?" but **"is exactly this artifact approved for this environment?"**
 Pre-v1, under active construction. See [roadmap.md](roadmap.md) for the milestone plan
 and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
-Through milestone M7, `sindri serve` boots from one YAML file (or none), applies its
+Through milestone M8a, `sindri serve` boots from one YAML file (or none), applies its
 embedded migrations to Postgres, stores digest-verified blobs on a filesystem or any
 S3-compatible bucket, and serves two protocols:
 
@@ -31,7 +31,11 @@ configuration file and reconciled on startup. Every request authenticates, with 
 OpenID Connect token, a machine token for CI, or the bootstrap token. There is no
 anonymous access.
 
-Not there yet: the web UI, background garbage collection, and a release (M8).
+A background worker evicts stale proxy cache entries and abandoned uploads. `sindri gc`
+reclaims blobs nothing references, safely beside pushes in flight, and `/api/v1/audit`
+reads the promotion ledger.
+
+Not there yet: the web UI and a release (M8b).
 
 ## What v1 will do
 
@@ -46,7 +50,7 @@ Not there yet: the web UI, background garbage collection, and a release (M8).
 
 ## Quickstart
 
-Not yet available. It arrives with milestone M8 and will be verified from a clean
+Not yet available. It arrives with milestone M8b and will be verified from a clean
 machine with nothing installed but Docker.
 
 To run what exists today from source, with Go and Docker installed:
@@ -88,6 +92,11 @@ Many teams write enveloped manifests instead (`kind: Repository`, `OrgPolicy`,
 `Lifecycle`) and converge them from CI with `sindri apply -f manifests/`. `sindri diff`
 reports drift and exits 1 when there is any. See ARCHITECTURE.md section 8 and
 [ADR 17](docs/adr/0017-config-kinds-namespaces-and-reconciliation.md).
+
+Garbage collection: `sindri gc --dry-run` lists what nothing references any more, such as
+an image whose tag moved and that was never promoted, and `sindri gc` deletes it. It talks
+to a running server with an administrator's `$SINDRI_TOKEN`. Set `worker.gc.interval` to
+run it on a schedule. See [ADR 19](docs/adr/0019-garbage-collection-roots-write-intent-and-sweep.md).
 
 Identity: configure `auth.oidc` and `auth.admins`, and people use their identity
 provider's ID token as the password for docker, pip, and twine. CI uses machine tokens

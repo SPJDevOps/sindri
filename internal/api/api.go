@@ -19,8 +19,10 @@ import (
 	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/evidence"
+	"github.com/spj/sindri/internal/gc"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/reconcile"
 	"github.com/spj/sindri/internal/registry"
 )
@@ -59,6 +61,9 @@ type Options struct {
 	Reconciler *reconcile.Reconciler
 	// Tokens serves /tokens. Nil leaves it unmounted.
 	Tokens *auth.TokenService
+	// GC and Queue serve /gc and /jobs. Both or neither.
+	GC    *gc.Collector
+	Queue *queue.Queue
 }
 
 // Handler returns the /api/v1 chi router. Mount it with r.Mount("/api/v1", ...).
@@ -79,6 +84,9 @@ func Handler(opts Options) http.Handler {
 	if (opts.Lifecycle == nil) != (opts.Evidence == nil) {
 		panic("api.Handler: Lifecycle and Evidence must be set together")
 	}
+	if (opts.GC == nil) != (opts.Queue == nil) {
+		panic("api.Handler: GC and Queue must be set together")
+	}
 
 	a := &api{
 		reg:         opts.Registry,
@@ -89,6 +97,8 @@ func Handler(opts Options) http.Handler {
 		credentials: opts.Credentials,
 		reconciler:  opts.Reconciler,
 		tokens:      opts.Tokens,
+		gc:          opts.GC,
+		queue:       opts.Queue,
 	}
 
 	r := chi.NewRouter()
@@ -119,6 +129,11 @@ func Handler(opts Options) http.Handler {
 		r.Post("/tokens", a.createToken)
 		r.Delete("/tokens/{id}", a.revokeToken)
 	}
+	if a.gc != nil {
+		r.Get("/gc/candidates", a.gcCandidates)
+		r.Post("/gc", a.startGC)
+		r.Get("/jobs/{id}", a.getJob)
+	}
 
 	return r
 }
@@ -132,6 +147,8 @@ type api struct {
 	credentials func() map[string]struct{}
 	reconciler  *reconcile.Reconciler
 	tokens      *auth.TokenService
+	gc          *gc.Collector
+	queue       *queue.Queue
 }
 
 func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {

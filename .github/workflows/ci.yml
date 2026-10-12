@@ -14,7 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.27"
+  # Pinned to the patch release golangci-lint v2.13.2 can read. Go 1.27.2
+  # changed the export data format and the linter fails to typecheck the
+  # standard library on it. Keep this equal to the toolchain `make tools`
+  # builds golangci-lint with; bump both together with the linter.
+  GO_VERSION: "1.27.1"
 
 jobs:
   lint:

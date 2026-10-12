@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/storage"
@@ -275,6 +276,46 @@ func (s *Store) AbortUpload(_ context.Context, id storage.UploadID) error {
 		return fmt.Errorf("aborting upload %s: %w", id, err)
 	}
 	return nil
+}
+
+// PurgeUploads removes staging files last written to before olderThan. Every
+// Append rewrites the file, so its modification time is when the upload was
+// last active. The staging directory is the whole of an upload's state, so
+// this also covers uploads a crashed process left behind, and the put-* files
+// of a Put that never finished.
+func (s *Store) PurgeUploads(ctx context.Context, olderThan time.Time) (int, error) {
+	dir := filepath.Join(s.root, stagingDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, fmt.Errorf("listing staged uploads: %w", err)
+	}
+	n := 0
+	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return n, err
+		}
+		if e.IsDir() || e.Name() == probeName {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // committed or aborted while we listed
+			}
+			return n, fmt.Errorf("stating staged upload %s: %w", e.Name(), err)
+		}
+		if !info.ModTime().Before(olderThan) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return n, fmt.Errorf("removing staged upload %s: %w", e.Name(), err)
+		}
+		n++
+	}
+	return n, nil
 }
 
 // Probe checks the store is present and writable, which is what readiness

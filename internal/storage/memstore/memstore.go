@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/storage"
@@ -24,6 +25,8 @@ type Store struct {
 	mu      sync.RWMutex
 	blobs   map[model.Digest][]byte
 	uploads map[storage.UploadID][]byte
+	// active is when each upload was last written to, for PurgeUploads.
+	active map[storage.UploadID]time.Time
 }
 
 var (
@@ -36,6 +39,7 @@ func New() *Store {
 	return &Store{
 		blobs:   make(map[model.Digest][]byte),
 		uploads: make(map[storage.UploadID][]byte),
+		active:  make(map[storage.UploadID]time.Time),
 	}
 }
 
@@ -130,6 +134,7 @@ func (s *Store) CreateUpload(_ context.Context) (storage.UploadID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.uploads[id] = nil
+	s.active[id] = time.Now()
 
 	return id, nil
 }
@@ -150,6 +155,7 @@ func (s *Store) Append(_ context.Context, id storage.UploadID, r io.Reader) (int
 	}
 	staged = append(staged, body...)
 	s.uploads[id] = staged
+	s.active[id] = time.Now()
 
 	return int64(len(staged)), nil
 }
@@ -168,6 +174,7 @@ func (s *Store) CommitUpload(_ context.Context, id storage.UploadID, digest mode
 		return fmt.Errorf("committing upload %s: %w", id, storage.ErrUploadNotFound)
 	}
 	delete(s.uploads, id)
+	delete(s.active, id)
 	if _, exists := s.blobs[digest]; !exists {
 		s.blobs[digest] = staged
 	}
@@ -179,7 +186,23 @@ func (s *Store) AbortUpload(_ context.Context, id storage.UploadID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.uploads, id)
+	delete(s.active, id)
 	return nil
+}
+
+// PurgeUploads discards uploads last written to before olderThan.
+func (s *Store) PurgeUploads(_ context.Context, olderThan time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, at := range s.active {
+		if at.Before(olderThan) {
+			delete(s.uploads, id)
+			delete(s.active, id)
+			n++
+		}
+	}
+	return n, nil
 }
 
 // Probe always succeeds: memory is always reachable.

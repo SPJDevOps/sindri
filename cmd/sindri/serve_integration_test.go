@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ type stack struct {
 	reload chan os.Signal
 	done   chan error
 	path   string
+	stop   func()
 }
 
 // startServe writes cfgBody (with the database and listener filled in) to a
@@ -64,17 +66,21 @@ func startServeAuth(t *testing.T, dbURL, authLines, cfgBody string, extra func(*
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { s.done <- serve(ctx, path, hooks) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case err := <-s.done:
-			if err != nil && !errors.Is(err, context.Canceled) {
-				t.Errorf("serve: %v", err)
+	var once sync.Once
+	s.stop = func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case err := <-s.done:
+				if err != nil && !errors.Is(err, context.Canceled) {
+					t.Errorf("serve: %v", err)
+				}
+			case <-time.After(30 * time.Second):
+				t.Error("serve did not stop")
 			}
-		case <-time.After(30 * time.Second):
-			t.Error("serve did not stop")
-		}
-	})
+		})
+	}
+	t.Cleanup(s.stop)
 
 	select {
 	case a := <-addr:

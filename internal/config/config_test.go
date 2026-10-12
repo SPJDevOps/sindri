@@ -86,6 +86,29 @@ func TestParse_DesugarsEverySection(t *testing.T) {
 			want:  func(c *config.Config) bool { return c.Auth.StaticToken == "my-token" },
 			desc:  "auth.static_token = my-token",
 		},
+		{
+			name:  "WorkerFalse",
+			input: "worker: false",
+			want: func(c *config.Config) bool {
+				return !c.Worker.Enabled && c.Worker.GC.Grace.Duration() == 24*time.Hour
+			},
+			desc: "a disabled worker with the default settings",
+		},
+		{
+			name:  "WorkerAbsent",
+			input: "listen: :8080",
+			want:  func(c *config.Config) bool { return c.Worker.Enabled },
+			desc:  "a running worker",
+		},
+		{
+			name:  "WorkerMappingWithoutEnabled",
+			input: "worker:\n  gc:\n    interval: 6h\n",
+			want: func(c *config.Config) bool {
+				return c.Worker.Enabled && c.Worker.GC.Interval.Duration() == 6*time.Hour &&
+					c.Worker.GC.Grace.Duration() == 24*time.Hour
+			},
+			desc: "a running worker collecting every 6h with the default grace",
+		},
 	}
 
 	for _, tc := range tests {
@@ -178,6 +201,26 @@ func TestParse_Rejects(t *testing.T) {
 			name:  "UnknownLogLevel",
 			input: "log: chatty\n",
 			want:  "is not a level",
+		},
+		{
+			name:  "WorkerNotABoolean",
+			input: "worker: sometimes\n",
+			want:  "worker must be true, false, or a mapping",
+		},
+		{
+			name:  "UnknownWorkerField",
+			input: "worker:\n  gc:\n    gracee: 1h\n",
+			want:  `unknown field "gracee"`,
+		},
+		{
+			name:  "WorkerNegativeGrace",
+			input: "worker:\n  gc:\n    grace: -1h\n",
+			want:  "must not be negative",
+		},
+		{
+			name:  "WorkerUploadMaxIdleTooShort",
+			input: "worker:\n  retention:\n    uploadMaxIdle: 5s\n",
+			want:  "worker.retention.uploadMaxIdle",
 		},
 		{
 			name:  "SectionGivenAList",

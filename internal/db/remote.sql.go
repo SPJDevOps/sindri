@@ -13,6 +13,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteFilesByVersion = `-- name: DeleteFilesByVersion :execrows
+DELETE FROM files
+WHERE version_id = $1
+`
+
+func (q *Queries) DeleteFilesByVersion(ctx context.Context, versionID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFilesByVersion, versionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteProxyTag = `-- name: DeleteProxyTag :execrows
+DELETE FROM tags t
+USING repositories r, packages p
+WHERE t.repo_id = r.id
+  AND t.package_id = p.id
+  AND r.id = $1
+  AND r.type = 'proxy'
+  AND p.normalized_name = $2
+  AND t.name = $3
+`
+
+type DeleteProxyTagParams struct {
+	RepoID         uuid.UUID `json:"repo_id"`
+	NormalizedName string    `json:"normalized_name"`
+	TagName        string    `json:"tag_name"`
+}
+
+func (q *Queries) DeleteProxyTag(ctx context.Context, arg DeleteProxyTagParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProxyTag, arg.RepoID, arg.NormalizedName, arg.TagName)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteRemoteCache = `-- name: DeleteRemoteCache :execrows
 DELETE FROM remote_cache
 WHERE repo_id = $1 AND cache_key = $2
@@ -118,6 +156,106 @@ func (q *Queries) InsertRepositoryMember(ctx context.Context, arg InsertReposito
 	var i RepositoryMember
 	err := row.Scan(&i.VirtualRepoID, &i.MemberRepoID, &i.Position)
 	return i, err
+}
+
+const listEvictableCacheEntries = `-- name: ListEvictableCacheEntries :many
+SELECT rc.repo_id, rc.cache_key, rc.status, r.name AS repo_name, r.protocol
+FROM remote_cache rc
+JOIN repositories r ON r.id = rc.repo_id AND r.type = 'proxy'
+JOIN remotes rem ON rem.repo_id = rc.repo_id
+WHERE (rc.status = 'hit' AND rem.ttl_seconds > 0
+       AND rc.fetched_at < now() - ((rem.ttl_seconds + $1::bigint) * interval '1 second'))
+   OR (rc.status = 'miss'
+       AND rc.fetched_at < now() - (rem.negative_ttl_seconds * interval '1 second'))
+ORDER BY rc.fetched_at, rc.repo_id, rc.cache_key
+LIMIT $2
+`
+
+type ListEvictableCacheEntriesParams struct {
+	StaleSeconds int64 `json:"stale_seconds"`
+	PageLimit    int32 `json:"page_limit"`
+}
+
+type ListEvictableCacheEntriesRow struct {
+	RepoID   uuid.UUID `json:"repo_id"`
+	CacheKey string    `json:"cache_key"`
+	Status   string    `json:"status"`
+	RepoName string    `json:"repo_name"`
+	Protocol string    `json:"protocol"`
+}
+
+// Proxy cache entries retention may remove (ADR 19). A hit is evictable once
+// it is older than the repository's TTL plus a stale-serving allowance, so an
+// upstream outage shorter than that allowance still serves the cached copy.
+// A TTL of zero means "fresh forever" and is never evicted. A miss is
+// evictable once its negative TTL has run out, at which point it already
+// behaves as no entry at all.
+func (q *Queries) ListEvictableCacheEntries(ctx context.Context, arg ListEvictableCacheEntriesParams) ([]ListEvictableCacheEntriesRow, error) {
+	rows, err := q.db.Query(ctx, listEvictableCacheEntries, arg.StaleSeconds, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListEvictableCacheEntriesRow{}
+	for rows.Next() {
+		var i ListEvictableCacheEntriesRow
+		if err := rows.Scan(
+			&i.RepoID,
+			&i.CacheKey,
+			&i.Status,
+			&i.RepoName,
+			&i.Protocol,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProxyPackageVersions = `-- name: ListProxyPackageVersions :many
+SELECT v.id AS version_id, p.id AS package_id
+FROM versions v
+JOIN packages p ON p.id = v.package_id
+JOIN repositories r ON r.id = p.repo_id
+WHERE r.id = $1
+  AND r.type = 'proxy'
+  AND p.normalized_name = $2
+`
+
+type ListProxyPackageVersionsParams struct {
+	RepoID         uuid.UUID `json:"repo_id"`
+	NormalizedName string    `json:"normalized_name"`
+}
+
+type ListProxyPackageVersionsRow struct {
+	VersionID uuid.UUID `json:"version_id"`
+	PackageID uuid.UUID `json:"package_id"`
+}
+
+// The versions of one project in a proxy repository, whose cached files
+// retention removes together with the index entry that justified them.
+func (q *Queries) ListProxyPackageVersions(ctx context.Context, arg ListProxyPackageVersionsParams) ([]ListProxyPackageVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listProxyPackageVersions, arg.RepoID, arg.NormalizedName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProxyPackageVersionsRow{}
+	for rows.Next() {
+		var i ListProxyPackageVersionsRow
+		if err := rows.Scan(&i.VersionID, &i.PackageID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listRepositoryMembers = `-- name: ListRepositoryMembers :many
@@ -259,6 +397,46 @@ func (q *Queries) ListRepositoryNamePrefixes(ctx context.Context, name string) (
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockEvictableCacheEntry = `-- name: LockEvictableCacheEntry :one
+SELECT rc.repo_id, rc.cache_key, rc.status, rc.blob_digest
+FROM remote_cache rc
+JOIN repositories r ON r.id = rc.repo_id AND r.type = 'proxy'
+JOIN remotes rem ON rem.repo_id = rc.repo_id
+WHERE rc.repo_id = $1 AND rc.cache_key = $2
+  AND ((rc.status = 'hit' AND rem.ttl_seconds > 0
+        AND rc.fetched_at < now() - ((rem.ttl_seconds + $3::bigint) * interval '1 second'))
+    OR (rc.status = 'miss'
+        AND rc.fetched_at < now() - (rem.negative_ttl_seconds * interval '1 second')))
+FOR UPDATE OF rc SKIP LOCKED
+`
+
+type LockEvictableCacheEntryParams struct {
+	RepoID       uuid.UUID `json:"repo_id"`
+	CacheKey     string    `json:"cache_key"`
+	StaleSeconds int64     `json:"stale_seconds"`
+}
+
+type LockEvictableCacheEntryRow struct {
+	RepoID     uuid.UUID   `json:"repo_id"`
+	CacheKey   string      `json:"cache_key"`
+	Status     string      `json:"status"`
+	BlobDigest pgtype.Text `json:"blob_digest"`
+}
+
+// Re-reads one entry under a row lock with the same predicate, so a refresh
+// that committed after the listing wins and the entry is kept.
+func (q *Queries) LockEvictableCacheEntry(ctx context.Context, arg LockEvictableCacheEntryParams) (LockEvictableCacheEntryRow, error) {
+	row := q.db.QueryRow(ctx, lockEvictableCacheEntry, arg.RepoID, arg.CacheKey, arg.StaleSeconds)
+	var i LockEvictableCacheEntryRow
+	err := row.Scan(
+		&i.RepoID,
+		&i.CacheKey,
+		&i.Status,
+		&i.BlobDigest,
+	)
+	return i, err
 }
 
 const packageExistsInRepo = `-- name: PackageExistsInRepo :one

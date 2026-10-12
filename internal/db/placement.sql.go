@@ -259,7 +259,7 @@ func (q *Queries) DeleteVersionIfEmpty(ctx context.Context, id uuid.UUID) (int64
 }
 
 const getBlob = `-- name: GetBlob :one
-SELECT digest, size, storage_backend, created_at FROM blobs
+SELECT digest, size, storage_backend, created_at, last_seen_at FROM blobs
 WHERE digest = $1
 `
 
@@ -271,6 +271,7 @@ func (q *Queries) GetBlob(ctx context.Context, digest string) (Blob, error) {
 		&i.Size,
 		&i.StorageBackend,
 		&i.CreatedAt,
+		&i.LastSeenAt,
 	)
 	return i, err
 }
@@ -805,6 +806,45 @@ func (q *Queries) ListVersionsByPackage(ctx context.Context, arg ListVersionsByP
 	return items, nil
 }
 
+const reserveBlob = `-- name: ReserveBlob :exec
+INSERT INTO blobs (digest, size, storage_backend)
+VALUES ($1, $2, $3)
+ON CONFLICT (digest) DO UPDATE
+SET size = EXCLUDED.size,
+    last_seen_at = now()
+`
+
+type ReserveBlobParams struct {
+	Digest         string `json:"digest"`
+	Size           int64  `json:"size"`
+	StorageBackend string `json:"storage_backend"`
+}
+
+// The write intent for bytes whose digest has been computed from the bytes
+// themselves. It runs, and commits, before the bytes are written, so every
+// byte object the CAS holds has a row the collector can see, and a blob the
+// collector is deleting blocks this until it has finished (ADR 19).
+func (q *Queries) ReserveBlob(ctx context.Context, arg ReserveBlobParams) error {
+	_, err := q.db.Exec(ctx, reserveBlob, arg.Digest, arg.Size, arg.StorageBackend)
+	return err
+}
+
+const touchBlob = `-- name: TouchBlob :execrows
+UPDATE blobs
+SET last_seen_at = now()
+WHERE digest = $1
+`
+
+// The write intent for a claimed digest the server has not verified yet. It
+// only refreshes an existing row: an unverified claim never creates one.
+func (q *Queries) TouchBlob(ctx context.Context, digest string) (int64, error) {
+	result, err := q.db.Exec(ctx, touchBlob, digest)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const unlinkRepositoryBlob = `-- name: UnlinkRepositoryBlob :execrows
 DELETE FROM repository_blobs
 WHERE repo_id = $1 AND digest = $2
@@ -827,8 +867,9 @@ const upsertBlob = `-- name: UpsertBlob :one
 INSERT INTO blobs (digest, size, storage_backend)
 VALUES ($1, $2, $3)
 ON CONFLICT (digest) DO UPDATE
-SET size = EXCLUDED.size
-RETURNING digest, size, storage_backend, created_at
+SET size = EXCLUDED.size,
+    last_seen_at = now()
+RETURNING digest, size, storage_backend, created_at, last_seen_at
 `
 
 type UpsertBlobParams struct {
@@ -837,6 +878,8 @@ type UpsertBlobParams struct {
 	StorageBackend string `json:"storage_backend"`
 }
 
+// Every placement touches last_seen_at, so a blob being placed right now is
+// inside the collector's grace period (ADR 19).
 func (q *Queries) UpsertBlob(ctx context.Context, arg UpsertBlobParams) (Blob, error) {
 	row := q.db.QueryRow(ctx, upsertBlob, arg.Digest, arg.Size, arg.StorageBackend)
 	var i Blob
@@ -845,6 +888,7 @@ func (q *Queries) UpsertBlob(ctx context.Context, arg UpsertBlobParams) (Blob, e
 		&i.Size,
 		&i.StorageBackend,
 		&i.CreatedAt,
+		&i.LastSeenAt,
 	)
 	return i, err
 }

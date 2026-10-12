@@ -36,6 +36,7 @@ type Config struct {
 	Database Database `yaml:"database"`
 	Log      Log      `yaml:"log"`
 	Auth     Auth     `yaml:"auth"`
+	Worker   Worker   `yaml:"worker"`
 
 	// Credentials holds upstream secrets that proxy repositories name by key.
 	// Values come from ${VAR} substitution; a secret is never written to the
@@ -56,6 +57,7 @@ func Default() Config {
 		Database: defaultDatabase(),
 		Log:      defaultLog(),
 		Auth:     defaultAuth(),
+		Worker:   defaultWorker(),
 	}
 }
 
@@ -153,6 +155,11 @@ func Parse(raw []byte, name string) (*Config, error) {
 // The desired-state sections were lifted out by Parse before this runs; they
 // are named here only so a typo's error message lists them.
 func (c *Config) UnmarshalYAML(node *yaml.Node) error {
+	// An absent worker section means a running worker. Every other section's
+	// zero value is filled in by applyDefaults, but a false that was written
+	// and a false that was never decoded look alike, so this one default is
+	// set before decoding instead.
+	c.Worker.Enabled = true
 	type raw Config
 	return strictDecode(node, (*raw)(c), shortSections...)
 }
@@ -163,6 +170,7 @@ func (c *Config) applyDefaults() {
 	c.Database.applyDefaults()
 	c.Log.applyDefaults()
 	c.Auth.applyDefaults()
+	c.Worker.applyDefaults()
 }
 
 // Validate reports the first configuration error, naming the field.
@@ -173,6 +181,7 @@ func (c *Config) Validate() error {
 		c.Database.validate,
 		c.Log.validate,
 		c.Auth.validate,
+		c.Worker.validate,
 		c.Credentials.validate,
 	} {
 		if err := check(); err != nil {

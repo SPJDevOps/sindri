@@ -13,6 +13,12 @@ storage:  ${SINDRI_DATA_DIR:-/tmp/sindri-m7-data}
 database: ${SINDRI_DATABASE:-postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable}
 auth:     ${SINDRI_TOKEN:-sindri-dev-token}
 
+# The worker runs by default; the M8a gate collects garbage by hand with
+# `sindri gc`, so only the grace period is set, short enough to wait out.
+worker:
+  gc:
+    grace: ${SINDRI_GC_GRACE:-24h}
+
 # Used only by pypi-mirror below, which exists so that the golden tests cover
 # upstream.credentials. Its upstream is under .invalid (RFC 2606), so this
 # value is never sent anywhere.

@@ -74,14 +74,16 @@ blob store, and the identity provider. The stub provider is `internal/auth/oidct
 
 **Integration tests get their dependencies from `internal/testsupport`**, which is built
 only under the `integration` tag and starts real Postgres and real MinIO through
-testcontainers. Container images are pinned there; MinIO comes from
-`bitnamilegacy/minio` because neither Docker Hub nor `quay.io` serves MinIO's own
-images to anonymous pulls any more. See ADR 11 before changing that pin.
+testcontainers. Prefer `testsupport.MigratedDB(t)`, a fresh migrated database on one
+container shared by the test binary, or `DatabaseURL(t)` when `serve` migrates;
+`StartPostgres` costs a container per test. Container images are pinned there; MinIO
+comes from `bitnamilegacy/minio` because neither Docker Hub nor `quay.io` serves MinIO's
+own images to anonymous pulls any more. See ADR 11 before changing that pin.
 
 ## Configuration rules
 
 There is **one** configuration file and one loader, extended by section over time: M1 adds
-server settings, M7 adds `repos:`, `lifecycle:`, and `defaults:`. Never a second
+server settings, M7 adds `repos:`, `lifecycle:`, and `defaults:`, M8a adds `worker:`. Never a second
 configuration system, and never a separate simplified file for small deployments.
 
 The short form desugars into the long form **one-way and totally**. Loading produces long
@@ -125,7 +127,11 @@ This is a registry. Supply-chain security is the product, so these are not style
 ## Operational rules
 
 - Background work goes through a **queue table**, even while the worker runs in the same
-  process. That is what keeps the post-v1 split serve modes a config change.
+  process. That is what keeps the post-v1 split serve modes a config change (ADR 20).
+- **Record write intent before touching bytes.** Every write goes through `cas`, whose
+  `Reserver` touches `blobs.last_seen_at` before bytes are written or a dedup check relies
+  on them. A new write path that bypasses it races the garbage collector and loses data
+  (ADR 19). Delete bytes only in `internal/gc`.
 - Protocol adapters translate errors to their own specified shapes at the edge. An OCI
   client needs the OCI error body; a generic JSON error breaks real clients.
 - Migrations apply on startup and must be backward compatible for one version, so a

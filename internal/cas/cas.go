@@ -35,18 +35,75 @@ var (
 	ErrSizeMismatch = errors.New("size mismatch")
 )
 
+// Reserver records the write intent for a blob before its bytes are written
+// or relied on (ADR 19). It is how the garbage collector, which deletes bytes
+// only under a lock on the blob's metadata row and only when that row has not
+// been seen within its grace period, can never delete bytes a write in flight
+// is about to depend on.
+//
+// It is an interface so that this package stays below the database in the
+// dependency order: the implementation lives in package db.
+type Reserver interface {
+	// Reserve creates or refreshes the row for a digest computed from the
+	// bytes themselves. It must commit before it returns.
+	Reserve(ctx context.Context, digest model.Digest, size int64) error
+
+	// Touch refreshes an existing row for a digest that is only claimed so
+	// far, and reports whether there was one. It never creates a row.
+	Touch(ctx context.Context, digest model.Digest) (bool, error)
+}
+
 // Store computes digests and commits verified blobs to a BlobStore.
 type Store struct {
-	blobs   storage.BlobStore
-	uploads sync.Map // storage.UploadID -> *Upload
+	blobs    storage.BlobStore
+	reserver Reserver
+	uploads  sync.Map // storage.UploadID -> *Upload
+}
+
+// Option configures a Store.
+type Option func(*Store)
+
+// WithReserver records write intent through r before bytes are written or
+// relied on. Every Store that shares a database with a garbage collector must
+// have one; the collector refuses to run against a Store without it.
+func WithReserver(r Reserver) Option {
+	return func(s *Store) { s.reserver = r }
 }
 
 // New returns a Store writing through blobs.
-func New(blobs storage.BlobStore) *Store {
+func New(blobs storage.BlobStore, opts ...Option) *Store {
 	if blobs == nil {
 		panic("cas.New: nil BlobStore")
 	}
-	return &Store{blobs: blobs}
+	s := &Store{blobs: blobs}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// HasReserver reports whether writes record their intent, which is what makes
+// running a garbage collector beside this Store safe.
+func (s *Store) HasReserver() bool { return s.reserver != nil }
+
+func (s *Store) reserve(ctx context.Context, digest model.Digest, size int64) error {
+	if s.reserver == nil {
+		return nil
+	}
+	if err := s.reserver.Reserve(ctx, digest, size); err != nil {
+		return fmt.Errorf("reserving blob %s: %w", digest, err)
+	}
+	return nil
+}
+
+func (s *Store) touch(ctx context.Context, digest model.Digest) error {
+	if s.reserver == nil {
+		return nil
+	}
+	if _, err := s.reserver.Touch(ctx, digest); err != nil {
+		return fmt.Errorf("touching blob %s: %w", digest, err)
+	}
+	return nil
 }
 
 // Put streams r into staging, hashes it, and commits it only if the result
@@ -60,6 +117,13 @@ func (s *Store) Put(ctx context.Context, r io.Reader, expected model.Digest, siz
 	// invariant I1 promises: one blob per digest, however many repositories
 	// place it.
 	if expected.Valid() {
+		// Touch before the Stat: a deduplicated write relies on bytes it did
+		// not write, and the touch is what keeps the collector off them
+		// until the placement commits. It only refreshes an existing row;
+		// the claim is still unverified, so it must not create one.
+		if err := s.touch(ctx, expected); err != nil {
+			return storage.BlobInfo{}, err
+		}
 		if info, err := s.blobs.Stat(ctx, expected); err == nil {
 			if _, err := io.Copy(io.Discard, r); err != nil {
 				return storage.BlobInfo{}, fmt.Errorf("draining a deduplicated upload of %s: %w", expected, err)
@@ -97,6 +161,9 @@ func (s *Store) PutBytes(ctx context.Context, payload []byte) (storage.BlobInfo,
 	digest := d.Digest()
 
 	info := storage.BlobInfo{Digest: digest, Size: int64(len(payload))}
+	if err := s.reserve(ctx, digest, info.Size); err != nil {
+		return storage.BlobInfo{}, err
+	}
 	if _, err := s.blobs.Stat(ctx, digest); err == nil {
 		return info, nil
 	} else if !errors.Is(err, storage.ErrNotFound) {
