@@ -73,18 +73,33 @@ To run from source instead, with Go and Docker installed:
 
 ```bash
 make up    # Postgres on 55432, MinIO on 59000, Dex on 5556
-make run   # builds, then serves deploy/compose/sindri.yaml on :8080
+make run   # builds, then serves deploy/compose/sindri.yaml on 127.0.0.1:8080
+```
+
+In another terminal, push an image and open the UI. The registry address depends on
+where the Docker daemon runs:
+
+```bash
+# Docker Desktop (macOS, Windows): the daemon runs in a VM, and its localhost is not
+# your machine. List host.docker.internal:8080 under insecure-registries in Docker
+# Desktop's Docker Engine settings once.
+REGISTRY=host.docker.internal:8080
+# Linux, with the daemon on this machine, use this line instead:
+# REGISTRY=localhost:8080
+
+echo sindri-dev-token | docker login "$REGISTRY" -u dev --password-stdin
+docker pull alpine:3.20 && docker tag alpine:3.20 "$REGISTRY/demo/app:1.0"
+docker push "$REGISTRY/demo/app:1.0"
 open http://localhost:8080/ui/
 ```
 
 The browser signs in through the development Dex as an example administrator, the same
 as in the quickstart. The server listens on loopback only, because its bootstrap token
-`sindri-dev-token` is public, and it warns while that default is in use. `docker login`
-takes the token as its password, at `localhost:8080` on Linux; Docker Desktop's daemon runs
-in a VM, so there use `host.docker.internal:8080` and list it under `insecure-registries`.
-`./bin/sindri serve` with no configuration file also works, but without `auth.oidc` the UI
-can only explain how to enable sign-in. Set `auth: ${SINDRI_TOKEN}` and point `auth.oidc` at
-your own identity provider for anything but local development.
+`sindri-dev-token` is public, and it warns while that default is in use; at startup it
+also logs the address a Docker Desktop daemon must push to. `./bin/sindri serve` with no
+configuration file also works, but without `auth.oidc` the UI can only explain how to
+enable sign-in. Set `auth: ${SINDRI_TOKEN}` and point `auth.oidc` at your own identity
+provider for anything but local development.
 
 ## Configuration as code
 
