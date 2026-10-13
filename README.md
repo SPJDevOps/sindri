@@ -12,10 +12,10 @@ exist?" but **"is exactly this artifact approved for this environment?"**
 
 ## Status
 
-Pre-v1, under active construction. See [roadmap.md](roadmap.md) for the milestone plan
-and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
+v1. See [roadmap.md](roadmap.md) for how it was built and what comes next, and
+[ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
-Through milestone M8, `sindri serve` boots from one YAML file (or none), applies its
+`sindri serve` boots from one YAML file (or none), applies its
 embedded migrations to Postgres, stores digest-verified blobs on a filesystem or any
 S3-compatible bucket, and serves two protocols:
 
@@ -40,7 +40,7 @@ digest, owners, provenance, evidence, and lifecycle state per environment, limit
 what the signed-in person may read. Releases ship as binaries for Linux and macOS and as
 a multi-architecture image.
 
-## What v1 will do
+## What v1 does
 
 - **Protocols:** OCI (Docker, Helm charts) and PyPI
 - **Repository types:** hosted, proxy, and virtual, cleanly separated
@@ -50,6 +50,24 @@ a multi-architecture image.
   no separate apply step; enveloped manifests and org policy when you have many teams
 - **Auth:** OpenID Connect login with role-based access control
 - **Storage:** filesystem or any S3-compatible object store, a config choice only
+
+## Not in v1
+
+Deliberately deferred, so nothing is silently missing. The reasons are in
+[roadmap.md](roadmap.md#scope-of-v1).
+
+- **Protocols:** npm, Maven, and Helm's own repository format (Helm charts as OCI
+  artifacts work today)
+- **OCI:** the referrers API and cross-repository blob mounts
+- **PyPI:** yanking; removing a file is a management API call
+- **Storage:** Google Cloud Storage and Azure Blob Storage
+- **Deployment:** separate `--api-only` and `--worker-only` modes, and a Helm chart
+- **Lifecycle:** time-based auto-promotion
+- **Evidence:** running scanners and verifying signatures; v1 attaches, lists, and
+  gates on evidence produced elsewhere
+- **Config:** a Git-polling operator and webhooks
+- **Auth:** SAML, LDAP, and fine-grained per-path ACLs
+- **UI:** administration in the browser; the UI is read-only
 
 ## Quickstart
 
@@ -67,7 +85,8 @@ open http://localhost:8080/ui/
 ```
 
 The quickstart is verified on every milestone in a fresh Docker daemon by
-`scripts/m8-quickstart-gate.sh`, which runs the document's own commands.
+`scripts/m8-quickstart-gate.sh`, which runs the document's own commands. Upgrading
+later is replacing the image; see [docs/upgrading.md](docs/upgrading.md).
 
 To run from source instead, with Go and Docker installed:
 
