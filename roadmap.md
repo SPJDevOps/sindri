@@ -794,11 +794,12 @@ gate script below, and `goreleaser release --snapshot --clean`).
       ([docs/upgrading.md](docs/upgrading.md))
 - [x] Every deferred item listed as deferred, so nothing is silently missing
       ([README, Not in v1](README.md#not-in-v1))
-- [ ] `SECURITY.md` published with a disclosure contact. Written; reachable once the
-      next item is done, because private vulnerability reporting needs a public repository
-- [ ] Repository and the `ghcr.io/spjdevops/sindri` package made public, and private
+- [x] `SECURITY.md` published with a disclosure contact (private vulnerability
+      reporting enabled)
+- [x] Repository and the `ghcr.io/spjdevops/sindri` package made public, and private
       vulnerability reporting enabled, at the `v1.0.0` tag
-- [ ] `v1.0.0` tagged, and the release workflow green
+- [x] `v1.0.0` tagged, and the release workflow green; `ghcr.io/spjdevops/sindri:1.0.0`
+      pulls anonymously for linux/amd64 and linux/arm64
 
 ---
 
