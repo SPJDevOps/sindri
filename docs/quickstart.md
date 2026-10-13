@@ -172,4 +172,4 @@ docker compose down -v     # deletes them too
   references any more. See
   [ADR 19](adr/0019-garbage-collection-roots-write-intent-and-sweep.md).
 - **Upgrading** is replacing the image. Migrations apply on startup and stay
-  compatible with the previous release.
+  compatible with the previous release. See [upgrading](upgrading.md).

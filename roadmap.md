@@ -767,20 +767,38 @@ session cookie. `TestServe_UIWithoutSignInExplains` covers a server without OIDC
 
 ## v1 release checklist
 
-- [ ] `docker push`/`pull` round-trip passes; distribution-spec conformance green for
-      push, pull, and content management
-- [ ] `twine upload` and `pip install` round-trip passes
-- [ ] `TestDependencyConfusion_HostedNameIsNeverServedFromProxy` passes
-- [ ] Storage conformance suite green on filesystem **and** S3
-- [ ] Promotion asserted to copy zero bytes
-- [ ] Invariant I2 asserted: no blob reachable through a repository it is not placed in
-- [ ] RBAC enforced on every route, with an anonymous-access test per adapter
+Run on 2026-10-13 against `03fb446` (`make test`, `make test-integration`, `make lint`, each
+gate script below, and `goreleaser release --snapshot --clean`).
+
+- [x] `docker push`/`pull` round-trip passes; distribution-spec conformance green for
+      push, pull, and content management (`scripts/oci-docker-gate.sh`;
+      `scripts/oci-conformance.sh` 60/60, 20 skipped: referrers and related)
+- [x] `twine upload` and `pip install` round-trip passes (`scripts/pypi-twine-gate.sh`)
+- [x] `TestDependencyConfusion_HostedNameIsNeverServedFromProxy` passes, and its OCI
+      twin `TestDependencyConfusion_OCIHostedImageIsNeverServedFromProxy`
+- [x] Storage conformance suite green on filesystem **and** S3
+      (`TestBlobStore_Conformance/Filesystem`, `/S3`)
+- [x] Promotion asserted to copy zero bytes (`TestLifecycle_PromotionStory`)
+- [x] Invariant I2 asserted: no blob reachable through a repository it is not placed in
+      (`TestAPI_PlacementGatesCrossRepoReads`, `TestOCI_PushPullAndPlacementGate`,
+      `TestPyPI_UploadInstallAndPlacementGate`,
+      `TestUI_ArtifactPageRequiresPlacementInTheRepository`)
+- [x] RBAC enforced on every route, with an anonymous-access test per adapter
+      (`TestRBAC_AnonymousPullAndInstallRefused`, `TestUI_EveryRouteHasAnAuthorizationCase`)
 - [x] Quickstart verified on a clean machine with only Docker
-- [ ] A single-team setup works from one short-form `sindri.yaml` with no apply step
-- [ ] Short form and long form asserted to produce identical database state
-- [ ] Upgrade path documented: replace the binary, migrations self-apply
-- [ ] Every deferred item listed as deferred, so nothing is silently missing
-- [ ] `SECURITY.md` published with a disclosure contact
+- [x] A single-team setup works from one short-form `sindri.yaml` with no apply step
+      (`scripts/m7-config-gate.sh`, `TestServe_ReconcilesOnBootAndOnSIGHUP`)
+- [x] Short form and long form asserted to produce identical database state
+      (`TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState`)
+- [x] Upgrade path documented: replace the binary, migrations self-apply
+      ([docs/upgrading.md](docs/upgrading.md))
+- [x] Every deferred item listed as deferred, so nothing is silently missing
+      ([README, Not in v1](README.md#not-in-v1))
+- [ ] `SECURITY.md` published with a disclosure contact. Written; reachable once the
+      next item is done, because private vulnerability reporting needs a public repository
+- [ ] Repository and the `ghcr.io/spjdevops/sindri` package made public, and private
+      vulnerability reporting enabled, at the `v1.0.0` tag
+- [ ] `v1.0.0` tagged, and the release workflow green
 
 ---
 

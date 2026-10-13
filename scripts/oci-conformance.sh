@@ -12,8 +12,10 @@
 # Environment overrides:
 #   SINDRI_URL          default http://127.0.0.1:8080
 #   SINDRI_TOKEN        default sindri-dev-token
+#   OCI_ROOT_URL        where the suite's container reaches Sindri; default is
+#                       SINDRI_URL with a loopback host as host.docker.internal
 #   OCI_NAMESPACE       default conformance/test
-#   CONFORMANCE_IMAGE   default ghcr.io/opencontainers/distribution-spec/conformance:latest
+#   CONFORMANCE_IMAGE   default ghcr.io/opencontainers/distribution-spec/conformance:v1.1.0
 
 set -euo pipefail
 
@@ -34,11 +36,11 @@ if [[ "${code}" != "201" && "${code}" != "409" ]]; then
   exit 1
 fi
 
-# host.docker.internal reaches the host from Docker Desktop / recent Docker Engine.
-OCI_ROOT_URL="${OCI_ROOT_URL:-http://host.docker.internal:8080}"
-# If SINDRI_URL points somewhere else, derive a docker-reachable root when possible.
-if [[ "${SINDRI_URL}" != "http://127.0.0.1:8080" && "${SINDRI_URL}" != "http://localhost:8080" ]]; then
-  OCI_ROOT_URL="${SINDRI_URL}"
+# The suite runs in a container, where loopback is the container itself, so a
+# loopback SINDRI_URL becomes host.docker.internal, which reaches the host from
+# Docker Desktop and recent Docker Engine. An explicit OCI_ROOT_URL wins.
+if [[ -z "${OCI_ROOT_URL:-}" ]]; then
+  OCI_ROOT_URL="$(sed -E 's#^(https?://)(127\.0\.0\.1|localhost)([:/]|$)#\1host.docker.internal\3#' <<<"${SINDRI_URL}")"
 fi
 
 echo "running conformance against ${OCI_ROOT_URL} namespace=${OCI_NAMESPACE}"
