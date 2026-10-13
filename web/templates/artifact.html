@@ -1,0 +1,80 @@
+{{define "content"}}
+<h1 class="page-title mono" title="{{.Digest}}">{{short .Digest}}</h1>
+<div class="pills">{{if .Kind}}<span class="pill">{{.Kind}}</span>{{end}}{{if .Upstream}}<span class="pill upstream">upstream content</span>{{end}}</div>
+
+<section class="section">
+  <dl class="facts">
+    <dt>Digest</dt><dd class="mono">{{.Digest}}</dd>
+    <dt>Size</dt><dd>{{bytes .Size}}</dd>
+    {{if .MediaType}}<dt>Media type</dt><dd class="mono">{{.MediaType}}</dd>{{end}}
+    <dt>Repository</dt><dd><a class="mono" href="{{.RepoHref}}">{{.Repo}}</a></dd>
+    {{if .HasIdentity}}
+    <dt>Owners</dt><dd>{{range $i, $o := .Owners}}{{if $i}}, {{end}}<span class="mono">{{$o}}</span>{{else}}<span class="hint">none you may see</span>{{end}}</dd>
+    <dt>First published</dt><dd title="{{when .CreatedAt}}">{{ago .CreatedAt}}</dd>
+    {{end}}
+  </dl>
+</section>
+
+{{if not .HasIdentity}}
+<div class="section callout{{if .Upstream}} upstream{{end}}">{{if .Upstream}}<strong>Fetched from an upstream.</strong> Proxy content is external and stays external: it has no owner, provenance, evidence, or lifecycle state, and it is never promoted.{{else}}<strong>No identity.</strong> This blob is a layer or a document inside an artifact. Identity, evidence, and lifecycle state belong to the manifest or distribution that names it.{{end}}</div>
+{{else}}
+<section class="section">
+  <h2 class="section-title">Lifecycle</h2>
+  {{if .Stages}}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Environment</th>{{range .StateRepos}}<th scope="col" class="mono">{{.}}</th>{{end}}</tr></thead>
+    <tbody>
+    {{range .Stages}}
+      <tr><th scope="row" class="mono">{{.Name}}</th>{{range .Cells}}<td>{{if .Action}}<span class="pill {{.Action}}">{{if eq .Action "approve"}}approved{{else}}revoked{{end}}</span><span class="by" title="{{when .At}}">{{.Actor}} · {{ago .At}}</span>{{else}}<span class="pill none">not promoted</span>{{end}}</td>{{end}}</tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <p class="hint">No lifecycle stages are defined on this server.</p>
+  {{end}}
+</section>
+
+<section class="section">
+  <h2 class="section-title">Evidence</h2>
+  <div class="rows">
+  {{range .Evidence}}
+    <div class="row"><span class="primary"><span class="pill">{{.Type}}</span> <span class="mono">{{.MediaType}}</span></span><span class="secondary" title="{{when .CreatedAt}}">{{bytes .Size}} · {{.CreatedBy}} · {{ago .CreatedAt}}</span></div>
+  {{else}}
+    <div class="row empty">No evidence attached.</div>
+  {{end}}
+  </div>
+</section>
+
+<section class="section">
+  <h2 class="section-title">Provenance</h2>
+  <div class="rows">
+  {{range .Provenance}}
+    <div class="row"><span class="primary"><span class="pill">{{.SourceType}}</span>{{if .SourceRef}} <span class="mono">{{.SourceRef}}</span>{{end}}{{if .BuildRef}} <span class="hint">at</span> <span class="mono">{{.BuildRef}}</span>{{end}}</span><span class="secondary" title="{{when .RecordedAt}}">{{ago .RecordedAt}}</span></div>
+  {{else}}
+    <div class="row empty">No provenance recorded.</div>
+  {{end}}
+  </div>
+  <p class="hint">Provenance is what the publisher claimed at push time. Sindri records it; it does not verify it.</p>
+</section>
+{{end}}
+
+{{if .Children}}
+<section class="section">
+  <h2 class="section-title">{{if .IsIndex}}Platform manifests{{else}}Config and layers{{end}}</h2>
+  <div class="rows">
+  {{range .Children}}
+    <div class="row"><a class="primary mono" href="{{.Href}}" title="{{.Digest}}">{{.Digest}}</a><span class="secondary">{{bytes .Size}}</span></div>
+  {{end}}
+  </div>
+</section>
+{{end}}
+
+{{if .Document}}
+<section class="section">
+  <h2 class="section-title">Manifest</h2>
+  <pre class="document">{{.Document}}</pre>
+</section>
+{{end}}
+{{end}}

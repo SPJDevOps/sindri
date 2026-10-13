@@ -325,3 +325,30 @@ func (failingProber) Probe(context.Context) error { return errors.New("bucket is
 // skip rather than treat as a failure. Embedding the interface rather than a
 // concrete store is what makes it genuinely lack Probe.
 type unprobeable struct{ storage.BlobStore }
+
+// A person who types the server's address lands on the UI. Without a UI the
+// root stays the JSON 404 every other unknown path gets.
+func TestRoot_RedirectsToTheUIWhenThereIsOne(t *testing.T) {
+	log, err := server.NewLogger(&bytes.Buffer{}, server.LogOptions{Level: "error", Format: "json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := server.New(server.Options{
+		Address:  "127.0.0.1:0",
+		Database: &stubPinger{},
+		Logger:   log,
+		UI:       http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+	})
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	res := get(t, srv, "/")
+	if res.Code != http.StatusFound || res.Header().Get("Location") != "/ui/" {
+		t.Fatalf("GET / with a UI: %d %q, want 302 to /ui/", res.Code, res.Header().Get("Location"))
+	}
+
+	bare, _ := newServer(t, &stubPinger{}, nil)
+	if res := get(t, bare, "/"); res.Code != http.StatusNotFound {
+		t.Fatalf("GET / without a UI: %d, want 404", res.Code)
+	}
+}

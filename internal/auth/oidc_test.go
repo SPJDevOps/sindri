@@ -148,7 +148,7 @@ func TestSession_LoginSetsCookieAndWhoamiReadsIt(t *testing.T) {
 	mux.Handle("/ui/", auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, _ := auth.PrincipalFromContext(r.Context())
 		_, _ = io.WriteString(w, "hello "+p.Subject)
-	})))
+	}), true))
 	handler = mux
 
 	jar, err := cookiejar.New(nil)
@@ -264,7 +264,7 @@ func TestSession_LoginRefusesOpenRedirects(t *testing.T) {
 
 func TestGuardUI_IsReadOnly(t *testing.T) {
 	chain := auth.NewChain("boot", nil, nil, nil)
-	h := auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	h := auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), true)
 
 	anon := httptest.NewRecorder()
 	h.ServeHTTP(anon, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ui/", nil))
@@ -278,5 +278,58 @@ func TestGuardUI_IsReadOnly(t *testing.T) {
 	h.ServeHTTP(rec, post)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST to the UI: %d, want 405", rec.Code)
+	}
+}
+
+// Without an identity provider there is no /auth/login to send a browser to.
+// The guard explains instead, and never answers with a Basic challenge: a
+// browser would cache Basic credentials and attach them to cross-site
+// requests, including POSTs to the API and the adapters.
+func TestGuardUI_NoLoginConfiguredExplainsInsteadOfRedirecting(t *testing.T) {
+	chain := auth.NewChain("boot", nil, nil, nil)
+	h := auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), false)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ui/", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous UI visit without login: %d, want 401", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Fatalf("redirected to %s, which does not exist without auth.oidc", loc)
+	}
+	if strings.HasPrefix(rec.Header().Get("WWW-Authenticate"), "Basic") {
+		t.Fatal("the UI asked the browser for Basic credentials")
+	}
+	if !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") || !strings.Contains(rec.Body.String(), "auth.oidc") {
+		t.Fatalf("the explanation does not say how to enable sign-in: %q", rec.Body.String())
+	}
+
+	// A token still works, for scripts and for testing.
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ui/", nil)
+	req.Header.Set("Authorization", "Bearer boot")
+	ok := httptest.NewRecorder()
+	h.ServeHTTP(ok, req)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("UI visit with a token: %d", ok.Code)
+	}
+}
+
+// The UI's sign-out control posts through htmx, which follows HX-Redirect
+// rather than a 3xx.
+func TestSession_LogoutFromTheUIRedirectsWithHtmx(t *testing.T) {
+	idp := oidctest.New(t)
+	o := newOIDC(t, idp)
+	chain := auth.NewChain("boot", nil, o, nil)
+	h := auth.NewSessions(auth.SessionConfig{ClientID: oidctest.ClientID, RedirectURL: "http://localhost/auth/callback"}, o, chain).Handler()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/logout", nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || rec.Header().Get("HX-Redirect") != "/ui/" {
+		t.Fatalf("logout from the UI: %d, HX-Redirect %q", rec.Code, rec.Header().Get("HX-Redirect"))
+	}
+	if !strings.Contains(rec.Header().Get("Set-Cookie"), auth.SessionCookie+"=;") {
+		t.Fatalf("logout did not clear the session: %q", rec.Header().Get("Set-Cookie"))
 	}
 }

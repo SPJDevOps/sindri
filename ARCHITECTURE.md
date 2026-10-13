@@ -137,6 +137,7 @@ internal/
   evidence/              attach and list evidence
   auth/                  tokens, OIDC, RBAC middleware
   api/                   management REST API
+  ui/                    read-only web interface: handlers and view models (ADR 21)
   proto/
     oci/                 OCI distribution spec handlers
     pypi/                PEP 503/691 index and upload
@@ -146,8 +147,10 @@ internal/
   queue/                 the jobs table: enqueue, claim under a lease, complete
   gc/                    garbage collection: mark and sweep (ADR 19)
   worker/                runs queued jobs and schedules recurring ones (ADR 20)
-web/                     Go templates and static assets, embedded
-deploy/compose/          local and single-node deployment
+web/                     Go templates, CSS, htmx, and fonts, embedded; checksums in VENDOR.md
+deploy/compose/          the development stack: Postgres and MinIO
+deploy/quickstart/       Sindri, Postgres, and a development identity provider
+deploy/docker/           the release image's Dockerfile, used by goreleaser
 docs/adr/                architecture decision records
 ```
 
@@ -300,7 +303,8 @@ cannot both be claimed.
 
 A repository name may contain slashes, so that `team/internal` reads naturally in a
 `docker pull` or an index URL. It may not contain a segment an adapter splits paths on
-(`blobs`, `manifests`, `tags`, `uploads`, `simple`, `packages`, `upload`), because
+(`blobs`, `manifests`, `tags`, `uploads`, `simple`, `packages`, `upload`, and the UI's
+`-`), because
 `/pypi/team/packages/simple/foo/` would otherwise name either a repository or a download.
 The rule lives in one validator rather than in each adapter. See ADR 13.
 
@@ -423,7 +427,7 @@ such as manifests and evidence documents, where a staging round trip buys nothin
 | `/api/v1/audit` | the lifecycle ledger, newest first, filtered to readable repositories |
 | `/api/v1/gc`, `/api/v1/gc/candidates`, `/api/v1/jobs/{id}` | garbage collection and its dry run, administrators only |
 | `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/whoami` | browser sign-in through the identity provider |
-| `/ui/...` | read-only web interface |
+| `/ui/...` | read-only web interface; `GET /` redirects here |
 | `/healthz`, `/readyz` | liveness and readiness |
 | `/metrics` | Prometheus |
 
@@ -453,6 +457,22 @@ does not exist. A virtual repository answers only from members the caller can
 read, and a name claimed by an unreadable hosted member is a miss, never a
 proxy fall-through (I5). The browser session cookie is honoured only on GET and
 HEAD, by the read-only UI and `/auth/whoami`. See ADR 18.
+
+### The UI
+
+The UI is server-rendered from the services the API uses, with no Node build
+and nothing loaded from another origin.
+
+- **Addresses.** A page within a repository follows `/-/`, as in
+  `/ui/r/{repository}/-/artifact?digest=`, because repository names contain
+  slashes.
+- **Authorization.** Every repository shown passes `auth.Authorize`. A
+  repository the caller cannot read is a 404, the same as one that does not
+  exist. An artifact page checks placement before it reads anything (I2).
+- **Other repositories.** Owners and lifecycle state from repositories the
+  caller cannot read are left out.
+- **Content-Security-Policy.** It allows only this server's own script, style,
+  and fonts. See ADR 21.
 
 Routing uses `chi`. The stdlib `ServeMux` cannot express the OCI routes, because an OCI
 repository name legitimately contains slashes in the middle of a path

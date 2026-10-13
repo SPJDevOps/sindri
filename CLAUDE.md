@@ -123,6 +123,11 @@ This is a registry. Supply-chain security is the product, so these are not style
    v1, and a new route that skips the check is a security bug, not an omission
    (ADR 18). Group membership comes from the caller's token on each request; never
    store or cache it.
+8. **The UI is read-only and shows only what the caller may read.** Every page
+   authorizes like the API and answers 404 for a repository the caller cannot
+   read. Artifact pages check placement first. Templates carry no inline
+   script, style, or event handlers: the Content-Security-Policy is `'self'`
+   only, and a test enforces it (ADR 21).
 
 ## Operational rules
 
@@ -145,7 +150,8 @@ make build             # ./bin/sindri
 make test              # unit tests, race detector
 make test-integration  # needs Docker
 make lint              # gofmt check, go vet, golangci-lint
-make up / make down    # local Postgres and MinIO
+make up / make down    # local Postgres, MinIO, and Dex
+make run               # build and serve against them, UI sign-in included
 make ci                # what CI runs
 make tools             # install golangci-lint v2
 ```
@@ -159,10 +165,16 @@ Compose binds high host ports so it never fights whatever else you are running.
 | Postgres | 55432 | `SINDRI_PG_PORT` |
 | MinIO S3 API | 59000 | `SINDRI_S3_PORT` |
 | MinIO console | 59001 | `SINDRI_S3_CONSOLE_PORT` |
+| Dex (UI sign-in) | 5556 | fixed: the port is part of the token issuer |
 
 Credentials are `sindri` / `sindri` for Postgres and `sindri` /
 `sindri-dev-secret` for MinIO, which creates the `sindri-blobs` bucket on startup. These
 are development-only values and must never appear in a deployment manifest.
+
+`make run` serves `deploy/compose/sindri.yaml` against that stack. Dex signs every browser
+in as an example user in `authors`, who administers the server; that is what makes the
+UI usable from source. `TestDevelopmentStacks_SindriAndDexAgreeOnSignIn` keeps the dev
+and quickstart configurations in step with their Dex.
 
 `make lint` runs with the `integration` build tag set in `.golangci.yml`, so the suites
 that touch real infrastructure are linted with everything else.

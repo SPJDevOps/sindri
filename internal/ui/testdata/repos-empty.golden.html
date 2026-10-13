@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
+<title>t · Sindri</title>
+<link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
+<script src="/ui/static/VERSION/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="site-header">
+  <div class="container">
+    <a class="wordmark" href="/ui/">Sindri</a>
+    <nav class="nav" aria-label="Main">
+      <a href="/ui/">Repositories</a>
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>
+    </nav>
+  </div>
+</header>
+<main>
+  <div class="container">
+    
+    
+<h1 class="page-title">Repositories</h1>
+<p class="lead">Every repository you may read. Hosted repositories hold your own artifacts; proxies cache an upstream; virtual repositories resolve across members, hosted first.</p>
+<section class="section">
+
+  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No repository you may read. Repositories are declared in sindri.yaml or created through the API.</p></div></div>
+
+</section>
+
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <span>Sindri 0.0.0-test · read-only view</span>
+    <span>Changes go through configuration and the API, never this page.</span>
+  </div>
+</footer>
+</body>
+</html>

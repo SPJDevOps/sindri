@@ -1,16 +1,19 @@
-# Local development dependencies for Sindri.
-#
-# Brings up Postgres and a MinIO S3-compatible object store. Sindri itself is not
-# in here yet; run it from source with `make build && ./bin/sindri serve` once the
-# serve command lands in milestone M1.
+# Local development dependencies for Sindri: Postgres, a MinIO S3-compatible
+# object store, and Dex, an identity provider for signing in to the web UI.
+# Sindri itself runs from source against them:
 #
 #   make up     start
+#   make run    build and serve with deploy/compose/sindri.yaml, signed-in UI
+#               at http://localhost:8080/ui/
 #   make logs   follow
 #   make down   stop and delete volumes
 #
 # Host ports default high to avoid colliding with anything you already run.
 # Override them per shell or in a .env file next to this file:
 #   SINDRI_PG_PORT=5432 SINDRI_S3_PORT=9000 SINDRI_S3_CONSOLE_PORT=9001 make up
+#
+# Dex stays on 5556: its issuer URL is part of every token it signs, so the
+# port is fixed in both its configuration and deploy/compose/sindri.yaml.
 
 name: sindri-dev
 
@@ -74,6 +77,40 @@ services:
       echo 'bucket sindri-blobs ready'
       "
     restart: "no"
+
+  # DEVELOPMENT ONLY. The mock connector signs in anyone who opens the
+  # browser as an example user in the `authors` group, and
+  # deploy/compose/sindri.yaml makes `authors` administrators. There is no
+  # password anywhere in this flow.
+  dex:
+    image: ghcr.io/dexidp/dex:v2.46.0@sha256:933fcd3f523338c847b88ef84a7145fb2fcb7b9917f08418612afeaaa2001777
+    restart: unless-stopped
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    configs:
+      - source: dex
+        target: /etc/dex/config.yaml
+    ports:
+      - "127.0.0.1:5556:5556"
+
+configs:
+  dex:
+    content: |
+      issuer: http://localhost:5556/dex
+      storage:
+        type: memory
+      web:
+        http: 0.0.0.0:5556
+      oauth2:
+        skipApprovalScreen: true
+      staticClients:
+        - id: sindri
+          name: Sindri (development)
+          secret: development-not-a-secret
+          redirectURIs: ["http://localhost:8080/auth/callback"]
+      connectors:
+        - type: mockCallback
+          id: mock
+          name: Example user
 
 volumes:
   postgres-data:

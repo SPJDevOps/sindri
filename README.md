@@ -15,7 +15,7 @@ exist?" but **"is exactly this artifact approved for this environment?"**
 Pre-v1, under active construction. See [roadmap.md](roadmap.md) for the milestone plan
 and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
-Through milestone M8a, `sindri serve` boots from one YAML file (or none), applies its
+Through milestone M8, `sindri serve` boots from one YAML file (or none), applies its
 embedded migrations to Postgres, stores digest-verified blobs on a filesystem or any
 S3-compatible bucket, and serves two protocols:
 
@@ -35,7 +35,10 @@ A background worker evicts stale proxy cache entries and abandoned uploads. `sin
 reclaims blobs nothing references, safely beside pushes in flight, and `/api/v1/audit`
 reads the promotion ledger.
 
-Not there yet: the web UI and a release (M8b).
+A read-only web UI at `/ui/` shows repositories, packages, tags, and each artifact's
+digest, owners, provenance, evidence, and lifecycle state per environment, limited to
+what the signed-in person may read. Releases ship as binaries for Linux and macOS and as
+a multi-architecture image.
 
 ## What v1 will do
 
@@ -50,20 +53,53 @@ Not there yet: the web UI and a release (M8b).
 
 ## Quickstart
 
-Not yet available. It arrives with milestone M8b and will be verified from a clean
-machine with nothing installed but Docker.
-
-To run what exists today from source, with Go and Docker installed:
+With nothing but Docker, [docs/quickstart.md](docs/quickstart.md) runs Sindri, Postgres,
+and a development identity provider from one Compose file:
 
 ```bash
-make up            # Postgres on 55432, MinIO on 59000
-make build
-./bin/sindri serve # no configuration file needed; defaults match the Compose stack
-curl -fsS localhost:8080/readyz
+curl -fsSLO https://raw.githubusercontent.com/SPJDevOps/sindri/main/deploy/quickstart/compose.yaml
+export SINDRI_TOKEN=$(openssl rand -hex 16)
+docker compose up -d --wait
+echo "$SINDRI_TOKEN" | docker login localhost:8080 -u admin --password-stdin
+docker pull alpine:3.20 && docker tag alpine:3.20 localhost:8080/demo/app:1.0
+docker push localhost:8080/demo/app:1.0
+open http://localhost:8080/ui/
 ```
 
-The default bootstrap token is `sindri-dev-token`, and the server warns while it is in
-use. Set `auth: ${SINDRI_TOKEN}` in `sindri.yaml` for anything but local development.
+The quickstart is verified on every milestone in a fresh Docker daemon by
+`scripts/m8-quickstart-gate.sh`, which runs the document's own commands.
+
+To run from source instead, with Go and Docker installed:
+
+```bash
+make up    # Postgres on 55432, MinIO on 59000, Dex on 5556
+make run   # builds, then serves deploy/compose/sindri.yaml on 127.0.0.1:8080
+```
+
+In another terminal, push an image and open the UI. The registry address depends on
+where the Docker daemon runs:
+
+```bash
+# Docker Desktop (macOS, Windows): the daemon runs in a VM, and its localhost is not
+# your machine. List host.docker.internal:8080 under insecure-registries in Docker
+# Desktop's Docker Engine settings once.
+REGISTRY=host.docker.internal:8080
+# Linux, with the daemon on this machine, use this line instead:
+# REGISTRY=localhost:8080
+
+echo sindri-dev-token | docker login "$REGISTRY" -u dev --password-stdin
+docker pull alpine:3.20 && docker tag alpine:3.20 "$REGISTRY/demo/app:1.0"
+docker push "$REGISTRY/demo/app:1.0"
+open http://localhost:8080/ui/
+```
+
+The browser signs in through the development Dex as an example administrator, the same
+as in the quickstart. The server listens on loopback only, because its bootstrap token
+`sindri-dev-token` is public, and it warns while that default is in use; at startup it
+also logs the address a Docker Desktop daemon must push to. `./bin/sindri serve` with no
+configuration file also works, but without `auth.oidc` the UI can only explain how to
+enable sign-in. Set `auth: ${SINDRI_TOKEN}` and point `auth.oidc` at your own identity
+provider for anything but local development.
 
 ## Configuration as code
 
@@ -166,6 +202,11 @@ The original pitch is in [pitch.md](pitch.md). In short: Nexus and Artifactory h
 heavy, and Harbor is strong on OCI but was not designed to be multi-protocol. Small and
 mid-sized teams end up stitching together Harbor, Verdaccio, and a homegrown PyPI server
 because nothing sits in the middle. That gap is the target.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as
+[SECURITY.md](SECURITY.md) describes, never in a public issue.
 
 ## License
 

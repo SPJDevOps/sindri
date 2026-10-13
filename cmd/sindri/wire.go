@@ -26,6 +26,7 @@ import (
 	"github.com/spj/sindri/internal/resolve"
 	"github.com/spj/sindri/internal/server"
 	"github.com/spj/sindri/internal/storage"
+	"github.com/spj/sindri/internal/ui"
 	"github.com/spj/sindri/internal/worker"
 )
 
@@ -149,10 +150,26 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		return auth.Authorize(p, m, auth.RoleRead) == nil
 	})
 
+	lifecycleSvc := lifecycle.New(database)
+	evidenceSvc := evidence.New(database, casStore, string(cfg.Storage.Backend))
+	signIn := cfg.Auth.OIDC != nil && cfg.Auth.OIDC.RedirectURL != ""
+	uiHandler, err := ui.Handler(ui.Options{
+		Registry:  reg,
+		Lifecycle: lifecycleSvc,
+		Evidence:  evidenceSvc,
+		Logger:    logger,
+		RequestID: server.RequestIDFromContext,
+		SignOut:   signIn,
+	})
+	if err != nil {
+		database.Close()
+		return nil, nil, err
+	}
+
 	apiHandler := api.Handler(api.Options{
 		Registry:    reg,
-		Lifecycle:   lifecycle.New(database),
-		Evidence:    evidence.New(database, casStore, string(cfg.Storage.Backend)),
+		Lifecycle:   lifecycleSvc,
+		Evidence:    evidenceSvc,
 		Auth:        chain,
 		RequestID:   server.RequestIDFromContext,
 		Credentials: creds.Names,
@@ -181,7 +198,9 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		OCI:               ociHandler,
 		PyPI:              pypiHandler,
 		Auth:              sessions,
-		Logger:            logger,
+		// Read-only, GET and HEAD only, every page authorized (ADR 21).
+		UI:     auth.GuardUI(chain, uiHandler, signIn),
+		Logger: logger,
 	})
 	if err != nil {
 		database.Close()

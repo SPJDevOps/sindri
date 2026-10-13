@@ -13,6 +13,7 @@ LDFLAGS     := -s -w \
 
 GOLANGCI_VERSION := v2.13.2
 SQLC_VERSION     := v1.30.0
+GORELEASER_VERSION := v2.18.3
 COMPOSE_FILE     := deploy/compose/docker-compose.yml
 
 # `make tools` installs into GOBIN, which is often not on PATH. Prefer that
@@ -90,8 +91,14 @@ generate:
 tools:
 	GOTOOLCHAIN=go1.27.1 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+	go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 
-## up: Start local Postgres and MinIO for development.
+## run: Build and serve against the `make up` stack, with UI sign-in through Dex.
+.PHONY: run
+run: build
+	$(BIN_DIR)/$(BINARY) serve --config deploy/compose/sindri.yaml
+
+## up: Start local Postgres, MinIO, and Dex for development.
 .PHONY: up
 up:
 	docker compose -f $(COMPOSE_FILE) up -d

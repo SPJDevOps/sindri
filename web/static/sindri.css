@@ -1,0 +1,283 @@
+/* Sindri's read-only UI.
+ *
+ * The tokens and shapes mirror the maintainer's other products: a neutral
+ * ground, one steel-blue accent, hairline borders, square corners, no
+ * shadows. --accent-warm is reserved for crossing a trust boundary, which in
+ * Sindri means content that came from an upstream: proxy repositories and
+ * artifacts without a hosted identity.
+ *
+ * Every rule lives in this file: the Content-Security-Policy allows no inline
+ * styles, so a style= attribute in a template would simply not apply.
+ */
+
+@font-face {
+  font-family: "Geist";
+  src: url("fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Tektur";
+  src: url("fonts/Tektur-Latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface-2: #f4f4f5;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --text: #18181b;
+  --text-muted: #6b7280;
+  --text-faint: #9ca3af;
+  --accent: #1f5f9a;
+  --accent-hover: #1a5187;
+  --accent-warm: #c1622a;
+  --success: #15803d;
+  --warning: #a16207;
+  --error: #b91c1c;
+
+  --font-sans: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: "Tektur", "Geist", system-ui, sans-serif;
+  --radius: 2px;
+  --gutter: 24px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #101214;
+    --surface: #17191d;
+    --surface-2: #1e2126;
+    --border: #282c33;
+    --border-strong: #363b44;
+    --text: #ededef;
+    --text-muted: #9aa1ab;
+    --text-faint: #6b7280;
+    --accent: #6aa5d8;
+    --accent-hover: #7fb2de;
+    --accent-warm: #d9a15c;
+    --success: #57b878;
+    --warning: #d0a940;
+    --error: #e07070;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 14px/1.6 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+h1, h2, h3, p, ul, ol, dl, dd, figure, pre { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 2px; }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 2px; }
+code, .mono { font-family: var(--font-mono); font-size: 12px; }
+
+/* Layout -------------------------------------------------------------- */
+
+.container { width: 100%; max-width: 64rem; margin: 0 auto; padding: 0 var(--gutter); }
+main { flex: 1; padding: 40px 0 64px; }
+
+.site-header { border-bottom: 1px solid var(--border); background: var(--bg); }
+.site-header .container { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 16px; padding-bottom: 16px; }
+.wordmark {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  color: var(--text);
+}
+.wordmark:hover { color: var(--text); text-decoration: none; }
+.nav { display: flex; align-items: center; gap: 24px; color: var(--text-muted); }
+.nav a { color: var(--text-muted); }
+.nav a:hover { color: var(--text); text-decoration: none; }
+.who { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); }
+.signout {
+  font: inherit;
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.signout:hover { color: var(--text); }
+
+.site-footer { border-top: 1px solid var(--border); color: var(--text-faint); font-size: 12px; }
+.site-footer .container { display: flex; justify-content: space-between; gap: 16px; padding-top: 16px; padding-bottom: 16px; }
+
+/* Headings and meta ---------------------------------------------------- */
+
+.crumbs { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); margin-bottom: 12px; overflow-wrap: anywhere; }
+.crumbs a { color: var(--text-muted); }
+.crumbs .sep { padding: 0 6px; }
+.page-title {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
+}
+.page-title.mono { font-family: var(--font-mono); font-size: 24px; font-weight: 500; letter-spacing: 0; }
+.lead { margin-top: 8px; color: var(--text-muted); max-width: 60ch; }
+.section { margin-top: 40px; }
+.section-title {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-bottom: 12px;
+}
+.hint { color: var(--text-faint); font-size: 12px; }
+
+/* Pills: type, protocol, and lifecycle state --------------------------- */
+
+.pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.pill.approve { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); }
+.pill.revoke { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, transparent); }
+.pill.none { color: var(--text-faint); border-style: dashed; }
+.pill.upstream { color: var(--accent-warm); border-color: color-mix(in srgb, var(--accent-warm) 55%, transparent); }
+
+/* Repository tiles: the hairline-gap grid ------------------------------ */
+
+/* Each tile draws its own hairline as an outline; with a 1px gap the
+ * neighbours' outlines meet in the gap and read as one line, and a part-empty
+ * last row stays the page colour instead of showing the border colour. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1px;
+  padding: 1px;
+}
+.tile { display: block; background: var(--surface); outline: 1px solid var(--border); padding: 16px; color: var(--text); min-width: 0; }
+.tile:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+.tile .name { font-family: var(--font-mono); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.tile .meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.tile .detail { margin-top: 8px; color: var(--text-faint); font-size: 12px; overflow-wrap: anywhere; }
+.tile.upstream { box-shadow: inset 2px 0 0 var(--accent-warm); }
+
+/* Rows: hairline-divided lists ---------------------------------------- */
+
+.rows { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.row:first-child { border-top: 0; }
+.row .primary { min-width: 0; overflow-wrap: anywhere; }
+.row .secondary { flex: none; color: var(--text-faint); font-size: 12px; }
+.row.empty { color: var(--text-faint); justify-content: center; }
+.more { display: flex; justify-content: center; padding: 8px; border-top: 1px solid var(--border); }
+.more button {
+  font: 500 13px/1 var(--font-sans);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 8px 16px;
+  cursor: pointer;
+}
+.more button:hover { border-color: var(--accent); color: var(--accent); }
+.version-group { padding: 10px 16px 4px; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border); }
+.version-group:first-child { border-top: 0; }
+
+/* Definition grid: artifact facts -------------------------------------- */
+
+.facts {
+  display: grid;
+  grid-template-columns: minmax(0, 160px) minmax(0, 1fr);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.facts dt, .facts dd { padding: 10px 16px; border-top: 1px solid var(--border); min-width: 0; }
+.facts dt { color: var(--text-muted); }
+.facts dd { overflow-wrap: anywhere; }
+.facts dt:first-of-type, .facts dt:first-of-type + dd { border-top: 0; }
+
+/* Lifecycle matrix ------------------------------------------------------ */
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 16px; border-top: 1px solid var(--border); vertical-align: top; }
+thead th { border-top: 0; color: var(--text-muted); font-weight: 500; font-size: 12px; }
+td .by { display: block; margin-top: 2px; font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
+
+/* Callouts and code ----------------------------------------------------- */
+
+.callout {
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 12px 16px;
+  color: var(--text-muted);
+}
+.callout.upstream { border-left-color: var(--accent-warm); }
+.callout strong { color: var(--text); font-weight: 500; }
+
+pre.document {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 32rem;
+}
+
+.empty-state { padding: 48px 16px; text-align: center; color: var(--text-muted); }
+.empty-state .big { font-family: var(--font-display); font-size: 48px; color: var(--text-faint); line-height: 1; }
+
+/* Phone width: 16px gutters, stacked rows, no sideways scroll ------------ */
+
+@media (max-width: 640px) {
+  :root { --gutter: 16px; }
+  main { padding-top: 24px; }
+  .page-title { font-size: 24px; }
+  .page-title.mono { font-size: 18px; }
+  .who { display: none; }
+  .row { flex-direction: column; gap: 2px; }
+  .facts { grid-template-columns: minmax(0, 1fr); }
+  .facts dd { border-top: 0; padding-top: 0; }
+  .site-footer .container { flex-direction: column; gap: 4px; }
+}

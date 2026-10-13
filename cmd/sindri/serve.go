@@ -107,6 +107,13 @@ func serve(parent context.Context, explicitConfig string, hooks serveHooks) erro
 	if hooks.listening != nil {
 		hooks.listening(a.server.Addr())
 	}
+	if h := dockerDesktopHost(a.server.Addr()); h != "" {
+		// The commonest first push from source fails here: Docker Desktop's
+		// daemon cannot reach this machine as localhost.
+		logger.InfoContext(ctx, "listening on loopback only; on Docker Desktop, push to "+h+
+			" (listed under insecure-registries), since the daemon's localhost is not this machine",
+			"registry", h)
+	}
 
 	if hooks.reload != nil && loadedPath != "" {
 		go a.reloadLoop(ctx, loadedPath, cfg, hooks.reload)

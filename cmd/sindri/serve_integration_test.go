@@ -45,10 +45,17 @@ func startServe(t *testing.T, dbURL, cfgBody string, extra func(*serveHooks)) *s
 // indented two spaces.
 func startServeAuth(t *testing.T, dbURL, authLines, cfgBody string, extra func(*serveHooks)) *stack {
 	t.Helper()
+	return startServeOn(t, "127.0.0.1:0", dbURL, authLines, cfgBody, extra)
+}
+
+// startServeOn is startServeAuth on a chosen listen address, for a test whose
+// configuration must name the server's own URL, such as an OIDC redirectUrl.
+func startServeOn(t *testing.T, listen, dbURL, authLines, cfgBody string, extra func(*serveHooks)) *stack {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sindri.yaml")
-	header := fmt.Sprintf("listen: 127.0.0.1:0\nstorage: %s\ndatabase: %s\nlog: warn\nauth:\n  static_token: %s\n%s",
-		filepath.Join(dir, "data"), dbURL, bootstrapToken, authLines)
+	header := fmt.Sprintf("listen: %s\nstorage: %s\ndatabase: %s\nlog: warn\nauth:\n  static_token: %s\n%s",
+		listen, filepath.Join(dir, "data"), dbURL, bootstrapToken, authLines)
 	if err := os.WriteFile(path, []byte(header+cfgBody), 0o600); err != nil {
 		t.Fatal(err)
 	}

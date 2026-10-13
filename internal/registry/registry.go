@@ -613,6 +613,7 @@ var reservedNameSegments = map[string]struct{}{
 	"simple":    {}, // PyPI
 	"packages":  {}, // PyPI
 	"upload":    {}, // PyPI
+	"-":         {}, // UI: /ui/r/{repository}/-/{page}
 }
 
 // ValidateRepoName applies the one repository-name rule (ADR 13): legal

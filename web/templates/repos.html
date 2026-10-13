@@ -1,0 +1,19 @@
+{{define "content"}}
+<h1 class="page-title">Repositories</h1>
+<p class="lead">Every repository you may read. Hosted repositories hold your own artifacts; proxies cache an upstream; virtual repositories resolve across members, hosted first.</p>
+<section class="section">
+{{if .Repos}}
+  <div class="tiles">
+  {{range .Repos}}
+    <a class="tile{{if .Upstream}} upstream{{end}}" href="{{.Href}}">
+      <div class="name">{{.Name}}</div>
+      <div class="meta"><span class="pill{{if .Upstream}} upstream{{end}}">{{.Type}}</span><span class="pill">{{.Protocol}}</span>{{if .Locked}}<span class="pill">locked</span>{{end}}</div>
+      {{if .Detail}}<div class="detail">{{.Detail}}</div>{{end}}
+    </a>
+  {{end}}
+  </div>
+{{else}}
+  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No repository you may read. Repositories are declared in sindri.yaml or created through the API.</p></div></div>
+{{end}}
+</section>
+{{end}}

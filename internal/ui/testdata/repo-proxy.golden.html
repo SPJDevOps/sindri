@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
+<title>t · Sindri</title>
+<link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
+<script src="/ui/static/VERSION/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="site-header">
+  <div class="container">
+    <a class="wordmark" href="/ui/">Sindri</a>
+    <nav class="nav" aria-label="Main">
+      <a href="/ui/">Repositories</a>
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>
+    </nav>
+  </div>
+</header>
+<main>
+  <div class="container">
+    
+    
+<h1 class="page-title">hub</h1>
+<div class="pills"><span class="pill upstream">proxy</span><span class="pill">oci</span><span class="pill">managed by </span></div>
+
+<div class="section callout upstream"><strong>Proxy of https://registry-1.docker.io.</strong> Content here was fetched from outside and cached. It carries no owner, provenance, or lifecycle state, and it can never be promoted.</div>
+
+
+<section class="section">
+  <h2 class="section-title">Images</h2>
+  <div class="rows" id="packages">
+  
+    <div class="row empty">Nothing published here yet.</div>
+
+  </div>
+</section>
+
+
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <span>Sindri 0.0.0-test · read-only view</span>
+    <span>Changes go through configuration and the API, never this page.</span>
+  </div>
+</footer>
+</body>
+</html>

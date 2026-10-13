@@ -1,0 +1,37 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
+<title>{{if .Title}}{{.Title}} · {{end}}Sindri</title>
+<link rel="stylesheet" href="{{asset "sindri.css"}}">
+<script src="{{asset "htmx.min.js"}}" defer></script>
+</head>
+<body>
+<header class="site-header">
+  <div class="container">
+    <a class="wordmark" href="/ui/">Sindri</a>
+    <nav class="nav" aria-label="Main">
+      <a href="/ui/">Repositories</a>
+      {{if .Who}}<span class="who" title="Signed in as {{.Who}}">{{.Who}}</span>{{end}}
+      {{if .SignOut}}<button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>{{end}}
+    </nav>
+  </div>
+</header>
+<main>
+  <div class="container">
+    {{if .Crumbs}}<p class="crumbs">{{range $i, $c := .Crumbs}}{{if $i}}<span class="sep">/</span>{{end}}{{if $c.Href}}<a href="{{$c.Href}}">{{$c.Label}}</a>{{else}}{{$c.Label}}{{end}}{{end}}</p>{{end}}
+    {{template "content" .}}
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <span>Sindri {{.Version}} · read-only view</span>
+    <span>Changes go through configuration and the API, never this page.</span>
+  </div>
+</footer>
+</body>
+</html>{{end}}
