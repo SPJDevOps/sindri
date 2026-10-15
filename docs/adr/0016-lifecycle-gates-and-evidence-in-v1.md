@@ -51,7 +51,12 @@ with 200 and either `approved` or `denied`. An unknown environment is `denied` w
 reason `unknown_environment`, not 404. An admission controller with a typo in its
 environment name then blocks deployment instead of reading a 404 as "no policy". A
 digest is approved for a stage when any hosted repository has a current `approve` for
-it at that stage. The approving repositories are listed in the response.
+it at that stage. The approving repositories are listed in the response, but only
+those the caller may read. The answer is for any authenticated caller, since an
+admission controller asks with whatever credential it holds; an approval names a
+repository, an actor, and a reason, which ADR 18 does not disclose to someone who
+cannot read that repository. (Amended in v1.0.1, when the route-walk test found
+the full list going to every caller.)
 
 **The database enforces the ledger.**
 - A trigger refuses `UPDATE`, `DELETE`, and `TRUNCATE` on `lifecycle_events`.

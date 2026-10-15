@@ -824,7 +824,7 @@ something they cannot fully use yet. Nothing is announced publicly until M10.
 **Goal.** Close the gaps the v1 checklist pass found, and ship them as a patch release.
 
 **Scope.**
-- [ ] `/api/v1` gets a route-walk test like `TestUI_EveryRouteHasAnAuthorizationCase`:
+- [x] `/api/v1` gets a route-walk test like `TestUI_EveryRouteHasAnAuthorizationCase`:
   every route has a named authorization case, and a new route without one fails the test.
   Security rule 7 makes a route that skips the check a bug, and today only review catches
   it

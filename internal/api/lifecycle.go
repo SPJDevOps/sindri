@@ -392,6 +392,11 @@ type approvalResponse struct {
 // decide answers "is exactly this digest approved for this environment?" It
 // always answers 200 with approved or denied for a well-formed question, so
 // an admission controller never has to interpret a 404 as a policy decision.
+//
+// The answer is for any authenticated caller, since an admission controller
+// asks with whatever credential it holds. The approvals behind it are not:
+// each names a repository, an actor, and a reason, so only those from
+// repositories the caller may read are listed (ADR 18).
 func (a *api) decide(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	digest, err := model.ParseDigest(query.Get("digest"))
@@ -409,6 +414,11 @@ func (a *api) decide(w http.ResponseWriter, r *http.Request) {
 		a.writeLifecycleError(w, r, err)
 		return
 	}
+	all, readable, _, err := a.readableRepositories(r)
+	if err != nil {
+		a.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
 	resp := decisionResponse{
 		Digest:      d.Digest.String(),
 		Environment: d.Environment,
@@ -420,6 +430,9 @@ func (a *api) decide(w http.ResponseWriter, r *http.Request) {
 		resp.Decision = "approved"
 	}
 	for _, ap := range d.Approvals {
+		if !all && !readable[ap.Repository] {
+			continue
+		}
 		resp.Approvals = append(resp.Approvals, approvalResponse{
 			Repository: ap.Repository,
 			Actor:      ap.Actor,
