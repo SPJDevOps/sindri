@@ -76,6 +76,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+      # TestHelm_ drives the real helm client and fails, rather than skips,
+      # when CI is set and helm is missing.
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1
       - name: Test
         run: make test-integration
 

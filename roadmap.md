@@ -828,7 +828,7 @@ something they cannot fully use yet. Nothing is announced publicly until M10.
   every route has a named authorization case, and a new route without one fails the test.
   Security rule 7 makes a route that skips the check a bug, and today only review catches
   it
-- [ ] A Helm-over-OCI round-trip test: `helm push`, `helm pull`, and `helm template`
+- [x] A Helm-over-OCI round-trip test: `helm push`, `helm pull`, and `helm template`
   against a hosted repository. The README claims it works; it was verified once by hand
 - [x] The testcontainers reaper flake: `TestMigrate_AppliesAndIsIdempotent` failed once
   with `wait for reaper: unexpected container status "created"` while many packages
