@@ -830,7 +830,7 @@ something they cannot fully use yet. Nothing is announced publicly until M10.
   it
 - [ ] A Helm-over-OCI round-trip test: `helm push`, `helm pull`, and `helm template`
   against a hosted repository. The README claims it works; it was verified once by hand
-- [ ] The testcontainers reaper flake: `TestMigrate_AppliesAndIsIdempotent` failed once
+- [x] The testcontainers reaper flake: `TestMigrate_AppliesAndIsIdempotent` failed once
   with `wait for reaper: unexpected container status "created"` while many packages
   started containers at once. Make reaper startup reliable, or retry it, in
   `internal/testsupport`

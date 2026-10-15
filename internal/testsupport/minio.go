@@ -7,6 +7,7 @@
 package testsupport
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -52,16 +53,18 @@ func StartMinIO(t *testing.T) MinIO {
 		bucket   = "sindri-blobs"
 	)
 
-	container, err := testcontainers.Run(ctx, minioImage,
-		testcontainers.WithExposedPorts(minioPort),
-		testcontainers.WithEnv(map[string]string{
-			"MINIO_ROOT_USER":     user,
-			"MINIO_ROOT_PASSWORD": password,
-		}),
-		testcontainers.WithWaitStrategy(
-			wait.ForHTTP("/minio/health/live").WithPort(minioPort),
-		),
-	)
+	container, err := startContainer(t, ctx, func(ctx context.Context) (*testcontainers.DockerContainer, error) {
+		return testcontainers.Run(ctx, minioImage,
+			testcontainers.WithExposedPorts(minioPort),
+			testcontainers.WithEnv(map[string]string{
+				"MINIO_ROOT_USER":     user,
+				"MINIO_ROOT_PASSWORD": password,
+			}),
+			testcontainers.WithWaitStrategy(
+				wait.ForHTTP("/minio/health/live").WithPort(minioPort),
+			),
+		)
+	})
 	testcontainers.CleanupContainer(t, container)
 	if err != nil {
 		t.Fatalf("starting MinIO: %v", err)
