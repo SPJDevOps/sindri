@@ -1,4 +1,4 @@
-# Sindri Roadmap to v1
+# Sindri Roadmap
 
 This is the build plan. It turns [pitch.md](pitch.md) into ordered milestones, each small
 enough for one focused working session and each ending in a gate you can **run** rather
@@ -803,24 +803,193 @@ gate script below, and `goreleaser release --snapshot --clean`).
 
 ---
 
-## After v1
+## After v1: replacing all three tools
 
-Kept here so post-v1 work continues rather than restarts.
+v1 shipped on 2026-10-13. The next phase serves one audience first: **polyglot app
+teams**, who run Python services and a JavaScript frontend on Harbor, Verdaccio, and a
+homegrown PyPI server. The goal is that such a team can retire all three. Kubernetes
+platform teams and security-first buyers come later.
+[ADR 22](docs/adr/0022-post-v1-direction-polyglot-teams-first.md) records why, and
+[ADR 23](docs/adr/0023-scanning-as-a-queue-job-and-the-open-core-line.md) records how
+scanning works and where the open-core line sits.
 
-**Protocols.** npm first, as it exercises mutable metadata documents in a way OCI and PyPI
-do not. Then Maven, then Helm, which is mostly OCI already.
+The order is v1.0.1, then M9 npm, M10 adoptable, M11 scan to evidence. npm comes before the
+docs site because without npm this audience cannot drop Verdaccio, and docs would sell
+something they cannot fully use yet. Nothing is announced publicly until M10.
 
-**Scale.** `--api-only` and `--worker-only`, a Helm chart, horizontal pod autoscaling, and
-queue-driven worker scaling. The M8 queue table is the prerequisite.
+---
 
-**Security depth.** Scanner integration producing evidence rows, real signature
-verification, the advanced policy engine, and a Kubernetes admission webhook calling the
-M6 decisions endpoint. That webhook is the clearest demonstration of the whole thesis, and
-it is deliberately post-v1: it is worth building once the decision endpoint has been in
-production use.
+### v1.0.1 — Hardening
 
-**Commercial layer.** SAML and LDAP, audit retention, multi-region replication, managed
-hosting.
+**Goal.** Close the gaps the v1 checklist pass found, and ship them as a patch release.
+
+**Scope.**
+- [ ] `/api/v1` gets a route-walk test like `TestUI_EveryRouteHasAnAuthorizationCase`:
+  every route has a named authorization case, and a new route without one fails the test.
+  Security rule 7 makes a route that skips the check a bug, and today only review catches
+  it
+- [ ] A Helm-over-OCI round-trip test: `helm push`, `helm pull`, and `helm template`
+  against a hosted repository. The README claims it works; it was verified once by hand
+- [ ] The testcontainers reaper flake: `TestMigrate_AppliesAndIsIdempotent` failed once
+  with `wait for reaper: unexpected container status "created"` while many packages
+  started containers at once. Make reaper startup reliable, or retry it, in
+  `internal/testsupport`
+
+**Out of scope.** Anything that changes behaviour. This is a patch release.
+
+**Gate.**
+```bash
+make ci && make test-integration   # three runs in a row, all green
+go test -tags integration -run 'TestAPI_EveryRouteHasAnAuthorizationCase|TestHelm_' ./...
+git tag v1.0.1 && git push origin v1.0.1   # the release workflow is green
+```
+
+---
+
+### M9 — npm adapter
+
+**Goal.** `npm publish` and `npm install` work against hosted, proxy, and virtual npm
+repositories, so a team can retire Verdaccio. This is the third adapter, and the test of
+the claim that a third protocol is cheap.
+
+**Scope.**
+- [ ] ADR before code: npm's per-package metadata document (the packument) changes on every
+  publish, and dist-tags move. OCI and PyPI have nothing like it. Decide whether the
+  packument is stored or derived from rows on each read (derived is the default
+  expectation, as PyPI's index is), and how dist-tags fit the identity model
+- [ ] Hosted: publish, install, scoped packages (`@acme/ui`), `dist-tags`
+  (`npm dist-tag add/rm`), and `npm deprecate`. Published versions are immutable, like
+  PyPI files; re-publishing a version is refused
+- [ ] Integrity checked at write time: the tarball's `sha512` matches the `integrity` the
+  client sent, and the packument's `dist.integrity` is computed by Sindri, never copied
+  from the client
+- [ ] Proxy to registry.npmjs.org (short name `npmjs`), with the cached tarball keyed by its
+  digest and the packument cached under the existing `ttl`
+- [ ] Virtual npm repositories, merging packuments across members
+- [ ] Name claims for npm: a hosted package, **and a hosted scope**, is never served from a
+  proxy. A hosted `@acme/*` claims every name in that scope.
+  `TestDependencyConfusion_HostedNpmScopeIsNeverServedFromProxy` joins the guard tests
+- [ ] Auth: `npm login` and `_authToken`, through `auth.Authorize` like every other route
+- [ ] `npm` in `repos:` short form, `testdata/config/sindri.yaml`, and `testdata/manifests/`,
+  so both golden tests cover it
+- [ ] npm added to the anonymous-access test, the I2 placement tests, and the UI
+- [ ] Docs: a configuration reference page listing every field, and the README "Not in v1"
+  list updated
+
+**Out of scope.** `npm unpublish` beyond the management API delete, the npm audit
+endpoint, npm's search API, and npm provenance attestations (later, with signature
+verification).
+
+**Watch out for.** The packument is a mutable document listing every version. If a
+proxy's packument is merged naively into a virtual view, a proxy version can appear
+under a hosted name, which is exactly the dependency-confusion bug. The name-claim check
+has to run on the merged document, not only on tarball downloads.
+
+**Gate.**
+```bash
+make ci && make test-integration
+make up && make build && ./scripts/npm-gate.sh
+# npm publish @acme/demo into hosted; npm install it from a clean directory through
+# a virtual repo; pnpm and yarn install the same lockfile; a proxy-only package
+# installs through the virtual repo; @acme/demo is never served from the proxy
+# even when registry.npmjs.org has a package of that name
+```
+
+---
+
+### M10 — Adoptable
+
+**Goal.** A team that has never heard of Sindri can find the docs, migrate from what they
+run today, and operate it in production without reading the source.
+
+**Scope.**
+- [ ] A docs site built from `docs/` and published to GitHub Pages on every release. The
+  generator is chosen by ADR. It is build tooling, so it does not touch the single-binary
+  promise, which is about the runtime
+- [ ] A configuration reference **generated from the config structs**, with a test that
+  fails when the page and the code disagree, in the same spirit as the golden tests
+- [ ] Migration guides from **Verdaccio, devpi, and Harbor**. The method: put a Sindri
+  proxy in front of the old registry, switch clients over, and let the cache fill, then
+  publish new versions to hosted. No import tool yet; build one if users ask for it
+- [ ] An operations guide: TLS behind a reverse proxy, Postgres backup and restore, the
+  blob store, metrics and suggested alerts, and sizing
+- [ ] A README rewritten for the polyglot team: what it replaces, a two-minute start, and
+  links into the docs site
+- [ ] Every page's commands run in CI or in a gate script, as the quickstart's already do
+
+**Out of scope.** A GitHub wiki: docs live in the repository so they are versioned and
+reviewed with the code. Video, a website beyond the docs site, and the announcement itself.
+
+**Gate.**
+```bash
+make ci && make docs            # the site builds with no broken links
+go test ./internal/config/ -run TestReference_   # the reference matches the structs
+./scripts/m8-quickstart-gate.sh # still green
+# a person who has not used Sindri follows one migration guide end to end
+```
+
+---
+
+### M11 — Scan to evidence
+
+**Goal.** Publishing an image, a wheel, or an npm tarball produces an SBOM and a
+vulnerability scan with no pipeline changes, a gate can refuse promotion on severity, and
+a new CVE in something already approved for prod is flagged.
+
+**Scope.**
+- [ ] A `scanning:` section in the one configuration loader, off by default, with the path
+  to `trivy` and an optional mirrored vulnerability database for air-gapped installs
+- [ ] A `scan` job kind on the queue table. A hosted publish enqueues it, and the worker runs
+  Trivy and attaches a CycloneDX `sbom` and a `scan` result as evidence on the subject.
+  Nothing new bypasses `cas`: evidence documents are written through the existing path
+- [ ] A daily re-scan of every subject currently approved for any stage. A newly found
+  vulnerability appears in the API, the UI, and a metric
+- [ ] A second gate rule kind, `{"scan": {"max_severity": "high"}}`, with short-form sugar
+  and both golden tests covering it. The decoder still rejects unknown rules
+- [ ] The UI shows each artifact's vulnerabilities by severity
+- [ ] A release image variant that includes Trivy; the default image and the binary stay
+  dependency-free
+- [ ] The OCI referrers API, so evidence attached by cosign or Trivy through standard OCI
+  tooling is discoverable, which also clears the 20 skipped conformance specs
+- [ ] `pitch.md`'s open-core table updated to the line ADR 23 draws
+
+**Out of scope.** Per-CVE waivers, licence policy, org-wide rules, and compliance
+reports: the paid policy layer. Signature verification. Scanners other than Trivy.
+Notifications beyond the API, UI, and metric.
+
+**Watch out for.** A scan result is a claim about a point in time. The ledger and the
+decision endpoint must keep telling the truth about what was approved and when, and the
+re-scan must never rewrite history; it adds evidence. And "scanning a wheel" is not the
+same as scanning an image: a wheel or an npm tarball declares dependency ranges, not
+pinned versions, so a scan mostly reports on the package's own name and version.
+Decide what each protocol's scan covers in the milestone's ADR before writing the job.
+
+**Gate.**
+```bash
+make ci && make test-integration
+make up && make build && ./scripts/m11-scan-gate.sh
+# push an image with a known-vulnerable package: an sbom and a scan appear as evidence;
+# promotion to a stage gated on max_severity high is refused with the CVE named;
+# the same for a wheel and an npm tarball; a re-scan with a newer database flags an
+# approved artifact without changing the ledger
+./scripts/oci-conformance.sh   # referrers specs no longer skipped
+```
+
+---
+
+### Later
+
+Kept here so the work continues rather than restarts. Roughly in order:
+
+- **Kubernetes.** A Helm chart for Sindri, the split `--api-only` and `--worker-only`
+  modes (the queue table is the prerequisite), and the admission webhook calling the
+  decision endpoint. That webhook is the clearest demonstration of the whole thesis.
+- **Maven**, then Helm's own repository format if OCI charts turn out not to be enough.
+- **Signature verification** for cosign and Sigstore.
+- **Storage:** GCS and Azure Blob Storage.
+- **The paid layer:** per-CVE waivers with expiry, licence policy, org-wide rules teams
+  cannot override, compliance reports, SAML and LDAP, audit retention, multi-region
+  replication, and managed hosting.
 
 ---
 
