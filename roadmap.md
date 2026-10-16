@@ -819,7 +819,7 @@ something they cannot fully use yet. Nothing is announced publicly until M10.
 
 ---
 
-### v1.0.1 — Hardening
+### v1.0.1 — Hardening ✅
 
 **Goal.** Close the gaps the v1 checklist pass found, and ship them as a patch release.
 
@@ -837,12 +837,21 @@ something they cannot fully use yet. Nothing is announced publicly until M10.
 
 **Out of scope.** Anything that changes behaviour. This is a patch release.
 
+One exception was made, for security. The route-walk test found that `GET /decisions`
+named the approving repository, actor, and reason to any authenticated caller, which
+ADR 18 forbids. Approvals are now listed only from repositories the caller may read;
+the approved or denied answer itself is unchanged. ADR 16 is amended.
+
 **Gate.**
 ```bash
 make ci && make test-integration   # three runs in a row, all green
 go test -tags integration -run 'TestAPI_EveryRouteHasAnAuthorizationCase|TestHelm_' ./...
 git tag v1.0.1 && git push origin v1.0.1   # the release workflow is green
 ```
+
+**Gate.** Verified on 2026-10-16 with Go 1.27.1, Docker 29.8, golangci-lint v2.13.2, and
+helm v4.3.1. Three integration runs in a row passed, and so did CI on #19 and on main.
+v1.0.1 is published, with binaries and `ghcr.io/spjdevops/sindri:1.0.1` for amd64 and arm64.
 
 ---
 
