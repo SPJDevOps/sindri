@@ -29,7 +29,22 @@ const postgresImage = "postgres:18-alpine"
 func StartPostgres(t *testing.T) string {
 	t.Helper()
 
-	container, err := tcpostgres.Run(t.Context(), postgresImage,
+	container, err := startContainer(t, t.Context(), runPostgres)
+	testcontainers.CleanupContainer(t, container)
+	if err != nil {
+		t.Fatalf("starting Postgres: %v", err)
+	}
+
+	url, err := container.ConnectionString(t.Context(), "sslmode=disable")
+	if err != nil {
+		t.Fatalf("resolving the Postgres URL: %v", err)
+	}
+	return url
+}
+
+// runPostgres starts the Postgres every helper here uses.
+func runPostgres(ctx context.Context) (*tcpostgres.PostgresContainer, error) {
+	return tcpostgres.Run(ctx, postgresImage,
 		tcpostgres.WithDatabase("sindri"),
 		tcpostgres.WithUsername("sindri"),
 		tcpostgres.WithPassword("sindri"),
@@ -44,16 +59,6 @@ func StartPostgres(t *testing.T) string {
 			).WithDeadline(2*time.Minute),
 		),
 	)
-	testcontainers.CleanupContainer(t, container)
-	if err != nil {
-		t.Fatalf("starting Postgres: %v", err)
-	}
-
-	url, err := container.ConnectionString(t.Context(), "sslmode=disable")
-	if err != nil {
-		t.Fatalf("resolving the Postgres URL: %v", err)
-	}
-	return url
 }
 
 // DBOptions returns pool options pointed at url.
@@ -100,17 +105,7 @@ func DatabaseURL(t *testing.T) string {
 		// The container outlives any one test, so it cannot take a test's
 		// context; testcontainers' reaper stops it with the process.
 		ctx := context.Background()
-		container, err := tcpostgres.Run(ctx, postgresImage,
-			tcpostgres.WithDatabase("sindri"),
-			tcpostgres.WithUsername("sindri"),
-			tcpostgres.WithPassword("sindri"),
-			testcontainers.WithWaitStrategy(
-				wait.ForAll(
-					wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
-					wait.ForListeningPort("5432/tcp"),
-				).WithDeadline(2*time.Minute),
-			),
-		)
+		container, err := startContainer(t, ctx, runPostgres)
 		if err != nil {
 			shared.err = fmt.Errorf("starting shared Postgres: %w", err)
 			return
