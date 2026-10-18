@@ -141,12 +141,44 @@ func TestParse_Defaults(t *testing.T) {
 	}
 }
 
-func TestValidate_AllowsDevelopmentDefaultOnLoopback(t *testing.T) {
-	cfg := config.Default()
-	cfg.Listen.Address = "127.0.0.1:8080"
-	cfg.Auth.StaticToken = config.DevStaticToken
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate rejected the loopback dev bootstrap token: %v", err)
+func TestValidate_RejectsDevTokenOnPublicListener(t *testing.T) {
+	tests := []struct {
+		name    string
+		listen  string
+		wantErr bool
+	}{
+		{name: "wildcard-port", listen: ":8080", wantErr: true},
+		{name: "all-interfaces", listen: "0.0.0.0:8080", wantErr: true},
+		{name: "loopback-ipv4", listen: "127.0.0.1:8080", wantErr: false},
+		{name: "loopback-ipv6", listen: "[::1]:8080", wantErr: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Listen.Address = tc.listen
+			cfg.Auth.StaticToken = config.DevStaticToken
+			err := cfg.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("Validate accepted the dev bootstrap token on a public listener: %q", tc.listen)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("Validate rejected the loopback dev bootstrap token on %q: %v", tc.listen, err)
+			}
+		})
+	}
+}
+
+func TestParse_AllowsBarePortWithCustomToken(t *testing.T) {
+	cfg, err := config.Parse([]byte("listen: :8080\nauth: my-token\n"), "sindri.yaml")
+	if err != nil {
+		t.Fatalf("Parse accepted a bare port with the dev token: %v", err)
+	}
+	if cfg.Listen.Address != ":8080" {
+		t.Fatalf("listen address = %q, want :8080", cfg.Listen.Address)
+	}
+	if cfg.Auth.StaticToken != "my-token" {
+		t.Fatalf("auth.static_token = %q, want my-token", cfg.Auth.StaticToken)
 	}
 }
 

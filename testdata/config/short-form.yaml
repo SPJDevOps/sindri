@@ -1,5 +1,5 @@
 # The complete short form: one file, one team, no apply step.
-listen:   127.0.0.1:9090
+listen:   127.0.0.1:8080
 storage:  s3://sindri-blobs/registry
 database: postgres://sindri:sindri@db:5432/sindri?sslmode=disable
 log:      debug

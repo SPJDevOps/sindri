@@ -128,9 +128,11 @@ blob on two different backends.
   can be probed), `/metrics`, structured `slog` logging with a request id
 - [x] Graceful shutdown on SIGTERM
 
-Sindri's own default listen address is `:8080`, overridable, and the default development
-database URL is `postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable` to match
-the Compose stack.
+Sindri's own default listen address is loopback-only at `127.0.0.1:8080`, overridable,
+and the default development database URL is
+`postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable` to match the Compose
+stack. A non-loopback listener with the default bootstrap token is rejected at startup,
+so the local `sindri-dev-token` never becomes a public admin credential by accident.
 
 **Out of scope.** Any protocol adapter. Any notion of a repository.
 

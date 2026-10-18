@@ -175,6 +175,9 @@ func (c *Config) applyDefaults() {
 
 // Validate reports the first configuration error, naming the field.
 func (c *Config) Validate() error {
+	if strings.TrimSpace(c.Auth.StaticToken) == DevStaticToken && !isLoopbackAddress(c.Listen.Address) {
+		return fmt.Errorf("auth.static_token: must not use %q on a non-loopback listen address %q", DevStaticToken, c.Listen.Address)
+	}
 	for _, check := range []func() error{
 		c.Listen.validate,
 		c.Storage.validate,

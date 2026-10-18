@@ -2,7 +2,7 @@
 # internal tree: that is the desugaring guarantee of ADR 7, and the golden test
 # beside this file is what keeps two spellings from becoming two parsers.
 listen:
-  address: 127.0.0.1:9090
+  address: 127.0.0.1:8080
 
 storage:
   backend: s3
