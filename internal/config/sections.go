@@ -21,7 +21,7 @@ type Listen struct {
 
 func defaultListen() Listen {
 	return Listen{
-		Address: ":8080",
+		Address: "127.0.0.1:8080",
 		// A slow-loris client must not hold a connection open indefinitely,
 		// and a registry is an attractive place to try it.
 		ReadHeaderTimeout: Duration(10 * time.Second),
