@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -11,8 +12,9 @@ import (
 
 // Listen describes the HTTP listener.
 //
-// Short form: `listen: :8080`. Long form: a mapping with any of the fields
-// below. Both produce the same struct.
+// Short form: `listen: :8080` (the default is loopback-only on 127.0.0.1:8080,
+// but operators may override it to any bind address). Long form: a mapping with
+// any of the fields below. Both produce the same struct.
 type Listen struct {
 	Address           string   `yaml:"address"`
 	ReadHeaderTimeout Duration `yaml:"readHeaderTimeout"`
@@ -21,7 +23,7 @@ type Listen struct {
 
 func defaultListen() Listen {
 	return Listen{
-		Address: ":8080",
+		Address: "127.0.0.1:8080",
 		// A slow-loris client must not hold a connection open indefinitely,
 		// and a registry is an attractive place to try it.
 		ReadHeaderTimeout: Duration(10 * time.Second),
@@ -436,6 +438,22 @@ func (o *OIDC) validate() error {
 
 func isLoopback(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func isLoopbackAddress(address string) bool {
+	trimmed := strings.TrimSpace(address)
+	if trimmed == "" {
+		return false
+	}
+	if host, _, err := net.SplitHostPort(trimmed); err == nil {
+		return isLoopback(host)
+	}
+	if strings.HasPrefix(trimmed, "[") && strings.Contains(trimmed, "]") {
+		candidate := strings.TrimPrefix(trimmed, "[")
+		candidate = strings.TrimSuffix(candidate, "]")
+		return isLoopback(candidate)
+	}
+	return isLoopback(trimmed)
 }
 
 // Credential is one upstream secret.
