@@ -214,8 +214,13 @@ func (c *Config) validatePublicURL() error {
 	if err != nil {
 		return err
 	}
+	// Every packument would carry these in each dist.tarball, and `config show`
+	// would print them, so the value is deliberately not echoed.
+	if u.User != nil {
+		return fmt.Errorf("publicUrl: must not contain credentials")
+	}
 	// ADR 13: Sindri serves at the root of its origin.
-	if u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+	if u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return fmt.Errorf("publicUrl: %q must be an origin with no path (Sindri serves at the root of its origin)", c.PublicURL)
 	}
 	return nil
