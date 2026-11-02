@@ -17,6 +17,7 @@ import (
 	"github.com/spj/sindri/internal/gc"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/proto/npm"
 	"github.com/spj/sindri/internal/proto/oci"
 	"github.com/spj/sindri/internal/proto/pypi"
 	"github.com/spj/sindri/internal/queue"
@@ -187,6 +188,12 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		Resolver: resolver,
 		Auth:     chain,
 	})
+	npmHandler := npm.Handler(npm.Options{
+		Resolver:  resolver,
+		Auth:      chain,
+		Verifier:  chain,
+		PublicURL: cfg.PublicURL,
+	})
 
 	srv, err := server.New(server.Options{
 		Address:           cfg.Listen.Address,
@@ -197,6 +204,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		API:               apiHandler,
 		OCI:               ociHandler,
 		PyPI:              pypiHandler,
+		NPM:               npmHandler,
 		Auth:              sessions,
 		// Read-only, GET and HEAD only, every page authorized (ADR 21).
 		UI:     auth.GuardUI(chain, uiHandler, signIn),

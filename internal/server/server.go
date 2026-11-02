@@ -1,7 +1,7 @@
 // Package server assembles Sindri's HTTP surface: the router, the middleware
 // chain, and the operational endpoints every deployment needs.
 //
-// The management API (/api/v1), OCI adapter (/v2), and PyPI adapter (/pypi)
+// The management API (/api/v1), OCI adapter (/v2), PyPI adapter (/pypi), and npm adapter (/npm)
 // mount onto this router via Options. Protocol adapters are not part of this
 // package, so that "what every request passes through" stays readable in one
 // place.
@@ -53,6 +53,10 @@ type Options struct {
 	// PyPI is the PEP 503/691 surface mounted at /pypi. Optional for the same
 	// reason as API.
 	PyPI http.Handler
+
+	// NPM is the npm registry surface mounted at /npm. Optional for the same
+	// reason as API.
+	NPM http.Handler
 
 	// Auth is the browser login flow mounted at /auth. Optional: it exists
 	// only when an identity provider is configured.

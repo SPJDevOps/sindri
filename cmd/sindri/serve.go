@@ -28,7 +28,7 @@ func newServeCmd() *cobra.Command {
 
 Reads one configuration file (sindri.yaml by default, or --config), applies
 embedded database migrations, opens the configured blob store, and serves
-/healthz, /readyz, /metrics, /api/v1, /v2, and /pypi until SIGTERM or SIGINT.
+/healthz, /readyz, /metrics, /api/v1, /v2, /pypi, and /npm until SIGTERM or SIGINT.
 
 When the file declares repos: or lifecycle:, the database is reconciled onto
 them before the server listens, and again on SIGHUP. Nothing is deleted by a

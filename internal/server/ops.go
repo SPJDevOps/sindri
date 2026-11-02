@@ -50,6 +50,9 @@ func (s *Server) router() http.Handler {
 	if s.opts.PyPI != nil {
 		r.Mount("/pypi", s.opts.PyPI)
 	}
+	if s.opts.NPM != nil {
+		r.Mount("/npm", s.opts.NPM)
+	}
 	if s.opts.Auth != nil {
 		r.Mount("/auth", s.opts.Auth)
 	}
