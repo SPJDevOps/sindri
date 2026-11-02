@@ -81,6 +81,11 @@ jobs:
       - uses: azure/setup-helm@v5
         with:
           version: v4.3.1
+      # TestNpm_ drives the real npm client and fails, rather than skips,
+      # when CI is set and npm is missing.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
       - name: Test
         run: make test-integration
 

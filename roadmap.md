@@ -866,10 +866,10 @@ the claim that a third protocol is cheap.
   publish, and dist-tags move. OCI and PyPI have nothing like it. Decide whether the
   packument is stored or derived from rows on each read (derived is the default
   expectation, as PyPI's index is), and how dist-tags fit the identity model
-- [ ] Hosted: publish, install, scoped packages (`@acme/ui`), `dist-tags`
+- [x] Hosted: publish, install, scoped packages (`@acme/ui`), `dist-tags`
   (`npm dist-tag add/rm`), and `npm deprecate`. Published versions are immutable, like
   PyPI files; re-publishing a version is refused
-- [ ] Integrity checked at write time: the tarball's `sha512` matches the `integrity` the
+- [x] Integrity checked at write time: the tarball's `sha512` matches the `integrity` the
   client sent, and the packument's `dist.integrity` is computed by Sindri, never copied
   from the client
 - [ ] Proxy to registry.npmjs.org (preset `npm`), with the cached tarball keyed by its
@@ -879,8 +879,8 @@ the claim that a third protocol is cheap.
 - [ ] Name claims for npm: a hosted package, **and a hosted scope**, is never served from a
   proxy. A hosted `@acme/*` claims every name in that scope.
   `TestDependencyConfusion_HostedNpmScopeIsNeverServedFromProxy` joins the guard tests
-- [ ] Auth: `npm login` and `_authToken`, through `auth.Authorize` like every other route
-- [ ] `npm` in `repos:` short form, `testdata/config/sindri.yaml`, and `testdata/manifests/`,
+- [x] Auth: `npm login` and `_authToken`, through `auth.Authorize` like every other route
+- [x] `npm` in `repos:` short form, `testdata/config/sindri.yaml`, and `testdata/manifests/`,
   so both golden tests cover it
 - [ ] npm added to the anonymous-access test, the I2 placement tests, and the UI
 - [ ] Docs: a configuration reference page listing every field, and the README "Not in v1"
