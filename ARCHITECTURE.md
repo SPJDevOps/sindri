@@ -197,6 +197,9 @@ When a virtual repository resolves a package name:
    even if the hosted member lacks the requested version.
 3. Only an unclaimed name falls through to a proxy member.
 
+For npm, a hosted member holding any name in a scope claims the whole scope: one published
+`@acme/*` package claims every `@acme/*` name (ADR 24).
+
 Step 2 is the dependency-confusion defence, and the failure mode it prevents is subtle:
 without it, an attacker publishes `our-internal-lib` version `99.0.0` to pypi.org, a
 developer asks for the newest version, and the proxy member wins. With it, the request

@@ -862,7 +862,7 @@ repositories, so a team can retire Verdaccio. This is the third adapter, and the
 the claim that a third protocol is cheap.
 
 **Scope.**
-- [ ] ADR before code: npm's per-package metadata document (the packument) changes on every
+- [x] ADR before code ([ADR 24](docs/adr/0024-npm-packument-and-dist-tags.md)): npm's per-package metadata document (the packument) changes on every
   publish, and dist-tags move. OCI and PyPI have nothing like it. Decide whether the
   packument is stored or derived from rows on each read (derived is the default
   expectation, as PyPI's index is), and how dist-tags fit the identity model
@@ -872,9 +872,10 @@ the claim that a third protocol is cheap.
 - [ ] Integrity checked at write time: the tarball's `sha512` matches the `integrity` the
   client sent, and the packument's `dist.integrity` is computed by Sindri, never copied
   from the client
-- [ ] Proxy to registry.npmjs.org (short name `npmjs`), with the cached tarball keyed by its
+- [ ] Proxy to registry.npmjs.org (preset `npm`), with the cached tarball keyed by its
   digest and the packument cached under the existing `ttl`
-- [ ] Virtual npm repositories, merging packuments across members
+- [ ] Virtual npm repositories, where the first member with the package supplies the whole
+  packument. ADR 24 rejects merging across members
 - [ ] Name claims for npm: a hosted package, **and a hosted scope**, is never served from a
   proxy. A hosted `@acme/*` claims every name in that scope.
   `TestDependencyConfusion_HostedNpmScopeIsNeverServedFromProxy` joins the guard tests
