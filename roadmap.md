@@ -994,7 +994,16 @@ Kept here so the work continues rather than restarts. Roughly in order:
 - **Kubernetes.** A Helm chart for Sindri, the split `--api-only` and `--worker-only`
   modes (the queue table is the prerequisite), and the admission webhook calling the
   decision endpoint. That webhook is the clearest demonstration of the whole thesis.
-- **Maven**, then Helm's own repository format if OCI charts turn out not to be enough.
+- **More protocols.** Each is a new adapter on the shared core, plus a small additive
+  migration for its protocol and subject kind, as npm needed (ADR 24). Order by what the
+  first adopters ask for.
+  - **Maven**: hosted, proxy, and virtual, with `maven-metadata.xml` and checksum files.
+  - **Go modules**: the `GOPROXY` protocol (`list`, `.info`, `.mod`, `.zip`, `@latest`),
+    plus a checksum-database story so `GONOSUMDB` is not the only way to use it.
+  - **Hugging Face**: the Hub download protocol for models and datasets behind
+    `HF_ENDPOINT`, proxying huggingface.co with hosted names that proxies cannot shadow.
+  - **Helm's own repository format** (`index.yaml` and chart tarballs), only if OCI charts
+    turn out not to be enough. Helm-over-OCI already works and is tested (v1.0.1).
 - **Signature verification** for cosign and Sigstore.
 - **Storage:** GCS and Azure Blob Storage.
 - **The paid layer:** per-CVE waivers with expiry, licence policy, org-wide rules teams
