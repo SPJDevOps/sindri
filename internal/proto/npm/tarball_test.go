@@ -306,8 +306,12 @@ func TestInspectManifest_GzipBombStopsAtTheBound(t *testing.T) {
 		compressed.Write(mebibytes)
 	}
 
-	if _, err := inspectManifest(&compressed); !errors.Is(err, errUnpackedTooLarge) {
+	_, err := inspectManifest(&compressed)
+	if !errors.Is(err, errUnpackedTooLarge) {
 		t.Fatalf("err = %v, want errUnpackedTooLarge", err)
+	}
+	if !errors.Is(err, errTarballRefused) {
+		t.Errorf("err = %v, want errTarballRefused too", err)
 	}
 }
 
@@ -345,6 +349,9 @@ func TestScanManifest_UnpackedBound(t *testing.T) {
 			_, err := scanManifest(bytes.NewReader(gzipped(t, tc.raw)), tc.bound)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if tc.wantErr != nil && !errors.Is(err, errTarballRefused) {
+				t.Errorf("err = %v, want errTarballRefused too", err)
 			}
 		})
 	}

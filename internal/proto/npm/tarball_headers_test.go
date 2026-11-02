@@ -280,6 +280,20 @@ func TestInspectManifest_RefusesShapesOutsideTheGrammar(t *testing.T) {
 			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), prefixedEntry("package", "package.json", installedVariant)}},
 		{name: "pax path replacing the archive root's manifest", reason: "could be the manifest",
 			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("package.json", installedVariant, '0')}},
+		{name: "pax path replacing the manifest spelled with a doubled slash", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("package//package.json", installedVariant, '0')}},
+		{name: "pax path replacing the manifest spelled with a leading slash", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("/package/package.json", installedVariant, '0')}},
+		{name: "pax path replacing the manifest spelled with a leading dot segment", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("./package/package.json", installedVariant, '0')}},
+		{name: "pax path replacing the manifest spelled with an inner dot segment", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/./package.json", installedVariant, '0')}},
+		{name: "pax path replacing the manifest spelled with a parent segment", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/x/../package.json", installedVariant, '0')}},
+		{name: "pax path replacing the manifest spelled from above the root", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("../package/package.json", installedVariant, '0')}},
+		{name: "pax path replacing the manifest spelled with a backslash", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry(`package\package.json`, installedVariant, '0')}},
 
 		// A prefix is part of the name.
 		{name: "manifest in prefix and name after a plain one", reason: "more than one",
@@ -529,6 +543,9 @@ func TestInspectManifest_AcceptsHeadersRealToolsWrite(t *testing.T) {
 		}},
 		{name: "pax path replacing a name that ends in a slash", entries: [][]byte{
 			benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/cut-short/", "x", '0'),
+		}},
+		{name: "pax path replacing a name cut after a parent segment", entries: [][]byte{
+			benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/cut/..", "x", '0'),
 		}},
 		{name: "pax with every allowed key", entries: [][]byte{
 			benign,

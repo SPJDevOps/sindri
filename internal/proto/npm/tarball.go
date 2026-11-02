@@ -41,9 +41,11 @@ const (
 )
 
 var (
-	errUnpackedTooLarge = errors.New("tarball unpacks to too much data")
 	// errTarballRefused marks a tarball outside the grammar scanManifest accepts.
 	errTarballRefused = errors.New("tarball refused")
+	// errUnpackedTooLarge is a refusal, so a handler that only knows
+	// errTarballRefused still blames the tarball and not the server.
+	errUnpackedTooLarge = fmt.Errorf("%w: tarball unpacks to too much data", errTarballRefused)
 )
 
 // tarballInfo is what Sindri computes about a tarball's bytes. These values, and
@@ -485,13 +487,16 @@ func parsePAXRecords(body []byte) (*paxHeader, error) {
 // entry for having no name would read its body as headers, and one that ignores
 // the pax header would install it under this name, so neither can be left to
 // chance. The full name rules do not apply: npm pack cuts a long name wherever
-// 100 bytes falls, which can leave a trailing slash, and tar-stream writes
-// PaxHeader here.
+// 100 bytes falls, which can leave a trailing slash, a split character, or a
+// dot-dot fragment, and tar-stream writes PaxHeader here. So the name is normalized
+// the way a parser ignoring the pax header might read it, and only the manifest
+// check runs on the result.
 func checkReplacedName(name string) error {
 	if name == "" {
 		return refuse("pax path replaces an empty name")
 	}
-	if installsAsManifest(name) {
+	slashed := strings.ReplaceAll(name, `\`, "/")
+	if installsAsManifest(strings.TrimPrefix(path.Clean("/"+slashed), "/")) {
 		return refuse("pax path replaces a name that could be the manifest")
 	}
 	return nil
