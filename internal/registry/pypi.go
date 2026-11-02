@@ -64,7 +64,7 @@ func (r *Registry) ListPackageFiles(ctx context.Context, repo, pkg string) ([]Pa
 	if _, err := r.requirePyPIRepo(ctx, repo); err != nil {
 		return nil, err
 	}
-	normalized := normalizePackageName(pkg)
+	normalized := NormalizeName(model.ProtocolPyPI, pkg)
 	if normalized == "" {
 		return nil, fmt.Errorf("%w: package name is required", ErrInvalidInput)
 	}
@@ -107,7 +107,7 @@ func (r *Registry) GetFileByFilename(ctx context.Context, repo, pkg, filename st
 	if _, err := r.requirePyPIRepo(ctx, repo); err != nil {
 		return PackageFile{}, nil, err
 	}
-	normalized := normalizePackageName(pkg)
+	normalized := NormalizeName(model.ProtocolPyPI, pkg)
 	if normalized == "" {
 		return PackageFile{}, nil, fmt.Errorf("%w: package name is required", ErrInvalidInput)
 	}

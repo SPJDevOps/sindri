@@ -251,7 +251,7 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		return model.File{}, fmt.Errorf("recording blob %s: %w", info.Digest, err)
 	}
 
-	normalized := normalizePackageName(p.Package)
+	normalized := NormalizeName(model.Protocol(repo.Protocol), p.Package)
 	pkg, err := q.GetOrCreatePackage(ctx, db.GetOrCreatePackageParams{
 		RepoID:         repo.ID,
 		NormalizedName: normalized,
@@ -311,8 +311,12 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	}
 
 	kind := model.SubjectKindFile
-	if repo.Protocol == string(model.ProtocolPyPI) {
+	switch model.Protocol(repo.Protocol) {
+	case model.ProtocolPyPI:
 		kind = model.SubjectKindPyPIDist
+	case model.ProtocolNPM:
+		kind = model.SubjectKindNPMTarball
+	case model.ProtocolOCI:
 	}
 	if err := recordSubject(ctx, q, repo, info.Digest, info.Size, kind, p.Provenance); err != nil {
 		return model.File{}, err
@@ -335,9 +339,16 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 // GetFile resolves a placed file and returns a reader. Placement is checked
 // before every cas.Get (invariant I2).
 func (r *Registry) GetFile(ctx context.Context, repo, pkg, version, filename string) (model.File, io.ReadCloser, error) {
+	repoRow, err := r.q.GetRepositoryByName(ctx, repo)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.File{}, nil, ErrNotFound
+		}
+		return model.File{}, nil, fmt.Errorf("looking up repository %s: %w", repo, err)
+	}
 	file, err := r.q.GetFile(ctx, db.GetFileParams{
 		Name:           repo,
-		NormalizedName: normalizePackageName(pkg),
+		NormalizedName: NormalizeName(model.Protocol(repoRow.Protocol), pkg),
 		Version:        version,
 		Filename:       filename,
 	})
@@ -409,9 +420,18 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename 
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := r.q.WithTx(tx)
 
+	repoRow, err := q.GetRepositoryByName(ctx, repo)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("looking up repository for delete: %w", err)
+	}
+	normalized := NormalizeName(model.Protocol(repoRow.Protocol), pkg)
+
 	file, err := q.GetFile(ctx, db.GetFileParams{
 		Name:           repo,
-		NormalizedName: normalizePackageName(pkg),
+		NormalizedName: normalized,
 		Version:        version,
 		Filename:       filename,
 	})
@@ -422,13 +442,9 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename 
 		return fmt.Errorf("resolving file for delete: %w", err)
 	}
 
-	repoRow, err := q.GetRepositoryByName(ctx, repo)
-	if err != nil {
-		return fmt.Errorf("looking up repository for delete: %w", err)
-	}
 	pkgRow, err := q.GetPackageByRepoAndName(ctx, db.GetPackageByRepoAndNameParams{
 		RepoID:         repoRow.ID,
-		NormalizedName: normalizePackageName(pkg),
+		NormalizedName: normalized,
 	})
 	if err != nil {
 		return fmt.Errorf("looking up package for delete: %w", err)
@@ -438,7 +454,7 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename 
 
 	n, err := q.DeleteFile(ctx, db.DeleteFileParams{
 		Name:           repo,
-		NormalizedName: normalizePackageName(pkg),
+		NormalizedName: normalized,
 		Version:        version,
 		Filename:       filename,
 	})
@@ -529,7 +545,7 @@ func (r *Registry) ListVersions(ctx context.Context, p ListVersionsParams) (Page
 
 	pkg, err := r.q.GetPackageByRepoAndName(ctx, db.GetPackageByRepoAndNameParams{
 		RepoID:         repo.ID,
-		NormalizedName: normalizePackageName(p.Package),
+		NormalizedName: NormalizeName(model.Protocol(repo.Protocol), p.Package),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -666,6 +682,16 @@ func validatePlacementNames(repo, pkg, version, filename string) error {
 		return fmt.Errorf("%w: filename is required", ErrInvalidInput)
 	}
 	return nil
+}
+
+// NormalizeName returns the key a protocol stores a package under. npm names
+// are case-sensitive and distinguish "-", "_", and ".", so folding them the
+// PyPI way would merge packages that the protocol keeps apart.
+func NormalizeName(p model.Protocol, name string) string {
+	if p == model.ProtocolNPM {
+		return strings.TrimSpace(name)
+	}
+	return normalizePackageName(name)
 }
 
 // normalizePackageName folds a package name the way PyPI does (PEP 503). For

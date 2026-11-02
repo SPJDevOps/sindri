@@ -390,7 +390,7 @@ INSERT INTO versions (package_id, version)
 VALUES ($1, $2)
 ON CONFLICT (package_id, version) DO UPDATE
 SET version = EXCLUDED.version
-RETURNING id, package_id, version
+RETURNING id, package_id, version, deprecated
 `
 
 type GetOrCreateVersionParams struct {
@@ -401,7 +401,12 @@ type GetOrCreateVersionParams struct {
 func (q *Queries) GetOrCreateVersion(ctx context.Context, arg GetOrCreateVersionParams) (Version, error) {
 	row := q.db.QueryRow(ctx, getOrCreateVersion, arg.PackageID, arg.Version)
 	var i Version
-	err := row.Scan(&i.ID, &i.PackageID, &i.Version)
+	err := row.Scan(
+		&i.ID,
+		&i.PackageID,
+		&i.Version,
+		&i.Deprecated,
+	)
 	return i, err
 }
 
@@ -497,7 +502,7 @@ func (q *Queries) GetTag(ctx context.Context, arg GetTagParams) (Tag, error) {
 }
 
 const getVersion = `-- name: GetVersion :one
-SELECT id, package_id, version FROM versions
+SELECT id, package_id, version, deprecated FROM versions
 WHERE package_id = $1 AND version = $2
 `
 
@@ -509,7 +514,12 @@ type GetVersionParams struct {
 func (q *Queries) GetVersion(ctx context.Context, arg GetVersionParams) (Version, error) {
 	row := q.db.QueryRow(ctx, getVersion, arg.PackageID, arg.Version)
 	var i Version
-	err := row.Scan(&i.ID, &i.PackageID, &i.Version)
+	err := row.Scan(
+		&i.ID,
+		&i.PackageID,
+		&i.Version,
+		&i.Deprecated,
+	)
 	return i, err
 }
 
@@ -773,7 +783,7 @@ func (q *Queries) ListTags(ctx context.Context, arg ListTagsParams) ([]string, e
 }
 
 const listVersionsByPackage = `-- name: ListVersionsByPackage :many
-SELECT id, package_id, version FROM versions
+SELECT id, package_id, version, deprecated FROM versions
 WHERE package_id = $1
   AND ($2::text IS NULL OR version > $2)
 ORDER BY version
@@ -795,7 +805,12 @@ func (q *Queries) ListVersionsByPackage(ctx context.Context, arg ListVersionsByP
 	items := []Version{}
 	for rows.Next() {
 		var i Version
-		if err := rows.Scan(&i.ID, &i.PackageID, &i.Version); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.PackageID,
+			&i.Version,
+			&i.Deprecated,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

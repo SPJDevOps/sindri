@@ -19,6 +19,23 @@ type Blob struct {
 	LastSeenAt     time.Time `json:"last_seen_at"`
 }
 
+type DistTag struct {
+	PackageID uuid.UUID `json:"package_id"`
+	Tag       string    `json:"tag"`
+	VersionID uuid.UUID `json:"version_id"`
+}
+
+type DistTagEvent struct {
+	ID          int64       `json:"id"`
+	Repository  string      `json:"repository"`
+	Package     string      `json:"package"`
+	Tag         string      `json:"tag"`
+	FromVersion pgtype.Text `json:"from_version"`
+	ToVersion   pgtype.Text `json:"to_version"`
+	Actor       string      `json:"actor"`
+	At          time.Time   `json:"at"`
+}
+
 type Evidence struct {
 	ID            uuid.UUID `json:"id"`
 	SubjectDigest string    `json:"subject_digest"`
@@ -196,7 +213,8 @@ type Tag struct {
 }
 
 type Version struct {
-	ID        uuid.UUID `json:"id"`
-	PackageID uuid.UUID `json:"package_id"`
-	Version   string    `json:"version"`
+	ID         uuid.UUID   `json:"id"`
+	PackageID  uuid.UUID   `json:"package_id"`
+	Version    string      `json:"version"`
+	Deprecated pgtype.Text `json:"deprecated"`
 }

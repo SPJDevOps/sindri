@@ -74,8 +74,8 @@ func (r *Registry) CreateRepository(ctx context.Context, p CreateRepositoryParam
 	if p.Type != model.RepoTypeHosted && p.Type != model.RepoTypeProxy && p.Type != model.RepoTypeVirtual {
 		return model.Repository{}, fmt.Errorf("%w: repository type %q", ErrInvalidInput, p.Type)
 	}
-	if p.Protocol != model.ProtocolOCI && p.Protocol != model.ProtocolPyPI {
-		return model.Repository{}, fmt.Errorf("%w: protocol %q (want oci or pypi)", ErrInvalidInput, p.Protocol)
+	if p.Protocol != model.ProtocolOCI && p.Protocol != model.ProtocolPyPI && p.Protocol != model.ProtocolNPM {
+		return model.Repository{}, fmt.Errorf("%w: protocol %q (want oci, pypi, or npm)", ErrInvalidInput, p.Protocol)
 	}
 	if err := validateCreateParams(p); err != nil {
 		return model.Repository{}, err

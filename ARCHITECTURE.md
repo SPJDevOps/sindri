@@ -261,7 +261,7 @@ blobs(digest PK, size, storage_backend, created_at,
 
 repositories(
   id PK, name UNIQUE, type,                -- hosted | proxy | virtual
-  protocol,                                -- oci | pypi
+  protocol,                                -- oci | pypi | npm
   config jsonb, locked bool, managed_by,   -- config | api
   created_at
 )  -- config: {namespace, source: file|apply, access: {read, write}, lifecycleStages}
@@ -272,7 +272,8 @@ remotes(repo_id PK FK, upstream_url, credentials_ref,
 
 packages(id PK, repo_id FK, normalized_name, display_name,
          UNIQUE (repo_id, normalized_name))
-versions(id PK, package_id FK, version, UNIQUE (package_id, version))
+versions(id PK, package_id FK, version, deprecated NULL,   -- npm deprecation message
+         UNIQUE (package_id, version))
 files(id PK, version_id FK, blob_digest FK, filename, media_type, metadata jsonb)
 
 tags(repo_id FK, package_id FK, name, target_digest FK,
@@ -281,6 +282,10 @@ manifest_children(parent_digest FK, child_digest FK,
                   PRIMARY KEY (parent_digest, child_digest))
 repository_blobs(repo_id FK, digest FK,
                  PRIMARY KEY (repo_id, digest))   -- OCI blob membership (I2)
+dist_tags(package_id FK, tag, version_id FK,
+          PRIMARY KEY (package_id, tag))          -- mutable, npm
+dist_tag_events(id PK, repository, package, tag,  -- append only, no FKs (ADR 24)
+                from_version, to_version, actor, at)
 ```
 
 `repositories.config` carries what authorization and the reconciler read on
@@ -301,7 +306,8 @@ No table holds group membership. Groups are read from the caller's token on
 every request (ADR 5).
 
 `normalized_name` is the protocol's canonical form, lowercased with separators folded for
-PyPI per PEP 503. Uniqueness is on the normalized form so that `Foo.Bar` and `foo-bar`
+PyPI per PEP 503. npm names are stored as written, because npm distinguishes case and
+`-`, `_`, and `.`. Uniqueness is on the normalized form so that `Foo.Bar` and `foo-bar`
 cannot both be claimed.
 
 A repository name may contain slashes, so that `team/internal` reads naturally in a
