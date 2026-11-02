@@ -16,6 +16,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -210,18 +211,23 @@ func (c *Config) validatePublicURL() error {
 	if c.PublicURL == "" {
 		return nil
 	}
-	u, err := parseHTTPSOrLoopback("publicUrl", c.PublicURL)
-	if err != nil {
-		return err
+	// No error below includes the value: it may carry credentials or a token,
+	// and url.Parse's own errors quote their input.
+	u, err := url.Parse(c.PublicURL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("publicUrl: is not a URL")
 	}
-	// Every packument would carry these in each dist.tarball, and `config show`
-	// would print them, so the value is deliberately not echoed.
+	// Every packument would carry credentials in each dist.tarball, and
+	// `config show` would print them.
 	if u.User != nil {
 		return fmt.Errorf("publicUrl: must not contain credentials")
 	}
+	if err := checkHTTPSOrLoopback("publicUrl", u); err != nil {
+		return err
+	}
 	// ADR 13: Sindri serves at the root of its origin.
 	if u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		return fmt.Errorf("publicUrl: %q must be an origin with no path (Sindri serves at the root of its origin)", c.PublicURL)
+		return fmt.Errorf("publicUrl: must be an origin with no path, query, or fragment (Sindri serves at the root of its origin)")
 	}
 	return nil
 }

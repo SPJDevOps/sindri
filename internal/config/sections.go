@@ -432,10 +432,19 @@ func parseHTTPSOrLoopback(field, raw string) (*url.URL, error) {
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("%s: %q is not a URL", field, raw)
 	}
-	if u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())) {
-		return nil, fmt.Errorf("%s: must be https (plain http is accepted only for a loopback address)", field)
+	if err := checkHTTPSOrLoopback(field, u); err != nil {
+		return nil, err
 	}
 	return u, nil
+}
+
+// checkHTTPSOrLoopback applies the scheme rule to a parsed URL. Its error
+// never includes the URL.
+func checkHTTPSOrLoopback(field string, u *url.URL) error {
+	if u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())) {
+		return fmt.Errorf("%s: must be https (plain http is accepted only for a loopback address)", field)
+	}
+	return nil
 }
 
 func isLoopback(host string) bool {
