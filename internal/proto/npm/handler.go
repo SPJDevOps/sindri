@@ -102,7 +102,7 @@ func (h *handler) authorize(w http.ResponseWriter, r *http.Request, name string,
 	return true
 }
 
-// serveRoute runs one parsed route. Tasks 7 and 8 fill in the rest.
+// serveRoute runs one parsed route. Task 8 fills in the rest.
 func (h *handler) serveRoute(w http.ResponseWriter, r *http.Request, rt route) {
 	switch rt.kind {
 	case routePackument:
@@ -121,7 +121,9 @@ func (h *handler) serveRoute(w http.ResponseWriter, r *http.Request, rt route) {
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
-	case routeDistTags, routeWhoami, routeWebLogin, routeUserLogin:
+	case routeDistTags:
+		h.handleDistTags(w, r, rt)
+	case routeWhoami, routeWebLogin, routeUserLogin:
 		writeError(w, http.StatusNotImplemented, "not implemented")
 	default:
 		writeError(w, http.StatusNotFound, "no route matches this path")

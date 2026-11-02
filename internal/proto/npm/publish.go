@@ -46,9 +46,9 @@ type publishRequest struct {
 // others. Decoding into a struct of maps would fold case and merge the repeats,
 // so a body whose last _attachments is empty would still look like it held one.
 func decodePublishRequest(metadata []byte) (publishRequest, error) {
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(metadata, &top); err != nil {
-		return publishRequest{}, fmt.Errorf("decoding publish body: %w", err)
+	top, err := decodeTopLevel(metadata)
+	if err != nil {
+		return publishRequest{}, err
 	}
 	var req publishRequest
 	if err := decodeMember(top["name"], &req.Name); err != nil {
@@ -64,6 +64,16 @@ func decodePublishRequest(metadata []byte) (publishRequest, error) {
 		return publishRequest{}, err
 	}
 	return req, nil
+}
+
+// decodeTopLevel splits the document into its top-level members. Keys match
+// exactly and the last of a repeated key wins.
+func decodeTopLevel(metadata []byte) (map[string]json.RawMessage, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &top); err != nil {
+		return nil, fmt.Errorf("decoding publish body: %w", err)
+	}
+	return top, nil
 }
 
 // decodeMember decodes one member of the document, which may be absent.
@@ -98,17 +108,27 @@ type storedMetadata struct {
 	Shasum    string          `json:"shasum"`
 }
 
-func (h *handler) handlePublish(w http.ResponseWriter, r *http.Request, rt route) {
+// authorizeHostedWrite is the start of every write route: the caller may write
+// to the repository, and it is hosted. The registry's write methods do not check
+// the type, so this does.
+func (h *handler) authorizeHostedWrite(w http.ResponseWriter, r *http.Request, rt route) bool {
 	if !h.authorize(w, r, rt.repo, auth.RoleWrite) {
-		return
+		return false
 	}
 	repo, err := h.reg.RequireNPMRepository(r.Context(), rt.repo)
 	if err != nil {
 		mapRegistryError(w, err)
-		return
+		return false
 	}
 	if repo.Type != model.RepoTypeHosted {
 		mapRegistryError(w, fmt.Errorf("%w: %s is %s", registry.ErrReadOnly, rt.repo, repo.Type))
+		return false
+	}
+	return true
+}
+
+func (h *handler) handlePublish(w http.ResponseWriter, r *http.Request, rt route) {
+	if !h.authorizeHostedWrite(w, r, rt) {
 		return
 	}
 	if err := validateName(rt.pkg); err != nil {
@@ -135,7 +155,7 @@ func (h *handler) handlePublish(w http.ResponseWriter, r *http.Request, rt route
 	}
 	switch attachments {
 	case 0:
-		writeError(w, http.StatusNotImplemented, "deprecate is not implemented")
+		h.handleDeprecate(w, r, rt, metadata.Bytes())
 		return
 	case 1:
 	default:
