@@ -128,7 +128,10 @@ func (f *npmFixture) do(token, method, path string, body []byte) (int, []byte, h
 	if err != nil {
 		f.t.Fatalf("building request: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	// An empty token sends no Authorization header at all.
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	res, err := f.ts.Client().Do(req)
 	if err != nil {
 		f.t.Fatalf("%s %s: %v", method, path, err)
