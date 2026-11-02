@@ -83,6 +83,28 @@ func paxRecords(pairs ...string) string {
 	return b.String()
 }
 
+// prefixedEntry stores a name across the ustar prefix and name fields.
+func prefixedEntry(prefix, name, body string) []byte {
+	b := rawHeader(name, len(body), '0', ustarMagic)
+	copy(b[345:], prefix)
+	sealHeader(b)
+	return append(b, padded(body)...)
+}
+
+// checksumOfEightDigits has a correct checksum with no terminator, so its last
+// digit sits against the digit type flag, and a parser reading on from the field
+// sees a different number.
+func checksumOfEightDigits(name string) []byte {
+	b := rawHeader(name, 0, '0', ustarMagic)
+	copy(b[148:], "        ")
+	sum := 0
+	for _, c := range b {
+		sum += int(c)
+	}
+	copy(b[148:], fmt.Sprintf("%08o", sum))
+	return b
+}
+
 func paxEntry(body string) []byte { return rawEntry("PaxHeader/x", body, 'x') }
 
 func endOfArchive() []byte { return make([]byte, 2*512) }
@@ -238,6 +260,35 @@ func TestInspectManifest_RefusesShapesOutsideTheGrammar(t *testing.T) {
 		{name: "bytes in the header padding", reason: "padding",
 			entries: [][]byte{benign, reg(field(505, "x"))}},
 
+		{name: "checksum running into the type flag", reason: "checksum",
+			entries: [][]byte{benign, checksumOfEightDigits("package/z.js")}},
+
+		// A pax header and the name it replaces.
+		{name: "unnamed pax header", reason: "pax header has no name",
+			entries: [][]byte{benign, rawEntry("", paxRecords("comment", "1"), 'x'), smuggled}},
+		{name: "pax path replacing an empty name", reason: "replaces an empty name",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("", "x", '0')}},
+		{name: "pax path replacing the manifest's name", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry(manifestEntry, installedVariant, '0')}},
+		{name: "pax path replacing the manifest's name with itself", reason: "could be the manifest",
+			entries: [][]byte{paxEntry(paxRecords("path", manifestEntry)), benign}},
+		{name: "pax path replacing a case variant", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/PACKAGE.JSON", installedVariant, '0')}},
+		{name: "pax path replacing another top directory", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("other/package.json", installedVariant, '0')}},
+		{name: "pax path replacing a name split over the prefix", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), prefixedEntry("package", "package.json", installedVariant)}},
+		{name: "pax path replacing the archive root's manifest", reason: "could be the manifest",
+			entries: [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("package.json", installedVariant, '0')}},
+
+		// A prefix is part of the name.
+		{name: "manifest in prefix and name after a plain one", reason: "more than one",
+			entries: [][]byte{benign, prefixedEntry("package", "package.json", installedVariant)}},
+		{name: "plain manifest after one in prefix and name", reason: "more than one",
+			entries: [][]byte{prefixedEntry("package", "package.json", installedVariant), benign}},
+		{name: "alias split over the prefix", reason: "install over",
+			entries: [][]byte{benign, prefixedEntry("other", "package.json", installedVariant)}},
+
 		// Names.
 		{name: "absolute name", reason: "name",
 			entries: [][]byte{benign, rawHeader("/package/z.js", 0, '0', ustarMagic)}},
@@ -279,21 +330,21 @@ func TestInspectManifest_RefusesShapesOutsideTheGrammar(t *testing.T) {
 			entries: [][]byte{benign, paxEntry(paxRecords("comment", strings.Repeat("x", 16<<10))), smuggled}},
 		{name: "pax with no entry after it", reason: "pax header",
 			entries: [][]byte{benign, paxEntry(paxRecords("comment", "1"))}},
-		{name: "pax wrong length", reason: "pax record",
+		{name: "pax wrong length", reason: "pax record length",
 			entries: [][]byte{benign, paxEntry("99 path=package/a.js\n"), smuggled}},
-		{name: "pax length with a leading zero", reason: "pax record",
+		{name: "pax length with a leading zero", reason: "pax record length",
 			entries: [][]byte{benign, paxEntry("012 mtime=1\n"), smuggled}},
-		{name: "pax record without a newline", reason: "pax record",
+		{name: "pax record without a newline", reason: "pax record does not end",
 			entries: [][]byte{benign, paxEntry("11 mtime=1x"), smuggled}},
-		{name: "pax record with an inner newline", reason: "pax record",
+		{name: "pax record with an inner newline", reason: "pax record has an inner newline",
 			entries: [][]byte{benign, paxEntry(paxRecords("comment", "a\nb")), smuggled}},
-		{name: "pax record without an equals sign", reason: "pax record",
-			entries: [][]byte{benign, paxEntry("10 nothing\n"), smuggled}},
-		{name: "pax record with no length", reason: "pax record",
+		{name: "pax record without an equals sign", reason: "pax record has no key",
+			entries: [][]byte{benign, paxEntry("11 nothing\n"), smuggled}},
+		{name: "pax record with no length", reason: "pax record length",
 			entries: [][]byte{benign, paxEntry("mtime=1\n"), smuggled}},
-		{name: "pax with a NUL", reason: "pax record",
+		{name: "pax with a NUL", reason: "pax record is not text",
 			entries: [][]byte{benign, paxEntry(paxRecords("comment", "a\x00b")), smuggled}},
-		{name: "pax with invalid UTF-8", reason: "pax record",
+		{name: "pax with invalid UTF-8", reason: "pax record is not text",
 			entries: [][]byte{benign, paxEntry(paxRecords("comment", "a\xffb")), smuggled}},
 	}
 	for _, tc := range cases {
@@ -378,19 +429,38 @@ func TestInspectManifest_RefusalsWrapOneSentinelAndEchoNothing(t *testing.T) {
 	t.Parallel()
 	const secret = "npm_supersecret"
 	benign := rawEntry(manifestEntry, readBySindri, '0')
-	for _, entry := range [][]byte{
-		rawHeader("package/../"+secret, 0, '0', ustarMagic),
-		paxEntry(paxRecords(secret, "1")),
-		paxEntry(paxRecords("path", "../"+secret)),
-		patchedHeader("package/z.js", 0, '0', func(b []byte) { copy(b[157:], secret) }),
-	} {
-		_, err := inspectManifest(bytes.NewReader(rawTarball(t, benign, entry, benign)))
-		if !errors.Is(err, errTarballRefused) {
-			t.Errorf("err = %v, want errTarballRefused", err)
-		}
-		if err != nil && strings.Contains(err.Error(), "supersecret") {
-			t.Errorf("error %q echoes the tarball", err)
-		}
+	good := rawTarball(t, benign)
+	badChecksum := bytes.Clone(good)
+	badChecksum[len(badChecksum)-8] ^= 0xff
+
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{name: "bad name", data: rawTarball(t, benign, rawHeader("package/../"+secret, 0, '0', ustarMagic), benign)},
+		{name: "bad pax key", data: rawTarball(t, benign, paxEntry(paxRecords(secret, "1")), benign)},
+		{name: "bad pax path", data: rawTarball(t, benign, paxEntry(paxRecords("path", "../"+secret)), benign)},
+		{name: "linkname", data: rawTarball(t, benign, patchedHeader("package/z.js", 0, '0', func(b []byte) { copy(b[157:], secret) }), benign)},
+		{name: "manifest with a syntax error", data: rawTarball(t, rawEntry(manifestEntry, secret, '0'))},
+		{name: "manifest with a syntax error mid-document", data: rawTarball(t, rawEntry(manifestEntry, `{"a":`+secret+`}`, '0'))},
+		{name: "manifest of the wrong type", data: rawTarball(t, rawEntry(manifestEntry, `"`+secret+`"`, '0'))},
+		{name: "manifest null", data: rawTarball(t, rawEntry(manifestEntry, "null", '0'))},
+		{name: "not gzip", data: []byte(secret)},
+		{name: "corrupt deflate", data: append(bytes.Clone(good[:10]), bytes.Repeat([]byte{0xff}, 64)...)},
+		{name: "bad gzip checksum", data: badChecksum},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := inspectManifest(bytes.NewReader(tc.data))
+			if !errors.Is(err, errTarballRefused) {
+				t.Fatalf("err = %v, want errTarballRefused", err)
+			}
+			// A json.SyntaxError quotes the offending byte, hence the second check.
+			if text := err.Error(); strings.Contains(text, "supersecret") || strings.Contains(text, "invalid character") {
+				t.Errorf("error %q echoes the tarball", text)
+			}
+		})
 	}
 }
 
@@ -451,8 +521,14 @@ func TestInspectManifest_AcceptsHeadersRealToolsWrite(t *testing.T) {
 		{name: "pax path over a name cut inside a character", entries: [][]byte{
 			benign, paxEntry(paxRecords("path", "package/é.js")), rawEntry("package/\xc3", "x", '0'),
 		}},
-		{name: "pax path naming the manifest", entries: [][]byte{
-			paxEntry(paxRecords("path", manifestEntry)), benign,
+		{name: "pax path naming the manifest over another name", entries: [][]byte{
+			paxEntry(paxRecords("path", manifestEntry)), rawEntry("package/long-name-cut-short", readBySindri, '0'),
+		}},
+		{name: "manifest in prefix and name", entries: [][]byte{
+			prefixedEntry("package", "package.json", readBySindri),
+		}},
+		{name: "pax path replacing a name that ends in a slash", entries: [][]byte{
+			benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/cut-short/", "x", '0'),
 		}},
 		{name: "pax with every allowed key", entries: [][]byte{
 			benign,
@@ -540,24 +616,29 @@ func TestInspectManifest_RefusesManifestAliases(t *testing.T) {
 	cases := []struct {
 		name    string
 		entries []tarEntry
+		reason  string
 	}{
-		{name: "uppercase base name alone", entries: []tarEntry{alias("package/PACKAGE.JSON")}},
-		{name: "uppercase base name after the manifest", entries: []tarEntry{manifest, alias("package/PACKAGE.JSON")}},
-		{name: "uppercase base name before the manifest", entries: []tarEntry{alias("package/PACKAGE.JSON"), manifest}},
-		{name: "mixed case base name", entries: []tarEntry{manifest, alias("package/Package.json")}},
-		{name: "uppercase directory alone", entries: []tarEntry{alias("PACKAGE/package.json")}},
-		{name: "uppercase directory after the manifest", entries: []tarEntry{manifest, alias("PACKAGE/package.json")}},
-		{name: "uppercase archive root", entries: []tarEntry{manifest, alias("PACKAGE.JSON")}},
-		{name: "backslash alone", entries: []tarEntry{alias(`package\package.json`)}},
-		{name: "backslash after the manifest", entries: []tarEntry{manifest, alias(`package\package.json`)}},
-		{name: "backslash and uppercase", entries: []tarEntry{manifest, alias(`package\PACKAGE.JSON`)}},
-		{name: "backslash traversal", entries: []tarEntry{manifest, alias(`package\x\..\package.json`)}},
+		{name: "uppercase base name alone", reason: "install over", entries: []tarEntry{alias("package/PACKAGE.JSON")}},
+		{name: "uppercase base name after the manifest", reason: "install over", entries: []tarEntry{manifest, alias("package/PACKAGE.JSON")}},
+		{name: "uppercase base name before the manifest", reason: "install over", entries: []tarEntry{alias("package/PACKAGE.JSON"), manifest}},
+		{name: "mixed case base name", reason: "install over", entries: []tarEntry{manifest, alias("package/Package.json")}},
+		{name: "uppercase directory alone", reason: "install over", entries: []tarEntry{alias("PACKAGE/package.json")}},
+		{name: "uppercase directory after the manifest", reason: "install over", entries: []tarEntry{manifest, alias("PACKAGE/package.json")}},
+		{name: "uppercase archive root", reason: "install over", entries: []tarEntry{manifest, alias("PACKAGE.JSON")}},
+		{name: "backslash alone", reason: "entry name", entries: []tarEntry{alias(`package\package.json`)}},
+		{name: "backslash after the manifest", reason: "entry name", entries: []tarEntry{manifest, alias(`package\package.json`)}},
+		{name: "backslash and uppercase", reason: "entry name", entries: []tarEntry{manifest, alias(`package\PACKAGE.JSON`)}},
+		{name: "backslash traversal", reason: "entry name", entries: []tarEntry{manifest, alias(`package\x\..\package.json`)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got, err := inspectManifest(bytes.NewReader(buildTarball(t, tc.entries...))); err == nil {
+			got, err := inspectManifest(bytes.NewReader(buildTarball(t, tc.entries...)))
+			if err == nil {
 				t.Fatalf("inspectManifest = %s, want an error", got)
+			}
+			if !strings.Contains(err.Error(), tc.reason) {
+				t.Errorf("err = %v, want it to give the reason %q", err, tc.reason)
 			}
 		})
 	}

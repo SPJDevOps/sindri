@@ -3,6 +3,7 @@ package npm
 import (
 	"bufio"
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"crypto/sha1" //nolint:gosec // G505: npm's dist.shasum field, never used for identity
 	"crypto/sha256"
@@ -100,7 +101,7 @@ func scanManifest(r io.Reader, maxUnpacked int64) (json.RawMessage, error) {
 	compressed := bufio.NewReader(r)
 	gz, err := gzip.NewReader(compressed)
 	if err != nil {
-		return nil, fmt.Errorf("reading tarball gzip: %w", err)
+		return nil, streamError(err)
 	}
 	defer func() { _ = gz.Close() }()
 	gz.Multistream(false)
@@ -119,7 +120,7 @@ func scanManifest(r io.Reader, maxUnpacked int64) (json.RawMessage, error) {
 	case err == nil:
 		return nil, refuse("tarball has bytes after its gzip stream")
 	case !errors.Is(err, io.EOF):
-		return nil, fmt.Errorf("reading tarball gzip: %w", err)
+		return nil, streamError(err)
 	}
 	if manifest == nil {
 		return nil, refuse("tarball has no package/package.json")
@@ -131,6 +132,18 @@ func scanManifest(r io.Reader, maxUnpacked int64) (json.RawMessage, error) {
 // nothing from the tarball goes into them.
 func refuse(reason string) error {
 	return fmt.Errorf("%w: %s", errTarballRefused, reason)
+}
+
+// streamError tells a damaged gzip stream, which is the tarball's fault, from a
+// reader that failed, which is not. gzip's and flate's errors hold no tarball
+// content beyond an offset.
+func streamError(err error) error {
+	var corrupt flate.CorruptInputError
+	if errors.Is(err, gzip.ErrHeader) || errors.Is(err, gzip.ErrChecksum) || errors.As(err, &corrupt) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return fmt.Errorf("%w: gzip stream is damaged: %w", errTarballRefused, err)
+	}
+	return fmt.Errorf("reading tarball: %w", err)
 }
 
 // readEntries walks the decompressed stream to its end and returns the manifest's
@@ -163,6 +176,9 @@ func readEntries(in io.Reader) ([]byte, error) {
 			if pax != nil {
 				return nil, refuse("two pax headers in a row")
 			}
+			if hdr.name == "" {
+				return nil, refuse("pax header has no name")
+			}
 			if pax, err = readPAXHeader(in, hdr.size); err != nil {
 				return nil, err
 			}
@@ -172,6 +188,9 @@ func readEntries(in io.Reader) ([]byte, error) {
 		name := hdr.name
 		if pax != nil {
 			if pax.hasPath {
+				if err := checkReplacedName(hdr.name); err != nil {
+					return nil, err
+				}
 				name = pax.path
 			}
 			if pax.hasSize && pax.size != strconv.FormatInt(hdr.size, 10) {
@@ -233,7 +252,7 @@ func readEndOfArchive(in io.Reader, block []byte) error {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("reading tarball: %w", err)
+			return streamError(err)
 		}
 	}
 }
@@ -246,7 +265,7 @@ func readFull(in io.Reader, b []byte) error {
 		return refuse("tarball ends without an end-of-archive marker")
 	}
 	if err != nil {
-		return fmt.Errorf("reading tarball: %w", err)
+		return streamError(err)
 	}
 	return nil
 }
@@ -257,7 +276,7 @@ func skip(in io.Reader, n int64) error {
 		return refuse("tarball ends without an end-of-archive marker")
 	}
 	if err != nil {
-		return fmt.Errorf("reading tarball: %w", err)
+		return streamError(err)
 	}
 	return nil
 }
@@ -343,7 +362,14 @@ func parseHeader(b []byte) (tarHeader, error) {
 // checksumMatches sums the block as unsigned bytes, with the checksum field read
 // as spaces. Other parsers also accept a signed sum; that is one of the ways to
 // make a block a header to one parser and file content to another.
+//
+// Byte 155 may not be a digit. node-tar reads this field as 12 bytes, so eight
+// digits with no terminator would run on into the type flag, and the header would
+// be valid to one parser and not to the other.
 func checksumMatches(b []byte) bool {
+	if b[155] >= '0' && b[155] <= '9' {
+		return false
+	}
 	want, ok := parseOctal(b[148:156])
 	if !ok {
 		return false
@@ -411,26 +437,32 @@ func readPAXHeader(in io.Reader, size int64) (*paxHeader, error) {
 // requires to repeat the header's own size.
 func parsePAXRecords(body []byte) (*paxHeader, error) {
 	if !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 {
-		return nil, refuse("pax record is malformed")
+		return nil, refuse("pax record is not text")
 	}
 	pax := &paxHeader{}
 	seen := make(map[string]bool)
 	for len(body) > 0 {
 		lengthText, _, ok := bytes.Cut(body, []byte(" "))
 		if !ok {
-			return nil, refuse("pax record is malformed")
+			return nil, refuse("pax record length is wrong")
 		}
 		length, err := strconv.Atoi(string(lengthText))
 		if err != nil || strconv.Itoa(length) != string(lengthText) ||
-			length <= len(lengthText)+1 || length > len(body) || body[length-1] != '\n' {
-			return nil, refuse("pax record is malformed")
+			length <= len(lengthText)+1 || length > len(body) {
+			return nil, refuse("pax record length is wrong")
+		}
+		if body[length-1] != '\n' {
+			return nil, refuse("pax record does not end in a newline")
 		}
 		record := body[len(lengthText)+1 : length-1]
 		body = body[length:]
 
+		if bytes.IndexByte(record, '\n') >= 0 {
+			return nil, refuse("pax record has an inner newline")
+		}
 		key, value, ok := bytes.Cut(record, []byte("="))
-		if !ok || bytes.IndexByte(record, '\n') >= 0 {
-			return nil, refuse("pax record is malformed")
+		if !ok {
+			return nil, refuse("pax record has no key")
 		}
 		switch string(key) {
 		case "path":
@@ -447,6 +479,22 @@ func parsePAXRecords(body []byte) (*paxHeader, error) {
 		seen[string(key)] = true
 	}
 	return pax, nil
+}
+
+// checkReplacedName checks the name a pax path overrides. A parser that drops the
+// entry for having no name would read its body as headers, and one that ignores
+// the pax header would install it under this name, so neither can be left to
+// chance. The full name rules do not apply: npm pack cuts a long name wherever
+// 100 bytes falls, which can leave a trailing slash, and tar-stream writes
+// PaxHeader here.
+func checkReplacedName(name string) error {
+	if name == "" {
+		return refuse("pax path replaces an empty name")
+	}
+	if installsAsManifest(name) {
+		return refuse("pax path replaces a name that could be the manifest")
+	}
+	return nil
 }
 
 // checkEntryName allows each path exactly one spelling. A directory may end in a
@@ -470,8 +518,8 @@ func checkEntryName(name string, isDir bool) error {
 	return nil
 }
 
-// installsAsManifest reports whether an entry that is not spelled exactly
-// package/package.json could still land on it. Installers strip the first path
+// installsAsManifest reports whether an entry could land on package/package.json,
+// under that spelling or another. Installers strip the first path
 // component whatever it is, and the last entry wins, so a tarball holding
 // package/package.json and other/package.json would show readers one manifest
 // and install another: the manifest confusion ADR 24 exists to prevent. Case is
@@ -486,11 +534,10 @@ func installsAsManifest(name string) bool {
 // encoding/json, which reads these documents later, matches struct fields that way.
 func sanitizeManifest(raw []byte) (json.RawMessage, error) {
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return nil, fmt.Errorf("parsing package/package.json: %w", err)
-	}
-	if fields == nil {
-		return nil, errors.New("package/package.json is not a JSON object")
+	// The JSON error is dropped because a json.SyntaxError quotes a byte of the
+	// document.
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return nil, refuse("package/package.json is not a JSON object")
 	}
 	for key := range fields {
 		if strings.HasPrefix(key, "_") ||

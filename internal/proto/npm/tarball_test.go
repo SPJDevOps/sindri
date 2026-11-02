@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -149,53 +150,58 @@ func TestInspectManifest_Refused(t *testing.T) {
 	cases := []struct {
 		name    string
 		entries []tarEntry
+		reason  string
 	}{
-		{name: "no manifest", entries: []tarEntry{{name: "package/index.js", body: "x"}}},
-		{name: "empty archive"},
-		{name: "two manifests", entries: []tarEntry{manifest, manifest}},
-		{name: "two manifests apart", entries: []tarEntry{
+		{name: "no manifest", reason: "no package/package.json", entries: []tarEntry{{name: "package/index.js", body: "x"}}},
+		{name: "empty archive", reason: "no package/package.json"},
+		{name: "two manifests", reason: "more than one", entries: []tarEntry{manifest, manifest}},
+		{name: "two manifests apart", reason: "more than one", entries: []tarEntry{
 			manifest, {name: "package/index.js", body: "x"}, manifest,
 		}},
-		{name: "only a nested manifest", entries: []tarEntry{
+		{name: "only a nested manifest", reason: "no package/package.json", entries: []tarEntry{
 			{name: "package/nested/package.json", body: plainManifest},
 		}},
-		{name: "manifest over the size bound", entries: []tarEntry{
+		{name: "manifest over the size bound", reason: "too large", entries: []tarEntry{
 			{name: "package/package.json", body: `{"k":"` + strings.Repeat("x", 1<<20-7) + `"}`},
 		}},
-		{name: "manifest not JSON", entries: []tarEntry{{name: "package/package.json", body: "nope"}}},
-		{name: "manifest empty", entries: []tarEntry{{name: "package/package.json"}}},
-		{name: "manifest an array", entries: []tarEntry{{name: "package/package.json", body: "[]"}}},
-		{name: "manifest null", entries: []tarEntry{{name: "package/package.json", body: "null"}}},
-		{name: "manifest with trailing data", entries: []tarEntry{
+		{name: "manifest not JSON", reason: "not a JSON object", entries: []tarEntry{{name: "package/package.json", body: "nope"}}},
+		{name: "manifest empty", reason: "not a JSON object", entries: []tarEntry{{name: "package/package.json"}}},
+		{name: "manifest an array", reason: "not a JSON object", entries: []tarEntry{{name: "package/package.json", body: "[]"}}},
+		{name: "manifest null", reason: "not a JSON object", entries: []tarEntry{{name: "package/package.json", body: "null"}}},
+		{name: "manifest with trailing data", reason: "not a JSON object", entries: []tarEntry{
 			{name: "package/package.json", body: plainManifest + "x"},
 		}},
-		{name: "manifest a symlink", entries: []tarEntry{
+		{name: "manifest a symlink", reason: "entry type", entries: []tarEntry{
 			{name: "package/package.json", typeflag: tar.TypeSymlink},
 		}},
-		{name: "manifest an entry type that carries data", entries: []tarEntry{
+		{name: "manifest an entry type that carries data", reason: "entry type", entries: []tarEntry{
 			{name: "package/package.json", body: plainManifest, typeflag: tar.TypeCont},
 		}},
 		// An installer strips the first path component and lets the last entry
 		// win, so each of these could replace the manifest Sindri read.
-		{name: "another top directory after the manifest", entries: []tarEntry{
+		{name: "another top directory after the manifest", reason: "install over", entries: []tarEntry{
 			manifest, {name: "other/package.json", body: `{"scripts":{"postinstall":"evil"}}`},
 		}},
-		{name: "another top directory before the manifest", entries: []tarEntry{
+		{name: "another top directory before the manifest", reason: "install over", entries: []tarEntry{
 			{name: "other/package.json", body: `{"scripts":{"postinstall":"evil"}}`}, manifest,
 		}},
-		{name: "dot prefix", entries: []tarEntry{manifest, {name: "./package/package.json", body: "{}"}}},
-		{name: "doubled slash", entries: []tarEntry{manifest, {name: "package//package.json", body: "{}"}}},
-		{name: "leading slash", entries: []tarEntry{manifest, {name: "/package/package.json", body: "{}"}}},
-		{name: "parent traversal", entries: []tarEntry{manifest, {name: "package/x/../package.json", body: "{}"}}},
-		{name: "archive root", entries: []tarEntry{manifest, {name: "package.json", body: "{}"}}},
-		{name: "dot prefixed archive root", entries: []tarEntry{manifest, {name: "./package.json", body: "{}"}}},
-		{name: "directory", entries: []tarEntry{manifest, {name: "other/package.json/", typeflag: tar.TypeDir}}},
+		{name: "dot prefix", reason: "entry name", entries: []tarEntry{manifest, {name: "./package/package.json", body: "{}"}}},
+		{name: "doubled slash", reason: "entry name", entries: []tarEntry{manifest, {name: "package//package.json", body: "{}"}}},
+		{name: "leading slash", reason: "entry name", entries: []tarEntry{manifest, {name: "/package/package.json", body: "{}"}}},
+		{name: "parent traversal", reason: "entry name", entries: []tarEntry{manifest, {name: "package/x/../package.json", body: "{}"}}},
+		{name: "archive root", reason: "install over", entries: []tarEntry{manifest, {name: "package.json", body: "{}"}}},
+		{name: "dot prefixed archive root", reason: "entry name", entries: []tarEntry{manifest, {name: "./package.json", body: "{}"}}},
+		{name: "directory", reason: "install over", entries: []tarEntry{manifest, {name: "other/package.json/", typeflag: tar.TypeDir}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got, err := inspectManifest(bytes.NewReader(buildTarball(t, tc.entries...))); err == nil {
+			got, err := inspectManifest(bytes.NewReader(buildTarball(t, tc.entries...)))
+			if err == nil {
 				t.Fatalf("inspectManifest = %s, want an error", got)
+			}
+			if !strings.Contains(err.Error(), tc.reason) {
+				t.Errorf("err = %v, want it to give the reason %q", err, tc.reason)
 			}
 		})
 	}
@@ -208,31 +214,62 @@ func TestInspectManifest_RefusesDamagedStreams(t *testing.T) {
 	corrupt[len(corrupt)-8] ^= 0xff // the gzip checksum, past the end of the tar
 
 	cases := []struct {
-		name string
-		data []byte
+		name    string
+		data    []byte
+		wantErr error
+		reason  string
 	}{
-		{name: "not gzip", data: []byte("not a gzip stream")},
-		{name: "empty", data: nil},
-		{name: "gzip of something other than tar", data: gzipped(t, bytes.Repeat([]byte("x"), 2048))},
-		{name: "truncated gzip", data: good[:len(good)/2]},
-		{name: "bad gzip checksum", data: corrupt},
-		{name: "garbage after the gzip stream", data: append(bytes.Clone(good), "garbage"...)},
+		{name: "not gzip", data: []byte("not a gzip stream"), wantErr: gzip.ErrHeader, reason: "gzip stream"},
+		{name: "empty", data: nil, wantErr: io.EOF, reason: "gzip stream"},
+		{name: "gzip of something other than tar", data: gzipped(t, bytes.Repeat([]byte("x"), 2048)), reason: "magic"},
+		{name: "truncated gzip", data: good[:len(good)/2], reason: "end-of-archive"},
+		{name: "bad gzip checksum", data: corrupt, wantErr: gzip.ErrChecksum, reason: "gzip stream"},
+		{name: "garbage after the gzip stream", data: append(bytes.Clone(good), "garbage"...), reason: "after its gzip stream"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got, err := inspectManifest(bytes.NewReader(tc.data)); err == nil {
+			got, err := inspectManifest(bytes.NewReader(tc.data))
+			if err == nil {
 				t.Fatalf("inspectManifest = %s, want an error", got)
+			}
+			if !errors.Is(err, errTarballRefused) {
+				t.Errorf("err = %v, want errTarballRefused", err)
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Errorf("err = %v, want it to wrap %v", err, tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.reason) {
+				t.Errorf("err = %v, want it to give the reason %q", err, tc.reason)
 			}
 		})
 	}
 }
 
-func TestInspectManifest_PropagatesReadErrors(t *testing.T) {
+// A failing reader is the server's problem or the connection's, not a bad tarball.
+func TestInspectManifest_ReadErrorsAreNotRefusals(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("boom")
-	if _, err := inspectManifest(iotest.ErrReader(boom)); !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want it to wrap the reader's error", err)
+	good := buildTarball(t, tarEntry{name: "package/package.json", body: plainManifest})
+	cases := []struct {
+		name string
+		r    io.Reader
+	}{
+		{name: "before the gzip header", r: iotest.ErrReader(boom)},
+		{name: "inside the stream", r: io.MultiReader(bytes.NewReader(good[:len(good)/2]), iotest.ErrReader(boom))},
+		{name: "after the stream", r: io.MultiReader(bytes.NewReader(good), iotest.ErrReader(boom))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := inspectManifest(tc.r)
+			if !errors.Is(err, boom) {
+				t.Fatalf("err = %v, want it to wrap the reader's error", err)
+			}
+			if errors.Is(err, errTarballRefused) {
+				t.Errorf("err = %v, want it not to be a refusal", err)
+			}
+		})
 	}
 }
 
