@@ -236,24 +236,40 @@ func TestInspectManifest_PropagatesReadErrors(t *testing.T) {
 	}
 }
 
-// Concatenated gzip members make the real bound cheap to reach, the way a bomb
-// would: about 2 MiB of input declaring a single entry larger than the bound.
+// Repeating one flushed deflate block makes the real bound cheap to reach, the
+// way a bomb would: about 2 MiB of input, in one gzip member, declaring a single
+// entry larger than the bound.
 func TestInspectManifest_GzipBombStopsAtTheBound(t *testing.T) {
 	t.Parallel()
-	var header bytes.Buffer
-	tw := tar.NewWriter(&header)
-	if err := tw.WriteHeader(&tar.Header{Name: "package/blob", Mode: 0o644, Size: 1<<30 + 1<<20, Typeflag: tar.TypeReg}); err != nil {
-		t.Fatalf("writing tar header: %v", err)
+	header := rawHeader("package/blob", 1<<30+1<<20, '0', ustarMagic)
+
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err := zw.Write(header); err != nil {
+		t.Fatalf("compressing: %v", err)
+	}
+	if err := zw.Flush(); err != nil {
+		t.Fatalf("flushing: %v", err)
+	}
+	if _, err := zw.Write(make([]byte, 1<<20)); err != nil {
+		t.Fatalf("compressing: %v", err)
+	}
+	if err := zw.Flush(); err != nil {
+		t.Fatalf("flushing: %v", err)
+	}
+	mark := compressed.Len()
+	if _, err := zw.Write(make([]byte, 1<<20)); err != nil {
+		t.Fatalf("compressing: %v", err)
+	}
+	if err := zw.Flush(); err != nil {
+		t.Fatalf("flushing: %v", err)
+	}
+	mebibytes := bytes.Clone(compressed.Bytes()[mark:])
+	for range 1 << 10 {
+		compressed.Write(mebibytes)
 	}
 
-	var bomb bytes.Buffer
-	bomb.Write(gzipped(t, header.Bytes()))
-	mebibyte := gzipped(t, make([]byte, 1<<20))
-	for range 1<<10 + 2 {
-		bomb.Write(mebibyte)
-	}
-
-	if _, err := inspectManifest(&bomb); !errors.Is(err, errUnpackedTooLarge) {
+	if _, err := inspectManifest(&compressed); !errors.Is(err, errUnpackedTooLarge) {
 		t.Fatalf("err = %v, want errUnpackedTooLarge", err)
 	}
 }

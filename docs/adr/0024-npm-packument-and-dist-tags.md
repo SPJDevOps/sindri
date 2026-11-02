@@ -30,7 +30,9 @@ abbreviated `Accept` types; npm accepted it for both.
 `integrity` and `shasum`. The publish body's `versions` entry only has to agree on `name`
 and `version`; if it disagrees, the publish gets a 400. Every other client field is ignored,
 so what the packument says is what the tarball holds, and manifest confusion has nowhere to
-start.
+start. Sindri parses tarballs with its own strict grammar and refuses anything npm pack would
+not write, because a second parser that disagrees with an installer is how manifest confusion
+returns.
 
 **Integrity is checked at write time, and client values never reach a reader.** A body
 carries one version and one attachment. Sindri hashes the decoded bytes before `cas.Put`. A
@@ -158,6 +160,9 @@ matches `pypi`. The roadmap's `npmjs` changes.
   disagree with placement.
 - **Serving the manifest from the publish body.** npm's own manifest-confusion problem: the
   metadata promises one set of dependencies and the tarball holds another.
+- **`archive/tar` plus per-shape checks.** Go and node-tar disagree on too many header shapes
+  to list: review reproduced more than a dozen where Sindri read one `package.json` and npm
+  installed another, and each fix only exposed the next.
 - **Reusing `tags` for dist-tags.** It targets a digest, and a row counts as a placement and
   a GC root, so a dist-tag could keep a deleted version's tarball readable.
 - **Recording tag moves in `lifecycle_events`.** Its actions are approve and revoke, every
