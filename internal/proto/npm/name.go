@@ -20,11 +20,12 @@ const (
 )
 
 var (
-	// A part may not start with a dot or an underscore, which is also what
-	// keeps "." and ".." out. These are stricter than npm's legacy allowance:
-	// uppercase and punctuation are for names that predate the rules, and
-	// hosted publishes are new.
-	namePattern = regexp.MustCompile(`^(?:@[a-z0-9-][a-z0-9._-]*/)?[a-z0-9-][a-z0-9._-]*$`)
+	// No part may start with a dot, which is also what keeps "." and ".." out.
+	// An unscoped name may not start with an underscore either; npm applies that
+	// rule to the whole name, so @acme/_internal and @_acme/foo are legal. Uppercase
+	// and other punctuation are npm's allowance for names that predate its rules,
+	// and hosted publishes are new.
+	namePattern = regexp.MustCompile(`^(?:@[a-z0-9_-][a-z0-9._-]*/[a-z0-9_-][a-z0-9._-]*|[a-z0-9-][a-z0-9._-]*)$`)
 	tagPattern  = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 )
 
@@ -39,7 +40,7 @@ func validateName(name string) error {
 	case len(name) > maxNameLength:
 		return fmt.Errorf("package name is longer than %d bytes", maxNameLength)
 	case !namePattern.MatchString(name):
-		return errors.New("package name must be lowercase and URL-safe, optionally @scope/name, and not start with a dot or an underscore")
+		return errors.New("package name must be lowercase and URL-safe, optionally @scope/name, and not start with a dot, or an underscore unless scoped")
 	case name == "node_modules", name == "favicon.ico":
 		return errors.New("package name is reserved")
 	case name == "-", strings.HasSuffix(name, "/-"):

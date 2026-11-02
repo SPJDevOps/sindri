@@ -95,6 +95,9 @@ func scanManifest(r io.Reader, maxUnpacked int64) (json.RawMessage, error) {
 		if err != nil {
 			return nil, overBound(fmt.Errorf("reading tarball entries: %w", err))
 		}
+		if err := checkEntryHeader(hdr); err != nil {
+			return nil, err
+		}
 		switch {
 		case hdr.Name == manifestEntry:
 			if found {
@@ -130,14 +133,39 @@ func scanManifest(r io.Reader, maxUnpacked int64) (json.RawMessage, error) {
 	return sanitizeManifest(manifest)
 }
 
-// installsAsManifest reports whether an entry that is not spelled
+// checkEntryHeader refuses an entry whose name depends on which tar parser reads
+// it. Go lets a GNU long name or a sparse name override a pax path, and node-tar
+// honours the path, so a name checked here would not be the name installed.
+// After this, an entry has one name and checking hdr.Name checks all of them.
+//
+// Nothing real is lost. npm pack writes a pax path only as the entry's full name,
+// which Go reports as hdr.Name, and it never writes sparse files.
+func checkEntryHeader(hdr *tar.Header) error {
+	if hdr.Typeflag == tar.TypeGNUSparse {
+		return errors.New("tarball has a sparse entry")
+	}
+	for key := range hdr.PAXRecords {
+		if strings.HasPrefix(key, "GNU.sparse.") {
+			return errors.New("tarball has a sparse entry")
+		}
+	}
+	if paxPath, ok := hdr.PAXRecords["path"]; ok && paxPath != hdr.Name {
+		return errors.New("tarball has an entry whose pax path differs from its name")
+	}
+	return nil
+}
+
+// installsAsManifest reports whether an entry that is not spelled exactly
 // package/package.json could still land on it. Installers strip the first path
 // component whatever it is, and the last entry wins, so a tarball holding
 // package/package.json and other/package.json would show readers one manifest
-// and install another: the manifest confusion ADR 24 exists to prevent.
+// and install another: the manifest confusion ADR 24 exists to prevent. Case and
+// backslashes are folded because the filesystem or platform installing the
+// package may fold them.
 func installsAsManifest(name string) bool {
-	clean := strings.TrimPrefix(path.Clean("/"+name), "/")
-	return path.Base(clean) == "package.json" && strings.Count(clean, "/") <= 1
+	slashed := strings.ReplaceAll(name, `\`, "/")
+	clean := strings.TrimPrefix(path.Clean("/"+slashed), "/")
+	return strings.EqualFold(path.Base(clean), "package.json") && strings.Count(clean, "/") <= 1
 }
 
 // sanitizeManifest drops the fields that describe the registry's copy rather
