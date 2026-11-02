@@ -20,10 +20,7 @@ type Preset struct {
 
 // Protocols this build does not serve. Their presets exist so that the names
 // are reserved and the error is precise, rather than "unknown preset".
-const (
-	protocolNPM   model.Protocol = "npm"
-	protocolMaven model.Protocol = "maven"
-)
+const protocolMaven model.Protocol = "maven"
 
 var presets = map[string]Preset{
 	"pypi": {
@@ -46,7 +43,7 @@ var presets = map[string]Preset{
 	},
 	"npm": {
 		URL:         "https://registry.npmjs.org",
-		Protocol:    protocolNPM,
+		Protocol:    model.ProtocolNPM,
 		TTL:         time.Hour,
 		NegativeTTL: 5 * time.Minute,
 	},
@@ -76,5 +73,5 @@ func PresetNames() []string {
 
 // servedProtocol reports whether this build has an adapter for p.
 func servedProtocol(p model.Protocol) bool {
-	return p == model.ProtocolOCI || p == model.ProtocolPyPI
+	return p == model.ProtocolOCI || p == model.ProtocolPyPI || p == model.ProtocolNPM
 }

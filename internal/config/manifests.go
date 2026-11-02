@@ -399,7 +399,7 @@ func parseRepositoryDoc(c *errs, out *Manifests, env mapping) {
 		s, _ := readString(c, spec.value["protocol"], path("protocol"))
 		repo.Spec.Protocol = model.Protocol(s)
 	} else {
-		c.add(spec.node.Line, path("protocol"), "is required in the long form: oci or pypi")
+		c.add(spec.node.Line, path("protocol"), "is required in the long form: oci, pypi, or npm")
 	}
 	if spec.has("upstream") {
 		repo.Spec.Upstream = parseLongUpstream(c, spec.value["upstream"], path("upstream"), &repo.Source)

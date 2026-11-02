@@ -151,7 +151,7 @@ func TestDesugar_Rejects(t *testing.T) {
 		},
 		{
 			name:  "PresetForUnservedProtocol",
-			input: "repos:\n  a: { upstream: npm }\n",
+			input: "repos:\n  a: { upstream: maven-central }\n",
 			want:  []string{"repos.a.upstream", "this build does not serve"},
 		},
 		{

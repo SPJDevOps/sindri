@@ -1,0 +1,36 @@
+# The long form of the JavaScript repositories in testdata/config/sindri.yaml,
+# with every inference and default written out.
+kind: Repository
+metadata:
+  name: internal-js
+spec:
+  type: hosted
+  protocol: npm
+  access:
+    read: [team:platform, team:payments]
+    write: [team:platform]
+---
+kind: Repository
+metadata:
+  name: npm
+spec:
+  type: proxy
+  protocol: npm
+  upstream:
+    url: https://registry.npmjs.org
+    ttl: 30m
+    negativeTtl: 5m
+  access:
+    read: [authenticated]
+---
+kind: Repository
+metadata:
+  name: javascript
+spec:
+  type: virtual
+  protocol: npm
+  members:
+    - ref: hosted/internal-js
+    - ref: proxy/npm
+  access:
+    read: [team:platform, team:payments]

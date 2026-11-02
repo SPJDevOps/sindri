@@ -12,6 +12,7 @@ listen:   ${SINDRI_LISTEN:-:8080}
 storage:  ${SINDRI_DATA_DIR:-/tmp/sindri-m7-data}
 database: ${SINDRI_DATABASE:-postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable}
 auth:     ${SINDRI_TOKEN:-sindri-dev-token}
+publicUrl: http://localhost:8080
 
 # The worker runs by default; the M8a gate collects garbage by hand with
 # `sindri gc`, so only the grace period is set, short enough to wait out.
@@ -47,6 +48,11 @@ repos:
   pypi-mirror:
     protocol: pypi
     upstream: { url: https://pypi.mirror.invalid/simple, credentials: mirror }
+
+  # JavaScript: the same shape as Python.
+  internal-js: { protocol: npm }
+  npm:         { upstream: npm }
+  javascript:  { members: [internal-js, npm] }
 
   # Containers. `docker` is hosted so that `docker push .../docker/demo/app`
   # lands somewhere writable; `oci` is the read-through view.

@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/spj/sindri/internal/model"
 )
 
 // DefaultPath is the file `sindri serve` reads when --config is not given. Its
@@ -37,6 +39,12 @@ type Config struct {
 	Log      Log      `yaml:"log"`
 	Auth     Auth     `yaml:"auth"`
 	Worker   Worker   `yaml:"worker"`
+
+	// PublicURL is the origin clients reach this server at. npm packuments
+	// carry absolute tarball URLs, which cannot be derived from a request
+	// whose Host header is not trusted (ADR 24). Empty when unset; no trailing
+	// slash after loading.
+	PublicURL string `yaml:"publicUrl,omitempty"`
 
 	// Credentials holds upstream secrets that proxy repositories name by key.
 	// Values come from ${VAR} substitution; a secret is never written to the
@@ -148,6 +156,9 @@ func Parse(raw []byte, name string) (*Config, error) {
 		}
 		cfg.Desired = desired
 	}
+	if err := cfg.validatePublicURLRequired(); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
 	return &cfg, nil
 }
 
@@ -165,6 +176,7 @@ func (c *Config) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func (c *Config) applyDefaults() {
+	c.PublicURL = strings.TrimSuffix(c.PublicURL, "/")
 	c.Listen.applyDefaults()
 	c.Storage.applyDefaults()
 	c.Database.applyDefaults()
@@ -181,11 +193,43 @@ func (c *Config) Validate() error {
 		c.Database.validate,
 		c.Log.validate,
 		c.Auth.validate,
+		c.validatePublicURL,
 		c.Worker.validate,
 		c.Credentials.validate,
 	} {
 		if err := check(); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validatePublicURL checks the origin npm tarball links are built from. It is
+// optional here; validatePublicURLRequired decides when it must be set.
+func (c *Config) validatePublicURL() error {
+	if c.PublicURL == "" {
+		return nil
+	}
+	u, err := parseHTTPSOrLoopback("publicUrl", c.PublicURL)
+	if err != nil {
+		return err
+	}
+	// ADR 13: Sindri serves at the root of its origin.
+	if u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("publicUrl: %q must be an origin with no path (Sindri serves at the root of its origin)", c.PublicURL)
+	}
+	return nil
+}
+
+// validatePublicURLRequired fails when a declared npm repository has no
+// publicUrl to build its tarball links from.
+func (c *Config) validatePublicURLRequired() error {
+	if c.PublicURL != "" || c.Desired == nil {
+		return nil
+	}
+	for _, r := range c.Desired.Repositories {
+		if r.Spec.Protocol == model.ProtocolNPM {
+			return fmt.Errorf("publicUrl: required because repository %q is npm, whose packuments carry absolute tarball URLs", r.FullName())
 		}
 	}
 	return nil

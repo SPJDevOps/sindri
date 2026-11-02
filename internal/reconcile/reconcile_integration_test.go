@@ -167,7 +167,7 @@ func dumpState(t *testing.T, database *db.DB) []string {
 func TestReconcile_SecondRunIsNoOp(t *testing.T) {
 	env := newRecEnv(t, fixtureCredentials)
 	first := env.apply(t, loadLong(t), reconcile.Options{})
-	if len(first.Repositories.Created) != 7 || first.Stages == nil {
+	if len(first.Repositories.Created) != 10 || first.Stages == nil {
 		t.Fatalf("first apply: %+v", first)
 	}
 	before := dumpState(t, env.database)
@@ -176,8 +176,8 @@ func TestReconcile_SecondRunIsNoOp(t *testing.T) {
 	if second.Drift() {
 		t.Fatalf("second apply changed something: %+v", second)
 	}
-	if got := len(second.Repositories.Unchanged); got != 7 {
-		t.Fatalf("unchanged = %d, want 7", got)
+	if got := len(second.Repositories.Unchanged); got != 10 {
+		t.Fatalf("unchanged = %d, want 10", got)
 	}
 	if diff := cmp.Diff(before, dumpState(t, env.database)); diff != "" {
 		t.Fatalf("a no-op apply changed the database:\n%s", diff)
