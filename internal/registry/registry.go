@@ -47,6 +47,10 @@ var (
 	// thing consumers pinned a hash of, so it does not change under them.
 	ErrFileExists = errors.New("file already published with different content")
 
+	// ErrVersionExists means an exclusive publish named a version that is
+	// already published. npm versions are immutable even for identical bytes.
+	ErrVersionExists = errors.New("version already published")
+
 	// ErrHasHistory means a delete would remove a repository the lifecycle
 	// ledger refers to. The ledger is append-only, so the repository stays.
 	ErrHasHistory = errors.New("repository has lifecycle history")
@@ -203,6 +207,19 @@ type PublishParams struct {
 	// Provenance is the publisher's claim about where these bytes came from.
 	// It is recorded on the subject the publish creates, unverified (ADR 16).
 	Provenance model.Provenance
+
+	// ExclusiveVersion refuses a version that already exists, whatever the
+	// bytes (ErrVersionExists). The check is the insert itself, so two
+	// concurrent publishes of one version have exactly one winner.
+	ExclusiveVersion bool
+
+	// DistTag is the tag an npm publish moves to this version. It is required
+	// for an npm repository, so no path can place a tarball without it. The
+	// package's first publish also sets latest, whatever the tag says.
+	DistTag string
+
+	// Actor is recorded on the dist-tag events the publish writes.
+	Actor string
 }
 
 // Publish stores bytes in the CAS and creates placement rows. A digest already
@@ -229,6 +246,10 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	}
 	if repo.Type != string(model.RepoTypeHosted) {
 		return model.File{}, fmt.Errorf("%w: %s is %s", ErrReadOnly, p.Repo, repo.Type)
+	}
+	npm := model.Protocol(repo.Protocol) == model.ProtocolNPM
+	if npm && p.DistTag == "" {
+		return model.File{}, fmt.Errorf("%w: an npm publish needs a dist-tag", ErrInvalidInput)
 	}
 
 	info, err := r.cas.Put(ctx, p.Body, p.ExpectDigest, p.Size)
@@ -261,12 +282,26 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		return model.File{}, fmt.Errorf("ensuring package %s: %w", p.Package, err)
 	}
 
-	ver, err := q.GetOrCreateVersion(ctx, db.GetOrCreateVersionParams{
-		PackageID: pkg.ID,
-		Version:   p.Version,
-	})
-	if err != nil {
-		return model.File{}, fmt.Errorf("ensuring version %s: %w", p.Version, err)
+	var ver db.Version
+	if p.ExclusiveVersion {
+		ver, err = q.InsertVersionExclusive(ctx, db.InsertVersionExclusiveParams{
+			PackageID: pkg.ID,
+			Version:   p.Version,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return model.File{}, fmt.Errorf("%w: %s %s", ErrVersionExists, p.Package, p.Version)
+			}
+			return model.File{}, fmt.Errorf("creating version %s: %w", p.Version, err)
+		}
+	} else {
+		ver, err = q.GetOrCreateVersion(ctx, db.GetOrCreateVersionParams{
+			PackageID: pkg.ID,
+			Version:   p.Version,
+		})
+		if err != nil {
+			return model.File{}, fmt.Errorf("ensuring version %s: %w", p.Version, err)
+		}
 	}
 
 	placeParams := db.UpsertFileParams{
@@ -320,6 +355,19 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	}
 	if err := recordSubject(ctx, q, repo, info.Digest, info.Size, kind, p.Provenance); err != nil {
 		return model.File{}, err
+	}
+
+	if p.DistTag != "" {
+		if err := moveDistTag(ctx, q, repo.Name, pkg, p.DistTag, ver, p.Actor); err != nil {
+			return model.File{}, err
+		}
+		if _, err := q.GetDistTagVersion(ctx, db.GetDistTagVersionParams{PackageID: pkg.ID, Tag: latestTag}); errors.Is(err, pgx.ErrNoRows) {
+			if err := moveDistTag(ctx, q, repo.Name, pkg, latestTag, ver, p.Actor); err != nil {
+				return model.File{}, err
+			}
+		} else if err != nil {
+			return model.File{}, fmt.Errorf("reading %s of %s: %w", latestTag, p.Package, err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -465,9 +513,33 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename 
 		return ErrNotFound
 	}
 
+	// Dist-tags cascade with their version, so record the tags a removal takes
+	// with it before the row goes. The history outlives the version (ADR 24).
+	var strandedTags []string
+	if model.Protocol(repoRow.Protocol) == model.ProtocolNPM {
+		strandedTags, err = q.ListDistTagsForVersion(ctx, versionID)
+		if err != nil {
+			return fmt.Errorf("listing dist-tags of version %s: %w", version, err)
+		}
+	}
+
 	// Empty parent cleanup. Blob rows and CAS bytes stay (GC is later).
-	if _, err := q.DeleteVersionIfEmpty(ctx, versionID); err != nil {
+	removed, err := q.DeleteVersionIfEmpty(ctx, versionID)
+	if err != nil {
 		return fmt.Errorf("cleaning empty version: %w", err)
+	}
+	if removed > 0 {
+		for _, tag := range strandedTags {
+			if err := q.InsertDistTagEvent(ctx, db.InsertDistTagEventParams{
+				Repository:  repo,
+				Package:     pkgRow.DisplayName,
+				Tag:         tag,
+				FromVersion: textCursor(version),
+				Actor:       versionDeletedActor,
+			}); err != nil {
+				return fmt.Errorf("recording removal of dist-tag %s: %w", tag, err)
+			}
+		}
 	}
 	if _, err := q.DeletePackageIfEmpty(ctx, pkgRow.ID); err != nil {
 		return fmt.Errorf("cleaning empty package: %w", err)

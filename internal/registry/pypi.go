@@ -127,6 +127,12 @@ func (r *Registry) GetFileByFilename(ctx context.Context, repo, pkg, filename st
 		return PackageFile{}, nil, fmt.Errorf("resolving file %s/%s/%s: %w", repo, pkg, filename, err)
 	}
 
+	return r.openPlacedFile(ctx, repo, row)
+}
+
+// openPlacedFile checks that a resolved file is placed in repo (I2) and opens
+// its bytes. Every by-filename read goes through it.
+func (r *Registry) openPlacedFile(ctx context.Context, repo string, row db.GetFileByFilenameRow) (PackageFile, io.ReadCloser, error) {
 	digest, err := model.ParseDigest(row.BlobDigest)
 	if err != nil {
 		return PackageFile{}, nil, fmt.Errorf("stored digest %q: %w", row.BlobDigest, err)
