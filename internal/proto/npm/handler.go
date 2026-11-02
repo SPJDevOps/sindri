@@ -84,8 +84,6 @@ func denyUnauthenticated(w http.ResponseWriter, _ *http.Request, _ error) {
 
 // authorize checks the caller against the named repository. A caller who may
 // not read it is told it does not exist.
-//
-//nolint:unused // the routes of tasks 6 to 8 call it
 func (h *handler) authorize(w http.ResponseWriter, r *http.Request, name string, need auth.Role) bool {
 	repo, err := h.reg.GetRepository(r.Context(), name)
 	if err != nil {
@@ -104,10 +102,26 @@ func (h *handler) authorize(w http.ResponseWriter, r *http.Request, name string,
 	return true
 }
 
-// serveRoute runs one parsed route. Tasks 6 to 8 fill these in.
-func (h *handler) serveRoute(w http.ResponseWriter, _ *http.Request, rt route) {
+// serveRoute runs one parsed route. Tasks 7 and 8 fill in the rest.
+func (h *handler) serveRoute(w http.ResponseWriter, r *http.Request, rt route) {
 	switch rt.kind {
-	case routePackument, routeTarball, routeDistTags, routeWhoami, routeWebLogin, routeUserLogin:
+	case routePackument:
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			h.handlePackument(w, r, rt)
+		case http.MethodPut:
+			h.handlePublish(w, r, rt)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	case routeTarball:
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			h.handleTarball(w, r, rt)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	case routeDistTags, routeWhoami, routeWebLogin, routeUserLogin:
 		writeError(w, http.StatusNotImplemented, "not implemented")
 	default:
 		writeError(w, http.StatusNotFound, "no route matches this path")

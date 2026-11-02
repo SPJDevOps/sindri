@@ -390,3 +390,43 @@ func TestHashTarball_PropagatesReadErrors(t *testing.T) {
 		t.Fatalf("err = %v, want it to wrap the reader's error", err)
 	}
 }
+
+func TestManifestStorable(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		doc  string
+		want bool
+	}{
+		{name: "plain", doc: `{"a":"b","n":[1,-2.5,3e2],"t":true,"z":null}`, want: true},
+		{name: "ordinary escapes", doc: `{"a":"\\\"\n\u0041\/"}`, want: true},
+		{name: "escaped backslash then u0000 text", doc: `{"a":"\\u0000"}`, want: true},
+		{name: "surrogate pair", doc: `{"a":"\ud83d\ude00"}`, want: true},
+		{name: "uppercase hex", doc: `{"a":"\uD83D\uDE00"}`, want: true},
+		{name: "number inside a string is text", doc: `{"a":"1e999999"}`, want: true},
+		{name: "number at the end of the document", doc: `1e1000`, want: true},
+		{name: "escaped NUL", doc: `{"a":"\u0000"}`},
+		{name: "escaped NUL after an escaped backslash", doc: `{"a":"\\\u0000"}`},
+		{name: "escaped NUL in a key", doc: `{"\u0000":1}`},
+		{name: "invalid UTF-8", doc: "{\"a\":\"\xff\"}"},
+		{name: "high surrogate at the end", doc: `{"a":"\ud83d"}`},
+		{name: "high surrogate before text", doc: `{"a":"\ud83dx"}`},
+		{name: "high surrogate before a plain escape", doc: `{"a":"\ud83d\n"}`},
+		{name: "high surrogate before a non-surrogate", doc: `{"a":"\ud83d\u0041"}`},
+		{name: "two high surrogates", doc: `{"a":"\ud83d\ud83d"}`},
+		{name: "low surrogate first", doc: `{"a":"\ude00\ud83d"}`},
+		{name: "exponent too large", doc: `{"a":1e1001}`},
+		{name: "exponent too small", doc: `{"a":1E-1001}`},
+		{name: "exponent past an int", doc: `{"a":1e99999999999999999999}`},
+		{name: "too many digits", doc: `{"a":` + strings.Repeat("1", maxManifestNumber+1) + `}`},
+		{name: "too deep", doc: strings.Repeat("[", maxManifestDepth+1) + strings.Repeat("]", maxManifestDepth+1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := manifestStorable([]byte(tc.doc)); got != tc.want {
+				t.Fatalf("manifestStorable(%q) = %v, want %v", tc.doc, got, tc.want)
+			}
+		})
+	}
+}

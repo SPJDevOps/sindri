@@ -30,6 +30,13 @@ const (
 	maxManifestBytes = 1 << 20
 	// maxPAXBytes bounds a pax header, which only has to hold one long path.
 	maxPAXBytes = 16 << 10
+	// maxManifestDepth is far deeper than any real package.json. Without it a
+	// manifest at encoding/json's own limit would store, then fail to decode once
+	// wrapped in files.metadata, and take its package's whole packument with it.
+	maxManifestDepth = 64
+	// maxManifestNumber bounds a number's length and its exponent, well inside
+	// what Postgres's numeric holds.
+	maxManifestNumber = 1000
 
 	manifestEntry = "package/package.json"
 
@@ -610,6 +617,9 @@ func sanitizeManifest(raw []byte) (json.RawMessage, error) {
 	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 		return nil, refuse("package/package.json is not a JSON object")
 	}
+	if !manifestStorable(raw) {
+		return nil, refuse("package/package.json holds a value that cannot be stored")
+	}
 	for key := range fields {
 		if strings.HasPrefix(key, "_") ||
 			strings.EqualFold(key, "dist") || strings.EqualFold(key, "readme") || strings.EqualFold(key, "deprecated") {
@@ -621,4 +631,98 @@ func sanitizeManifest(raw []byte) (json.RawMessage, error) {
 		return nil, fmt.Errorf("encoding package/package.json: %w", err)
 	}
 	return sanitized, nil
+}
+
+// manifestStorable reports whether files.metadata, a jsonb column, can hold a
+// document that is already known to be valid JSON. Refusing here means a hostile
+// manifest gets a 400 rather than a 500 from Postgres. encoding/json accepts all
+// of these, and it would quietly replace the bad text with U+FFFD rather than
+// report it, so this reads the raw bytes.
+func manifestStorable(raw []byte) bool {
+	if !utf8.Valid(raw) {
+		return false
+	}
+	depth := 0
+	for i := 0; i < len(raw); i++ {
+		switch c := raw[i]; {
+		case c == '"':
+			end, ok := storableString(raw, i+1)
+			if !ok {
+				return false
+			}
+			i = end
+		case c == '{', c == '[':
+			depth++
+			if depth > maxManifestDepth {
+				return false
+			}
+		case c == '}', c == ']':
+			depth--
+		case c == '-', c >= '0' && c <= '9':
+			start := i
+			for i+1 < len(raw) && strings.IndexByte("+-.eE0123456789", raw[i+1]) >= 0 {
+				i++
+			}
+			if !storableNumber(string(raw[start : i+1])) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// storableString scans the string whose first byte is at start, and returns the
+// index of its closing quote. jsonb refuses an escaped NUL and an unpaired
+// surrogate.
+func storableString(raw []byte, start int) (end int, ok bool) {
+	for i := start; ; i++ {
+		switch raw[i] {
+		case '"':
+			return i, true
+		case '\\':
+			i++
+			if raw[i] != 'u' {
+				continue
+			}
+			unit, ok := escapedUnit(raw, i+1)
+			i += 4
+			switch {
+			case !ok, unit == 0, isLowSurrogate(unit):
+				return 0, false
+			case unit >= 0xD800 && unit < 0xDC00:
+				if !bytes.HasPrefix(raw[i+1:], []byte(`\u`)) {
+					return 0, false
+				}
+				low, ok := escapedUnit(raw, i+3)
+				if !ok || !isLowSurrogate(low) {
+					return 0, false
+				}
+				i += 6
+			}
+		}
+	}
+}
+
+func isLowSurrogate(unit uint16) bool {
+	return unit >= 0xDC00 && unit <= 0xDFFF
+}
+
+// escapedUnit reads the four hex digits at start.
+func escapedUnit(raw []byte, start int) (uint16, bool) {
+	unit, err := strconv.ParseUint(string(raw[start:start+4]), 16, 16)
+	return uint16(unit), err == nil
+}
+
+// storableNumber bounds a number's length and exponent, since jsonb stores it as
+// a numeric and overflows far short of what JSON can spell.
+func storableNumber(number string) bool {
+	if len(number) > maxManifestNumber {
+		return false
+	}
+	i := strings.IndexAny(number, "eE")
+	if i < 0 {
+		return true
+	}
+	exponent, err := strconv.Atoi(number[i+1:])
+	return err == nil && exponent >= -maxManifestNumber && exponent <= maxManifestNumber
 }
