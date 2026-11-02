@@ -40,9 +40,9 @@ func TestParseRoute(t *testing.T) {
 		{name: "web login", path: "r/-/v1/login",
 			want: route{kind: routeWebLogin, repo: "r"}},
 		{name: "user login", path: "r/-/user/org.couchdb.user:capture",
-			want: route{kind: routeUserLogin, repo: "r"}},
+			want: route{kind: routeUserLogin, repo: "r", user: "capture"}},
 		{name: "user login escaped username", path: "r/-/user/org.couchdb.user:a%40b",
-			want: route{kind: routeUserLogin, repo: "r"}},
+			want: route{kind: routeUserLogin, repo: "r", user: "a@b"}},
 	}
 	covered := make(map[routeKind]bool)
 	for _, tc := range cases {

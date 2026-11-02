@@ -39,6 +39,8 @@ const (
 	adminToken    = "admin"
 	readerToken   = "reader"
 	outsiderToken = "outsider"
+	// ciToken is a machine token that may publish to testRepo.
+	ciToken = "sindri_ci"
 )
 
 // tokenPrincipals answers with the principal named by the Bearer token, so a
@@ -48,6 +50,16 @@ type tokenPrincipals map[string]auth.Principal
 func (p tokenPrincipals) Authenticate(_ context.Context, r *http.Request) (auth.Principal, error) {
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	principal, ok := p[token]
+	if !ok {
+		return auth.Principal{}, errors.New("unknown test token")
+	}
+	return principal, nil
+}
+
+// Verify makes the same table the login check, so a token that authenticates a
+// request also passes login.
+func (p tokenPrincipals) Verify(_ context.Context, raw string) (auth.Principal, error) {
+	principal, ok := p[raw]
 	if !ok {
 		return auth.Principal{}, errors.New("unknown test token")
 	}
@@ -66,6 +78,12 @@ type npmFixture struct {
 // repository, testRepo.
 func newFixture(t *testing.T, publicURL string) *npmFixture {
 	t.Helper()
+	return newFixtureLogging(t, publicURL, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// newFixtureLogging is newFixture with the server's logger chosen by the test.
+func newFixtureLogging(t *testing.T, publicURL string, logger *slog.Logger) *npmFixture {
+	t.Helper()
 	database := testsupport.MigratedDB(t)
 	blobs := memstore.New()
 	store := cas.New(blobs, cas.WithReserver(db.NewBlobReserver(database, "memory")))
@@ -76,13 +94,14 @@ func newFixture(t *testing.T, publicURL string) *npmFixture {
 		adminToken:    {Subject: "bootstrap", Kind: auth.KindBootstrap, Admin: true},
 		readerToken:   {Subject: "token:reader", Kind: auth.KindMachine, Token: &auth.TokenScope{Repository: testRepo, Role: auth.RoleRead}},
 		outsiderToken: {Subject: "token:outsider", Kind: auth.KindMachine, Token: &auth.TokenScope{Repository: "elsewhere", Role: auth.RoleWrite}},
+		ciToken:       {Subject: "token:ci", Kind: auth.KindMachine, Token: &auth.TokenScope{Repository: testRepo, Role: auth.RoleWrite}},
 	}
 	srv, err := server.New(server.Options{
 		Address:  "127.0.0.1:0",
 		Database: database,
 		Blobs:    blobs,
-		NPM:      Handler(Options{Resolver: resolver, Auth: principals, Verifier: noVerifier{}, PublicURL: publicURL}),
-		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NPM:      Handler(Options{Resolver: resolver, Auth: principals, Verifier: principals, PublicURL: publicURL}),
+		Logger:   logger,
 	})
 	if err != nil {
 		t.Fatalf("server.New: %v", err)

@@ -34,6 +34,7 @@ type route struct {
 	pkg  string
 	file string
 	tag  string
+	user string
 }
 
 // parseRoute reads a path with /npm/ already removed. The result has the right
@@ -91,7 +92,7 @@ func parseEndpoint(repo string, after []string) (route, bool) {
 		if !ok || username == "" {
 			return route{}, false
 		}
-		return route{kind: routeUserLogin, repo: repo}, true
+		return route{kind: routeUserLogin, repo: repo, user: username}, true
 	case (len(after) == 3 || len(after) == 4) && after[0] == "package" && after[2] == "dist-tags":
 		pkg, err := url.PathUnescape(after[1])
 		if err != nil || !wellFormedPackage(pkg) {

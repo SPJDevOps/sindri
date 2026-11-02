@@ -52,7 +52,8 @@ default logs a warning.
 `/auth/*` are open. That makes ADR 15's rule hold by construction: a proxy
 holding credentials is never anonymously readable. A configuration that grants
 `anonymous` or `*` is refused at write time. `authenticated` is the widest
-grant.
+grant. Amended by [ADR 24](0024-npm-packument-and-dist-tags.md): npm's two login
+routes also answer without a credential header.
 
 **One authorization function.** `auth.Authorize(principal, repository, role)`
 is pure and reads only the repository row, which now carries its access lists.

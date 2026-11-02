@@ -107,17 +107,20 @@ func TestHandler_LoginRoutesBypassAuthentication(t *testing.T) {
 		name   string
 		method string
 		path   string
+		want   int
 	}{
-		{name: "web login", method: http.MethodPost, path: "/npm/r/-/v1/login"},
-		{name: "user login", method: http.MethodPut, path: "/npm/r/-/user/org.couchdb.user:alice"},
+		{name: "web login", method: http.MethodPost, path: "/npm/r/-/v1/login", want: http.StatusNotFound},
+		// An empty body reaches the handler's own check; the middleware would
+		// have answered 401 with a challenge.
+		{name: "user login", method: http.MethodPut, path: "/npm/r/-/user/org.couchdb.user:alice", want: http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, nil))
-			if rec.Code != http.StatusNotImplemented {
-				t.Fatalf("status = %d, want 501 (reached the stub, not 401)", rec.Code)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (reached the handler, not the middleware)", rec.Code, tc.want)
 			}
 		})
 	}
