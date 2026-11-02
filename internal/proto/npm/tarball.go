@@ -95,7 +95,8 @@ func inspectManifest(r io.Reader) (json.RawMessage, error) {
 //   - ustar headers with an unsigned checksum and plain octal numbers
 //   - regular files and directories, each optionally preceded by one pax header
 //     holding a few known keys, and no links
-//   - names with one spelling: no dot, dot-dot, or empty segment, and no backslash
+//   - names with one spelling: no dot, dot-dot, or empty segment, no backslash, and
+//     no segment with a colon or ending in a dot or a space
 //   - two zero blocks at the end, then only zero bytes
 func scanManifest(r io.Reader, maxUnpacked int64) (json.RawMessage, error) {
 	// A bufio.Reader is an io.ByteReader, so gzip reads no further than its
@@ -489,22 +490,84 @@ func parsePAXRecords(body []byte) (*paxHeader, error) {
 // chance. The full name rules do not apply: npm pack cuts a long name wherever
 // 100 bytes falls, which can leave a trailing slash, a split character, or a
 // dot-dot fragment, and tar-stream writes PaxHeader here. So the name is normalized
-// the way a parser ignoring the pax header might read it, and only the manifest
-// check runs on the result.
+// the way a parser ignoring the pax header might read it, on any platform, and only
+// the manifest check runs on the result.
 func checkReplacedName(name string) error {
 	if name == "" {
 		return refuse("pax path replaces an empty name")
 	}
-	slashed := strings.ReplaceAll(name, `\`, "/")
-	if installsAsManifest(strings.TrimPrefix(path.Clean("/"+slashed), "/")) {
+	if installsAsManifest(normalizeReplacedName(name)) {
 		return refuse("pax path replaces a name that could be the manifest")
 	}
 	return nil
 }
 
+// normalizeReplacedName takes a name down to what could be left of it on disk. An
+// installer strips roots from the whole name and again once the first component is
+// gone, so both positions are stripped. Each step can expose work for another, as
+// in c:./d:/package.json, so it repeats until nothing changes. Every step shortens
+// the name, which a header holds to 256 bytes.
+func normalizeReplacedName(name string) string {
+	current := strings.ReplaceAll(name, `\`, "/")
+	for {
+		next := stripRoots(current)
+		// The slash puts back what Cut took, so a UNC root after the first
+		// component is still seen as one.
+		if first, rest, ok := strings.Cut(next, "/"); ok {
+			next = first + "/" + stripRoots("/"+rest)
+		}
+		dir, base := path.Split(strings.TrimPrefix(path.Clean("/"+next), "/"))
+		next = dir + strings.TrimRight(base, ". ")
+		if next == current {
+			return next
+		}
+		current = next
+	}
+}
+
+// stripRoots removes every root at the front of a slash-separated path: drives
+// (c: and c:/), UNC and device roots (//server/share/, //?/c:/, //?/UNC/server/share/),
+// and leading slashes.
+func stripRoots(p string) string {
+	for {
+		switch {
+		case len(p) >= 2 && p[1] == ':' && isASCIILetter(p[0]):
+			p = p[2:]
+		case strings.HasPrefix(p, "//"):
+			p = stripUNCRoot(p)
+		case strings.HasPrefix(p, "/"):
+			p = p[1:]
+		default:
+			return p
+		}
+	}
+}
+
+// stripUNCRoot removes the two segments of a UNC root, or the four of //?/UNC/s/s
+// when something follows them, since readers differ on whether UNC there is a
+// share. With nothing after the root, a reader must be treating it as plain
+// slashes, so only one is removed.
+func stripUNCRoot(p string) string {
+	segments := strings.Split(strings.TrimLeft(p, "/"), "/")
+	rootLen := 2
+	if len(segments) > 4 && (segments[0] == "?" || segments[0] == ".") && strings.EqualFold(segments[1], "UNC") {
+		rootLen = 4
+	}
+	if len(segments) <= rootLen {
+		return p[1:]
+	}
+	return strings.Join(segments[rootLen:], "/")
+}
+
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
 // checkEntryName allows each path exactly one spelling. A directory may end in a
 // slash, which is how tools write them; a regular file may not, because old tar
-// readers take that to mean a directory with no body.
+// readers take that to mean a directory with no body. A colon or a trailing dot or
+// space has a second meaning on Windows, where an installer may strip c: as a root
+// and the filesystem drops the ending.
 func checkEntryName(name string, isDir bool) error {
 	if strings.HasSuffix(name, "/") {
 		if !isDir {
@@ -518,6 +581,9 @@ func checkEntryName(name string, isDir bool) error {
 	for segment := range strings.SplitSeq(name, "/") {
 		if segment == "" || segment == "." || segment == ".." {
 			return refuse("entry name is malformed")
+		}
+		if strings.Contains(segment, ":") || strings.HasSuffix(segment, ".") || strings.HasSuffix(segment, " ") {
+			return refuse("entry name has a segment Windows reads differently")
 		}
 	}
 	return nil

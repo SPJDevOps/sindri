@@ -590,6 +590,155 @@ func TestInspectManifest_AcceptsHeadersRealToolsWrite(t *testing.T) {
 	}
 }
 
+// An installer on Windows may strip a root such as c: or C:/ from an entry path, or
+// lose a segment's trailing dots and spaces, so these names can land elsewhere.
+func TestInspectManifest_RefusesNamesWindowsReadsDifferently(t *testing.T) {
+	t.Parallel()
+	const reason = "Windows reads differently"
+	benign := rawEntry(manifestEntry, readBySindri, '0')
+
+	names := []string{
+		"package/c:/package.json",
+		"package/c:package.json",
+		"x/C:/PACKAGE.JSON",
+		"package/foo.",
+		"package/foo ",
+		"package/foo:bar.js",
+		"c:/package/package.json",
+		"package/dir./a.js",
+		"package/dir /a.js",
+	}
+	for _, name := range names {
+		t.Run("entry "+name, func(t *testing.T) {
+			t.Parallel()
+			got, err := inspectManifest(bytes.NewReader(rawTarball(t, benign, rawEntry(name, "x", '0'))))
+			if err == nil {
+				t.Fatalf("inspectManifest = %s, want an error", got)
+			}
+			if !strings.Contains(err.Error(), reason) {
+				t.Errorf("err = %v, want it to give the reason %q", err, reason)
+			}
+		})
+		t.Run("pax path "+name, func(t *testing.T) {
+			t.Parallel()
+			entries := [][]byte{benign, paxEntry(paxRecords("path", name)), rawEntry("package/cut-short", "x", '0')}
+			got, err := inspectManifest(bytes.NewReader(rawTarball(t, entries...)))
+			if err == nil {
+				t.Fatalf("inspectManifest = %s, want an error", got)
+			}
+			if !strings.Contains(err.Error(), reason) {
+				t.Errorf("err = %v, want it to give the reason %q", err, reason)
+			}
+		})
+	}
+
+	t.Run("directory", func(t *testing.T) {
+		t.Parallel()
+		got, err := inspectManifest(bytes.NewReader(rawTarball(t, benign, rawHeader("package/dir./", 0, '5', ustarMagic))))
+		if err == nil {
+			t.Fatalf("inspectManifest = %s, want an error", got)
+		}
+		if !strings.Contains(err.Error(), reason) {
+			t.Errorf("err = %v, want it to give the reason %q", err, reason)
+		}
+	})
+}
+
+// A name a pax path replaces can hold fragments, so it is compared as an alias
+// rather than refused for its spelling.
+func TestInspectManifest_RefusesReplacedNamesWindowsReadsAsTheManifest(t *testing.T) {
+	t.Parallel()
+	const reason = "could be the manifest"
+	benign := rawEntry(manifestEntry, readBySindri, '0')
+
+	names := []string{
+		// A drive root after the component installers strip.
+		"package/c:/package.json",
+		"package/c:package.json",
+		"x/C:/PACKAGE.JSON",
+		`package\c:\package.json`,
+		"package/c:/d:/package.json",
+		"package/c:d:package.json",
+		"package/c:./package.json",
+		"package/x/../c:/package.json",
+		// A drive root in front of the whole name.
+		"c:/package/package.json",
+		"c:package/package.json",
+		"C:package.json",
+		"c:/package/c:/package.json",
+		// Trailing dots and spaces on the base name.
+		"package/package.json.",
+		"package/package.json ",
+		"package/package.json. .",
+		"package/package.json/...",
+		"package/c:/package.json.",
+		// UNC and device roots.
+		"//?/c:/package/package.json",
+		`\\?\c:\package\package.json`,
+		"//./c:/package/package.json",
+		"//server/share/package/package.json",
+		"//server/share/package.json",
+		"//?/UNC/server/share/package/package.json",
+		"//?/UNC/package/package.json",
+		"//./UNC/server/share/package/package.json",
+		"//package/package.json",
+		"//x/package.json",
+		"package/./c:/package.json",
+		".///server/share/package.json",
+		"package///?/c:/package.json",
+		"package///server/share/package.json",
+		"package//server/share/package.json",
+		"c:///?/d:/package/package.json",
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			entries := [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry(name, installedVariant, '0')}
+			got, err := inspectManifest(bytes.NewReader(rawTarball(t, entries...)))
+			if err == nil {
+				t.Fatalf("inspectManifest = %s, want an error", got)
+			}
+			if !strings.Contains(err.Error(), reason) {
+				t.Errorf("err = %v, want it to give the reason %q", err, reason)
+			}
+		})
+	}
+}
+
+// The alias comparison must not refuse what only looks like one: these stay below
+// the manifest's depth, or do not reach its base name, however they are read.
+func TestInspectManifest_AcceptsReplacedNamesThatAreNotAliases(t *testing.T) {
+	t.Parallel()
+	benign := rawEntry(manifestEntry, readBySindri, '0')
+
+	names := []string{
+		"PaxHeader",
+		"package/cut-short/",
+		"package/cut-short.",
+		"package/cut-short ",
+		"package/c:",
+		"package/foo:bar.js",
+		"package/nested/package.json",
+		"package/nested/c:/package.json",
+		"package/c:/nested/package.json",
+		"//server/share/package/nested/package.json",
+		"//?/c:/package/nested/package.json",
+		"ab:/package/nested/package.json",
+		"package/1:/package.json",
+		"package/package.jso",
+		"package/package.json.js",
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			entries := [][]byte{benign, paxEntry(paxRecords("path", "package/a.js")), rawEntry(name, "x", '0')}
+			if _, err := inspectManifest(bytes.NewReader(rawTarball(t, entries...))); err != nil {
+				t.Fatalf("inspectManifest: %v", err)
+			}
+		})
+	}
+}
+
 // Real output of npm 10.9.9's npm pack, committed so over-refusal is pinned
 // without the test needing npm.
 func TestInspectManifest_AcceptsRealNpmPack(t *testing.T) {
