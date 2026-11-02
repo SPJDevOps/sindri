@@ -4,6 +4,7 @@ package registry_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"io"
@@ -293,7 +294,7 @@ func TestDeleteFile_NpmRecordsRemovedTags(t *testing.T) {
 	f.mustPublish("left-pad", "1.0.0", "next", "bytes-1") // also latest, being first
 	f.mustPublish("left-pad", "1.1.0", "beta", "bytes-2")
 
-	if err := f.reg.DeleteFile(t.Context(), f.repo, "left-pad", "1.0.0", "left-pad-1.0.0.tgz"); err != nil {
+	if err := f.reg.DeleteFile(t.Context(), f.repo, "left-pad", "1.0.0", "left-pad-1.0.0.tgz", "carol"); err != nil {
 		t.Fatalf("DeleteFile: %v", err)
 	}
 	if n := f.count(`SELECT count(*) FROM dist_tags`); n != 1 {
@@ -301,7 +302,7 @@ func TestDeleteFile_NpmRecordsRemovedTags(t *testing.T) {
 	}
 	removed := 0
 	for _, e := range f.events("left-pad") {
-		if e.actor == "system:version-deleted" {
+		if e.actor == "carol" {
 			removed++
 			if e.from != "1.0.0" || e.to != "" || (e.tag != "next" && e.tag != "latest") {
 				t.Errorf("removal event %+v", e)
@@ -310,6 +311,92 @@ func TestDeleteFile_NpmRecordsRemovedTags(t *testing.T) {
 	}
 	if removed != 2 {
 		t.Fatalf("removal events = %d, want one for next and one for latest", removed)
+	}
+}
+
+func TestPublishNPM_OnlyTheFirstVersionSetsLatest(t *testing.T) {
+	f := newNPMFixture(t)
+	f.mustPublish("left-pad", "1.0.0", "latest", "bytes-1")
+	f.mustPublish("left-pad", "1.1.0", "beta", "bytes-2")
+	if err := f.reg.DeleteFile(t.Context(), f.repo, "left-pad", "1.0.0", "left-pad-1.0.0.tgz", "carol"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+	f.mustMatch(f.distTags("left-pad"), map[string]string{"beta": "1.1.0"})
+
+	f.mustPublish("left-pad", "2.0.0-beta.1", "beta", "bytes-3")
+
+	f.mustMatch(f.distTags("left-pad"), map[string]string{"beta": "2.0.0-beta.1"})
+}
+
+func TestSetDistTag_ConcurrentMovesRecordAChain(t *testing.T) {
+	f := newNPMFixture(t)
+	f.mustPublish("left-pad", "1.0.0", "latest", "bytes-1")
+	f.mustPublish("left-pad", "1.1.0", "beta", "bytes-2")
+	f.mustPublish("left-pad", "1.2.0", "gamma", "bytes-3")
+
+	var wg sync.WaitGroup
+	for _, v := range []string{"1.1.0", "1.2.0"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := f.reg.SetDistTag(context.Background(), f.repo, "left-pad", "latest", v, "bob"); err != nil {
+				t.Errorf("SetDistTag %s: %v", v, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	var moves []tagEvent
+	for _, e := range f.events("left-pad") {
+		if e.tag == "latest" && e.actor == "bob" {
+			moves = append(moves, e)
+		}
+	}
+	if len(moves) != 2 || moves[0].from != "1.0.0" || moves[1].from != moves[0].to {
+		t.Fatalf("latest moves = %+v, want a chain from 1.0.0", moves)
+	}
+	if final := f.distTags("left-pad")["latest"]; final != moves[1].to {
+		t.Fatalf("latest = %s, last event says %s", final, moves[1].to)
+	}
+}
+
+func TestRemoveDistTag_ConcurrentRemovalsRecordOnce(t *testing.T) {
+	f := newNPMFixture(t)
+	f.mustPublish("left-pad", "1.0.0", "next", "bytes-1")
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = f.reg.RemoveDistTag(context.Background(), f.repo, "left-pad", "next", "bob")
+		}()
+	}
+	wg.Wait()
+
+	var ok, missing int
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			ok++
+		case errors.Is(err, registry.ErrNotFound):
+			missing++
+		default:
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if ok != 1 || missing != 1 {
+		t.Fatalf("errors = %v, want one success and one ErrNotFound", errs)
+	}
+	removals := 0
+	for _, e := range f.events("left-pad") {
+		if e.tag == "next" && e.to == "" {
+			removals++
+		}
+	}
+	if removals != 1 {
+		t.Fatalf("removal events = %d, want 1", removals)
 	}
 }
 

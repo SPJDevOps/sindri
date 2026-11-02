@@ -45,3 +45,8 @@ UPDATE versions SET deprecated = $2 WHERE id = $1;
 
 -- name: ListDistTagsForVersion :many
 SELECT tag FROM dist_tags WHERE version_id = $1 ORDER BY tag;
+
+-- name: LockPackage :one
+-- Serializes dist-tag changes and version deletes on one package, so the
+-- history they append reads in the order the tags actually moved.
+SELECT id FROM packages WHERE id = $1 FOR UPDATE;

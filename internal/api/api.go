@@ -381,6 +381,7 @@ func (a *api) deleteFile(w http.ResponseWriter, r *http.Request) {
 		chi.URLParam(r, "name"),
 		chi.URLParam(r, "version"),
 		chi.URLParam(r, "filename"),
+		actor(r),
 	)
 	if err != nil {
 		a.writeRegistryError(w, r, err)

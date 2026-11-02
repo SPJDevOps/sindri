@@ -361,12 +361,17 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		if err := moveDistTag(ctx, q, repo.Name, pkg, p.DistTag, ver, p.Actor); err != nil {
 			return model.File{}, err
 		}
-		if _, err := q.GetDistTagVersion(ctx, db.GetDistTagVersionParams{PackageID: pkg.ID, Tag: latestTag}); errors.Is(err, pgx.ErrNoRows) {
+		// Only the package's first version sets latest. After that a publish
+		// moves its own tag alone, so deleting latest's version and then
+		// publishing a prerelease cannot make the prerelease latest.
+		versions, err := q.CountVersionsByPackage(ctx, pkg.ID)
+		if err != nil {
+			return model.File{}, fmt.Errorf("counting versions of %s: %w", p.Package, err)
+		}
+		if versions == 1 {
 			if err := moveDistTag(ctx, q, repo.Name, pkg, latestTag, ver, p.Actor); err != nil {
 				return model.File{}, err
 			}
-		} else if err != nil {
-			return model.File{}, fmt.Errorf("reading %s of %s: %w", latestTag, p.Package, err)
 		}
 	}
 
@@ -459,8 +464,9 @@ func (r *Registry) CheckPlacement(ctx context.Context, repo string, digest model
 	return nil
 }
 
-// DeleteFile unlinks a placement. It never calls cas.Delete.
-func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename string) error {
+// DeleteFile unlinks a placement. It never calls cas.Delete. actor is
+// recorded on the dist-tag events a removed npm version leaves behind.
+func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename, actor string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning delete transaction: %w", err)
@@ -517,6 +523,9 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename 
 	// with it before the row goes. The history outlives the version (ADR 24).
 	var strandedTags []string
 	if model.Protocol(repoRow.Protocol) == model.ProtocolNPM {
+		if _, err := q.LockPackage(ctx, pkgRow.ID); err != nil {
+			return fmt.Errorf("locking package %s: %w", pkg, err)
+		}
 		strandedTags, err = q.ListDistTagsForVersion(ctx, versionID)
 		if err != nil {
 			return fmt.Errorf("listing dist-tags of version %s: %w", version, err)
@@ -535,7 +544,7 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename 
 				Package:     pkgRow.DisplayName,
 				Tag:         tag,
 				FromVersion: textCursor(version),
-				Actor:       versionDeletedActor,
+				Actor:       actor,
 			}); err != nil {
 				return fmt.Errorf("recording removal of dist-tag %s: %w", tag, err)
 			}

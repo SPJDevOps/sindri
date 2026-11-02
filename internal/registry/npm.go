@@ -19,9 +19,6 @@ const (
 	// latestTag is the dist-tag a plain install resolves. A package always
 	// has one (ADR 24).
 	latestTag = "latest"
-
-	// versionDeletedActor is recorded when deleting a version takes its tags.
-	versionDeletedActor = "system:version-deleted"
 )
 
 // NPMVersion is one published version of an npm package and its tarball.
@@ -193,6 +190,9 @@ func (r *Registry) SetDistTag(ctx context.Context, repo, name, tag, version, act
 	if err != nil {
 		return err
 	}
+	if _, err := q.LockPackage(ctx, pkg.ID); err != nil {
+		return fmt.Errorf("locking package %s: %w", name, err)
+	}
 	ver, err := q.GetVersion(ctx, db.GetVersionParams{PackageID: pkg.ID, Version: version})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -227,6 +227,9 @@ func (r *Registry) RemoveDistTag(ctx context.Context, repo, name, tag, actor str
 	if err != nil {
 		return err
 	}
+	if _, err := q.LockPackage(ctx, pkg.ID); err != nil {
+		return fmt.Errorf("locking package %s: %w", name, err)
+	}
 	from, err := q.GetDistTagVersion(ctx, db.GetDistTagVersionParams{PackageID: pkg.ID, Tag: tag})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -234,8 +237,12 @@ func (r *Registry) RemoveDistTag(ctx context.Context, repo, name, tag, actor str
 		}
 		return fmt.Errorf("reading dist-tag %s: %w", tag, err)
 	}
-	if _, err := q.DeleteDistTag(ctx, db.DeleteDistTagParams{PackageID: pkg.ID, Tag: tag}); err != nil {
+	removed, err := q.DeleteDistTag(ctx, db.DeleteDistTagParams{PackageID: pkg.ID, Tag: tag})
+	if err != nil {
 		return fmt.Errorf("removing dist-tag %s: %w", tag, err)
+	}
+	if removed == 0 {
+		return ErrNotFound
 	}
 	if err := q.InsertDistTagEvent(ctx, db.InsertDistTagEventParams{
 		Repository:  repo,

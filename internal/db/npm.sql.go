@@ -209,6 +209,18 @@ func (q *Queries) ListNPMVersions(ctx context.Context, packageID uuid.UUID) ([]L
 	return items, nil
 }
 
+const lockPackage = `-- name: LockPackage :one
+SELECT id FROM packages WHERE id = $1 FOR UPDATE
+`
+
+// Serializes dist-tag changes and version deletes on one package, so the
+// history they append reads in the order the tags actually moved.
+func (q *Queries) LockPackage(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, lockPackage, id)
+	err := row.Scan(&id)
+	return id, err
+}
+
 const setVersionDeprecated = `-- name: SetVersionDeprecated :execrows
 UPDATE versions SET deprecated = $2 WHERE id = $1
 `
