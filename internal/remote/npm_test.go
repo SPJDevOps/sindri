@@ -49,7 +49,7 @@ func TestNPMTarballURL_OnlyTheUpstreamsHost(t *testing.T) {
 		{name: "ExplicitDefaultPort", upstream: "https://r.example", raw: "https://r.example:443/f.tgz", want: "https://r.example/f.tgz"},
 		{name: "OtherSchemesDefaultPort", upstream: "https://r.example", raw: "http://r.example:80/f.tgz", want: "https://r.example/f.tgz"},
 		{name: "Relative", upstream: "https://r.example/npm", raw: "foo/-/foo-1.0.0.tgz", want: "https://r.example/npm/foo/-/foo-1.0.0.tgz"},
-		{name: "RootRelative", upstream: "https://r.example/npm", raw: "/foo/-/foo-1.0.0.tgz", want: "https://r.example/foo/-/foo-1.0.0.tgz"},
+		{name: "RootRelative", upstream: "https://r.example", raw: "/foo/-/foo-1.0.0.tgz", want: "https://r.example/foo/-/foo-1.0.0.tgz"},
 		{name: "QueryKept", upstream: "https://r.example", raw: "https://r.example/f.tgz?sig=a", want: "https://r.example/f.tgz?sig=a"},
 		{name: "UserinfoDropped", upstream: "https://r.example", raw: "https://me:pw@r.example/f.tgz", want: "https://r.example/f.tgz"},
 		{name: "FragmentDropped", upstream: "https://r.example", raw: "https://r.example/f.tgz#x", want: "https://r.example/f.tgz"},
@@ -64,6 +64,75 @@ func TestNPMTarballURL_OnlyTheUpstreamsHost(t *testing.T) {
 		{name: "Opaque", upstream: "https://r.example", raw: "https:f.tgz", wantErr: true},
 		{name: "Unparsable", upstream: "https://r.example", raw: "https://r.example\x7f/f.tgz", wantErr: true},
 		{name: "Empty", upstream: "https://r.example", raw: "", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := npmTarballURL(tc.upstream, tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("npmTarballURL = %q, want a refusal", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("npmTarballURL: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("npmTarballURL = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The proxy's credentials go with these requests, and on a shared host the path
+// is what separates one tenant from another.
+func TestNPMTarballURL_StaysUnderTheUpstreamPath(t *testing.T) {
+	t.Parallel()
+	const host = "https://r.example"
+	cases := []struct {
+		name     string
+		upstream string
+		raw      string
+		want     string
+		wantErr  bool
+	}{
+		{name: "EmptyBaseAdmitsAnyPath", upstream: host, raw: host + "/foo/-/foo-1.0.0.tgz", want: host + "/foo/-/foo-1.0.0.tgz"},
+		{name: "EmptyBaseWithTrailingSlash", upstream: host + "/", raw: host + "/foo/-/foo-1.0.0.tgz", want: host + "/foo/-/foo-1.0.0.tgz"},
+		{name: "UnderTheBase", upstream: host + "/npm-a", raw: host + "/npm-a/foo/-/foo-1.0.0.tgz", want: host + "/npm-a/foo/-/foo-1.0.0.tgz"},
+		{name: "UnderTheBaseWithTrailingSlash", upstream: host + "/npm-a/", raw: host + "/npm-a/f.tgz", want: host + "/npm-a/f.tgz"},
+		{name: "UnderANestedBase", upstream: host + "/repo/npm-a", raw: host + "/repo/npm-a/f.tgz", want: host + "/repo/npm-a/f.tgz"},
+		{name: "RelativeStaysUnder", upstream: host + "/npm-a", raw: "foo/-/f.tgz", want: host + "/npm-a/foo/-/f.tgz"},
+		{name: "OrdinaryEscapeKept", upstream: host + "/npm-a", raw: host + "/npm-a/a%20b/f.tgz", want: host + "/npm-a/a%20b/f.tgz"},
+		{name: "DotsInsideASegmentAreNotDotSegments", upstream: host + "/npm-a", raw: host + "/npm-a/foo..bar/...tgz", want: host + "/npm-a/foo..bar/...tgz"},
+
+		{name: "AnotherPath", upstream: host + "/npm-a", raw: host + "/npm-b/f.tgz", wantErr: true},
+		{name: "SegmentPrefixIsNotUnder", upstream: host + "/npm-a", raw: host + "/npm-ab/f.tgz", wantErr: true},
+		{name: "ParentOfTheBase", upstream: host + "/repo/npm-a", raw: host + "/repo/f.tgz", wantErr: true},
+		{name: "RootRelativeLeavesTheBase", upstream: host + "/npm-a", raw: "/npm-b/f.tgz", wantErr: true},
+		{name: "TheBaseItself", upstream: host + "/npm-a", raw: host + "/npm-a", wantErr: true},
+		{name: "TheBaseDirectory", upstream: host + "/npm-a", raw: host + "/npm-a/", wantErr: true},
+		{name: "BaseCaseMatters", upstream: host + "/npm-a", raw: host + "/NPM-A/f.tgz", wantErr: true},
+
+		{name: "DotDot", upstream: host + "/npm-a", raw: host + "/npm-a/../npm-b/f.tgz", wantErr: true},
+		{name: "DotDotThatStaysUnder", upstream: host + "/npm-a", raw: host + "/npm-a/x/../f.tgz", wantErr: true},
+		{name: "Dot", upstream: host + "/npm-a", raw: host + "/npm-a/./f.tgz", wantErr: true},
+		{name: "RelativeDotDot", upstream: host + "/npm-a", raw: "../npm-b/f.tgz", wantErr: true},
+		{name: "DotDotOnAnEmptyBase", upstream: host, raw: host + "/a/../f.tgz", wantErr: true},
+		{name: "EncodedDotDot", upstream: host + "/npm-a", raw: host + "/npm-a/%2e%2e/npm-b/f.tgz", wantErr: true},
+		{name: "EncodedDotDotUppercase", upstream: host + "/npm-a", raw: host + "/npm-a/%2E%2E/npm-b/f.tgz", wantErr: true},
+		{name: "HalfEncodedDotDot", upstream: host + "/npm-a", raw: host + "/npm-a/.%2e/npm-b/f.tgz", wantErr: true},
+		{name: "EncodedDot", upstream: host + "/npm-a", raw: host + "/npm-a/%2e/f.tgz", wantErr: true},
+		{name: "DoubleEncodedDotDot", upstream: host + "/npm-a", raw: host + "/npm-a/%252e%252e/npm-b/f.tgz", wantErr: true},
+		{name: "EncodedSlash", upstream: host + "/npm-a", raw: host + "/npm-a/x%2f..%2f..%2fnpm-b/f.tgz", wantErr: true},
+		{name: "EncodedSlashAlone", upstream: host + "/npm-a", raw: host + "/npm-a/x%2Ff.tgz", wantErr: true},
+		{name: "DoubleEncodedSlash", upstream: host + "/npm-a", raw: host + "/npm-a/x%252ff.tgz", wantErr: true},
+		{name: "EncodedSlashOnAnEmptyBase", upstream: host, raw: host + "/a%2fb.tgz", wantErr: true},
+		{name: "Backslash", upstream: host + "/npm-a", raw: host + `/npm-a/..\npm-b/f.tgz`, wantErr: true},
+		{name: "EncodedBackslash", upstream: host + "/npm-a", raw: host + "/npm-a/..%5cnpm-b/f.tgz", wantErr: true},
+		{name: "DotDotWithPathParameter", upstream: host + "/npm-a", raw: host + "/npm-a/..;/npm-b/f.tgz", wantErr: true},
+		{name: "EmptySegment", upstream: host + "/npm-a", raw: host + "/npm-a//f.tgz", wantErr: true},
+		{name: "EncodedNUL", upstream: host + "/npm-a", raw: host + "/npm-a/f%00.tgz", wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -29,7 +29,9 @@ func (h *handler) handleTarball(w http.ResponseWriter, r *http.Request, rt route
 	defer func() { _ = rc.Close() }()
 
 	w.Header().Set("Content-Type", file.MediaType)
-	// An uncached proxy file has the length upstream declared, if it declared one.
+	// A proxy file still streaming from upstream has Size -1 and goes out chunked,
+	// so that the cut below is visible: with a declared length, npm would hold a
+	// completely framed response before the last read reported a bad hash.
 	if file.Size >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
 	}
@@ -42,7 +44,7 @@ func (h *handler) handleTarball(w http.ResponseWriter, r *http.Request, rt route
 		// Headers are sent, so cutting the connection is the only way to tell
 		// npm the file is bad: a clean end would hand it bytes that stopped
 		// short, or bytes from upstream that failed their hash. The recoverer
-		// passes this panic value through.
+		// passes this panic value through (ADR 14).
 		panic(http.ErrAbortHandler)
 	}
 }

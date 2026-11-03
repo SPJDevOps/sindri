@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -61,9 +63,13 @@ func (s *npmStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body, ok := s.tarballs[r.RequestURI]; ok {
+		// Always declared, as a real registry does: what Sindri sends must not
+		// depend on upstream being vague about its length.
+		declared := len(body)
 		if s.truncate[r.RequestURI] {
-			w.Header().Set("Content-Length", strconv.Itoa(len(body)+10))
+			declared += 10
 		}
+		w.Header().Set("Content-Length", strconv.Itoa(declared))
 		_, _ = w.Write(body)
 		return
 	}
@@ -134,6 +140,12 @@ type npmProxyConfig struct {
 
 func newNPMProxy(t *testing.T, cfg npmProxyConfig) npmStubEnv {
 	t.Helper()
+	return newNPMProxyAt(t, "", cfg)
+}
+
+// newNPMProxyAt configures the upstream URL with a base path.
+func newNPMProxyAt(t *testing.T, basePath string, cfg npmProxyConfig) npmStubEnv {
+	t.Helper()
 	stub := &npmStub{
 		documents: map[string][]byte{}, tarballs: map[string][]byte{},
 		redirects: map[string]string{}, truncate: map[string]bool{},
@@ -141,7 +153,7 @@ func newNPMProxy(t *testing.T, cfg npmProxyConfig) npmStubEnv {
 	env := newEnv(t, stub.ServeHTTP, cfg.options...)
 	if _, err := env.reg.CreateRepository(t.Context(), registry.CreateRepositoryParams{
 		Name: npmProxy, Type: model.RepoTypeProxy, Protocol: model.ProtocolNPM,
-		UpstreamURL: env.upstream.URL, CredentialsRef: cfg.credentialsRef,
+		UpstreamURL: env.upstream.URL + basePath, CredentialsRef: cfg.credentialsRef,
 		TTLSeconds: cfg.ttl, NegativeTTL: cfg.negativeTTL,
 	}); err != nil {
 		t.Fatalf("create proxy: %v", err)
@@ -448,6 +460,133 @@ func TestProxyNPM_BadBytesAbortAndAreNotCached(t *testing.T) {
 			}
 			if n := e.placedFiles(t); n != 0 {
 				t.Fatalf("%d files placed from bad bytes", n)
+			}
+		})
+	}
+}
+
+// The hash is only known once the last byte has been read, and by then io.Copy has
+// written it. If the response declared its length, that would be a completely
+// framed response before the abort, and the client could not see the cut. An
+// uncached stream is therefore chunked, so the abort comes before the terminating
+// chunk. The tarball is large because net/http writes a declared-length body
+// straight to the socket, where a small one might still be sitting in a buffer
+// when the connection is cut, and pass this test for the wrong reason.
+func TestProxyNPM_AbortOfALargeStreamIsVisibleToTheClient(t *testing.T) {
+	e := newNPMProxy(t, npmProxyConfig{ttl: 3600, negativeTTL: 300})
+	uri := "/foo/-/foo-1.0.0.tgz"
+	served := bytes.Repeat([]byte("not the promised bytes "), 20_000) // about 460 KB
+	e.stub.setTarball(uri, served)
+	e.stub.setDocument("/foo", npmDoc(t, "foo", map[string]map[string]any{
+		"1.0.0": {"tarball": e.upstream.URL + uri, "integrity": sri512([]byte("the promised bytes"))},
+	}, map[string]string{"latest": "1.0.0"}))
+	srv := e.serve(t)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/npm/"+npmProxy+"/foo/-/foo-1.0.0.tgz", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v, want the headers to arrive so the stream starts", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.ContentLength != -1 {
+		t.Fatalf("an unverified stream declared %d bytes", resp.ContentLength)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("reading %d of %d bytes ended with %v, want a transport error", len(got), len(served), err)
+	}
+	if n := e.placedFiles(t); n != 0 {
+		t.Fatalf("%d files placed from bad bytes", n)
+	}
+}
+
+// A placed tarball has been verified, so it can say how long it is, and a clean
+// stream of a good one still arrives whole without saying. The tarball is larger
+// than net/http's buffer: a body that fits and verifies gets a computed length
+// from the server, which is safe, since by then the handler has finished cleanly.
+func TestProxyNPM_OnlyAPlacedTarballDeclaresItsLength(t *testing.T) {
+	e := newNPMProxy(t, npmProxyConfig{ttl: 3600, negativeTTL: 300})
+	tgz := bytes.Repeat([]byte("a verified tarball "), 20_000)
+	uri := "/foo/-/foo-1.0.0.tgz"
+	e.stub.setTarball(uri, tgz)
+	e.stub.setDocument("/foo", npmDoc(t, "foo", map[string]map[string]any{
+		"1.0.0": {"tarball": e.upstream.URL + uri, "integrity": sri512(tgz)},
+	}, map[string]string{"latest": "1.0.0"}))
+	srv := e.serve(t)
+	get := func() (int64, []byte) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/npm/"+npmProxy+"/foo/-/foo-1.0.0.tgz", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("reading body: %v", err)
+		}
+		return resp.ContentLength, body
+	}
+
+	if length, body := get(); length != -1 || !bytes.Equal(body, tgz) {
+		t.Fatalf("first download: length %d, %d bytes", length, len(body))
+	}
+	// The placement commits as the last read returns, so give it that moment.
+	for deadline := time.Now().Add(5 * time.Second); e.placedFiles(t) == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the tarball was never placed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if length, body := get(); length != int64(len(tgz)) || !bytes.Equal(body, tgz) {
+		t.Fatalf("cached download: length %d, %d bytes", length, len(body))
+	}
+}
+
+// On a shared host the upstream's path is the tenant, so a packument cannot send
+// the proxy's credentials to another path there. The request never goes out.
+func TestProxyNPM_TarballOutsideTheUpstreamPathIsRefused(t *testing.T) {
+	cases := []struct {
+		name   string
+		path   string
+		wantOK bool
+	}{
+		{name: "UnderTheBase", path: "/npm-a/foo/-/foo-1.0.0.tgz", wantOK: true},
+		{name: "AnotherTenant", path: "/npm-b/foo/-/foo-1.0.0.tgz"},
+		{name: "PrefixOfASegment", path: "/npm-ab/foo/-/foo-1.0.0.tgz"},
+		{name: "DotDot", path: "/npm-a/../npm-b/foo-1.0.0.tgz"},
+		{name: "EncodedDotDot", path: "/npm-a/%2e%2e/npm-b/foo-1.0.0.tgz"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newNPMProxyAt(t, "/npm-a", npmProxyConfig{
+				ttl: 3600, negativeTTL: 300, credentialsRef: "mirror",
+				options: []envOption{withCredentials(remote.StaticCredentials{"mirror": {"mirror", "s3cret"}})},
+			})
+			tgz := []byte("a tarball")
+			e.stub.setDocument("/npm-a/foo", npmDoc(t, "foo", map[string]map[string]any{
+				"1.0.0": {"tarball": e.upstream.URL + tc.path, "integrity": sri512(tgz)},
+			}, map[string]string{"latest": "1.0.0"}))
+			e.stub.setTarball("/npm-a/foo/-/foo-1.0.0.tgz", tgz)
+			e.stub.setTarball(tc.path, tgz)
+
+			if tc.wantOK {
+				if body := e.mustGet(t, "foo/-/foo-1.0.0.tgz"); !bytes.Equal(body, tgz) {
+					t.Fatalf("download = %q", body)
+				}
+				return
+			}
+			e.wantStatus(t, "foo/-/foo-1.0.0.tgz", http.StatusBadGateway)
+			if got := e.stub.count(); got != 1 {
+				t.Fatalf("%d upstream requests, want only the packument", got)
 			}
 		})
 	}

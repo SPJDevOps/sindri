@@ -285,11 +285,15 @@ func npmPackumentURL(upstream, name string) string {
 }
 
 // npmTarballURL returns the URL to fetch a dist.tarball from, or an error if it
-// is not on the upstream's host. A hostile packument could otherwise point
-// Sindri at an internal address, and integrity is no defence because the same
-// document names the hash. Only the path and query of the link are used: scheme
-// and host are the upstream's, since registries commonly write http:// links,
-// and any userinfo or fragment is dropped.
+// leaves the upstream. A hostile packument could otherwise point Sindri at an
+// internal address, and integrity is no defence because the same document names
+// the hash. The proxy's credentials go with the request, so the host is not
+// enough: on a shared host, the base path is what separates this upstream from
+// another tenant's, and the link must stay under it.
+//
+// Only the path and query of the link are used: scheme and host are the
+// upstream's, since registries commonly write http:// links, and any userinfo or
+// fragment is dropped.
 func npmTarballURL(upstream, tarball string) (string, error) {
 	if tarball == "" {
 		return "", errors.New("empty tarball URL")
@@ -302,12 +306,65 @@ func npmTarballURL(upstream, tarball string) (string, error) {
 	if err != nil {
 		return "", errors.New("unparsable tarball URL")
 	}
+	// Checked before resolving, which would clean the dot segments away.
+	if !safeNPMTarballPath(link.EscapedPath()) {
+		return "", errors.New("tarball URL has a path segment that could leave the upstream")
+	}
 	u := base.ResolveReference(link)
 	if u.Opaque != "" || !strings.EqualFold(comparableHost(u), comparableHost(base)) {
 		return "", errors.New("tarball URL is on another host")
 	}
+	// base ends in a slash, so /npm-a does not admit /npm-ab.
+	basePath := base.EscapedPath()
+	path := u.EscapedPath()
+	if !strings.HasPrefix(path, basePath) || path == basePath {
+		return "", errors.New("tarball URL is outside the upstream's path")
+	}
 	u.Scheme, u.Host, u.User, u.Fragment = base.Scheme, base.Host, nil, ""
 	return u.String(), nil
+}
+
+// safeNPMTarballPath refuses, rather than cleans, any segment that a server along
+// the way could read as moving up the tree or across a boundary. Each segment is
+// decoded until it stops changing, since a proxy in front of the upstream may
+// decode once more, and checked in that form: no dot segment (with or without a
+// ";" path parameter, which some Java servers strip), no slash or backslash, no
+// control character. An empty segment goes too, since servers collapse them.
+func safeNPMTarballPath(escaped string) bool {
+	for i, segment := range strings.Split(escaped, "/") {
+		if segment == "" {
+			if i == 0 || i == strings.Count(escaped, "/") {
+				continue // the leading slash, and a trailing one the base check settles
+			}
+			return false
+		}
+		decoded, ok := decodeFully(segment)
+		if !ok || strings.ContainsFunc(decoded, func(c rune) bool {
+			return c == '/' || c == '\\' || c < 0x20 || c == 0x7f
+		}) {
+			return false
+		}
+		name, _, _ := strings.Cut(decoded, ";")
+		if name == "." || name == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// decodeFully percent-decodes s until nothing changes. false means an escape was
+// malformed. Each pass that changes s shortens it, so this ends.
+func decodeFully(s string) (string, bool) {
+	for {
+		decoded, err := url.PathUnescape(s)
+		if err != nil {
+			return "", false
+		}
+		if decoded == s {
+			return s, true
+		}
+		s = decoded
+	}
 }
 
 // comparableHost is the URL's host without a port that is its own scheme's
@@ -326,6 +383,12 @@ func comparableHost(u *url.URL) string {
 // file is found in the packument, and streams back while it is staged; it is
 // placed only once it matches what the packument promised, and a mismatch fails
 // the final read.
+//
+// The stream's Size is -1 even when upstream declared a length. Its hash is only
+// known after the last byte is written, so a declared length would frame the
+// response as complete before the failure could be reported. Unframed, it goes
+// out chunked, and the abort lands before the terminating chunk. upstream's own
+// Content-Length is still enforced, by cachingBody.
 func (c *Client) FetchNPMTarball(ctx context.Context, repoName, name, filename string) (registry.PackageFile, io.ReadCloser, error) {
 	if file, rc, err := c.reg.GetNPMTarball(ctx, repoName, name, filename); err == nil {
 		return file, rc, nil
@@ -394,7 +457,7 @@ func (c *Client) FetchNPMTarball(ctx context.Context, repoName, name, filename s
 	return registry.PackageFile{
 		Filename:  filename,
 		MediaType: npmTarballMediaType,
-		Size:      resp.ContentLength,
+		Size:      -1,
 		Version:   version.Version,
 	}, body, nil
 }
