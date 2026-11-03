@@ -27,6 +27,7 @@ import (
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/proto/npm"
 	"github.com/spj/sindri/internal/proto/oci"
 	"github.com/spj/sindri/internal/proto/pypi"
 	"github.com/spj/sindri/internal/reconcile"
@@ -38,7 +39,10 @@ import (
 	"github.com/spj/sindri/internal/testsupport"
 )
 
-const testToken = "m5-e2e-token"
+const (
+	testToken    = "m5-e2e-token"
+	npmPublicURL = "https://registry.example"
+)
 
 type testEnv struct {
 	handler  http.Handler
@@ -106,7 +110,13 @@ func newEnv(t *testing.T, upstream http.HandlerFunc, options ...envOption) *test
 			CAS:      casStore,
 			Auth:     auth.NewStaticBearer(testToken),
 		}),
-		PyPI:   pypi.Handler(pypi.Options{Resolver: resolver, Auth: auth.NewStaticBearer(testToken)}),
+		PyPI: pypi.Handler(pypi.Options{Resolver: resolver, Auth: auth.NewStaticBearer(testToken)}),
+		NPM: npm.Handler(npm.Options{
+			Resolver:  resolver,
+			Auth:      auth.NewStaticBearer(testToken),
+			Verifier:  auth.NewChain(testToken, nil, nil, nil),
+			PublicURL: npmPublicURL,
+		}),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {

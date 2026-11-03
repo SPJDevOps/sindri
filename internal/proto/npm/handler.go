@@ -1,6 +1,6 @@
 package npm
 
-// The hosted npm adapter. Routes are parsed from the escaped path, since a
+// The npm adapter. Routes are parsed from the escaped path, since a
 // client sends @acme%2fui and the decoded form loses where the repository
 // ends. Every route authorizes except the two login routes (ADR 24).
 

@@ -1,8 +1,9 @@
 package npm
 
-// The packument is derived from rows on each read and never stored, so it cannot
-// disagree with what is placed. One document answers every Accept type, and
-// ?write=true changes nothing (ADR 24).
+// A hosted packument is derived from rows on each read and never stored, so it
+// cannot disagree with what is placed. A proxied one is upstream's document,
+// cached as sent and rewritten per read. One document answers every Accept type,
+// and ?write=true changes nothing (ADR 24).
 
 import (
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/registry"
+	"github.com/spj/sindri/internal/remote"
 )
 
 type packument struct {
@@ -31,18 +33,33 @@ type packumentDist struct {
 }
 
 func (h *handler) handlePackument(w http.ResponseWriter, r *http.Request, rt route) {
-	if !h.authorizeHostedRead(w, r, rt) {
+	if _, ok := h.authorizeRead(w, r, rt); !ok {
 		return
 	}
 	if h.publicURL == "" {
 		writeError(w, http.StatusServiceUnavailable, "publicUrl is not configured, and npm needs it for tarball URLs")
 		return
 	}
-	pkg, err := h.reg.GetNPMPackage(r.Context(), rt.repo, rt.pkg)
+	resolved, err := h.res.GetNPMPackument(r.Context(), rt.repo, rt.pkg)
 	if err != nil {
 		mapRegistryError(w, err)
 		return
 	}
+	var doc any
+	if resolved.Upstream != nil {
+		doc, err = h.rewriteUpstream(rt.repo, *resolved.Upstream)
+	} else {
+		doc, err = h.derivePackument(rt.repo, *resolved.Hosted)
+	}
+	if err != nil {
+		mapRegistryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
+// derivePackument builds a hosted package's document from its rows.
+func (h *handler) derivePackument(repo string, pkg registry.NPMPackage) (packument, error) {
 	doc := packument{
 		ID:       pkg.Name,
 		Name:     pkg.Name,
@@ -50,37 +67,80 @@ func (h *handler) handlePackument(w http.ResponseWriter, r *http.Request, rt rou
 		Versions: make(map[string]map[string]any, len(pkg.Versions)),
 	}
 	for _, v := range pkg.Versions {
-		entry, err := h.packumentVersion(rt.repo, pkg.Name, v)
+		entry, err := h.packumentVersion(repo, pkg.Name, v)
 		if err != nil {
-			mapRegistryError(w, err)
-			return
+			return packument{}, err
 		}
 		doc.Versions[v.Version] = entry
 	}
-	writeJSON(w, http.StatusOK, doc)
+	return doc, nil
 }
 
-// authorizeHostedRead is the start of every read route: the caller may read the
-// repository, the repository is one this sprint serves, and the package is a name
-// that could exist.
-func (h *handler) authorizeHostedRead(w http.ResponseWriter, r *http.Request, rt route) bool {
+// rewriteUpstream is upstream's document with each dist.tarball pointing at the
+// repository the client asked for, so installs stay behind auth.Authorize and
+// placement (ADR 24). Everything else goes through as raw JSON, which is what
+// keeps dist.signatures and any field Sindri has never heard of intact.
+func (h *handler) rewriteUpstream(repo string, up remote.NPMPackument) (map[string]json.RawMessage, error) {
+	versions := make(map[string]map[string]json.RawMessage, len(up.Versions))
+	for version, v := range up.Versions {
+		dist := maps.Clone(v.Dist)
+		if err := setJSON(dist, "tarball", tarballURL(h.publicURL, repo, up.Name, v.Filename)); err != nil {
+			return nil, err
+		}
+		entry := maps.Clone(v.Fields)
+		if err := setJSON(entry, "dist", dist); err != nil {
+			return nil, err
+		}
+		versions[version] = entry
+	}
+	doc := maps.Clone(up.Fields)
+	if err := setJSON(doc, "versions", versions); err != nil {
+		return nil, err
+	}
+	if err := setJSON(doc, "dist-tags", up.DistTags); err != nil {
+		return nil, err
+	}
+	return doc, nil
+}
+
+// setJSON stores v under key as JSON.
+func setJSON(fields map[string]json.RawMessage, key string, v any) error {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("encoding packument field %s: %w", key, err)
+	}
+	fields[key] = raw
+	return nil
+}
+
+// authorizeRead is the start of every read route: the caller may read the
+// repository, and the package is a name that could exist in it. That is
+// validateName on a hosted repository, where a name has passed publish, and the
+// wider validReadName anywhere upstream's names can appear. It runs before any
+// resolver or upstream call, and it is what makes the claim walk safe (see
+// validReadName). A virtual repository is not served yet.
+func (h *handler) authorizeRead(w http.ResponseWriter, r *http.Request, rt route) (model.Repository, bool) {
 	if !h.authorize(w, r, rt.repo, auth.RoleRead) {
-		return false
+		return model.Repository{}, false
 	}
 	repo, err := h.reg.RequireNPMRepository(r.Context(), rt.repo)
 	if err != nil {
 		mapRegistryError(w, err)
-		return false
+		return model.Repository{}, false
 	}
-	if repo.Type != model.RepoTypeHosted {
-		writeError(w, http.StatusNotImplemented, "reading through a "+string(repo.Type)+" npm repository is not implemented")
-		return false
+	if repo.Type == model.RepoTypeVirtual {
+		writeError(w, http.StatusNotImplemented, "reading through a virtual npm repository is not implemented")
+		return model.Repository{}, false
 	}
-	if validateName(rt.pkg) != nil {
+	nameOK := validReadName(rt.pkg)
+	if repo.Type == model.RepoTypeHosted {
+		nameOK = validateName(rt.pkg) == nil
+	}
+	if !nameOK {
 		writeError(w, http.StatusNotFound, "not found")
-		return false
+		return model.Repository{}, false
 	}
-	return true
+	return repo, true
 }
 
 // packumentVersion is the stored manifest with Sindri's own fields set over it.
@@ -113,8 +173,11 @@ func (h *handler) packumentVersion(repo, name string, v registry.NPMVersion) (ma
 }
 
 // tarballURL is absolute because npm resolves a relative one against its local
-// cache. publicURL has no trailing slash, and the other parts passed write-time
-// validation, so none of them needs escaping. A scoped name keeps its slash.
+// cache. publicURL has no trailing slash. A hosted name and filename passed
+// write-time validation; a proxied name passed validReadName, and its filename
+// remote.ValidNPMFilename when the upstream document was parsed. All of those
+// allow only URL-safe characters, so none of the parts needs escaping. A scoped
+// name keeps its slash.
 func tarballURL(publicURL, repo, name, filename string) string {
 	return publicURL + "/npm/" + repo + "/" + name + "/-/" + filename
 }

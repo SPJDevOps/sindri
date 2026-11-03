@@ -5,6 +5,60 @@ import (
 	"testing"
 )
 
+func TestValidReadName(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{name: "plain", in: "foo", want: true},
+		{name: "dotted", in: "foo.bar", want: true},
+		{name: "scoped", in: "@acme/ui", want: true},
+		{name: "legacy uppercase", in: "JSONStream", want: true},
+		{name: "legacy uppercase scope", in: "@Acme/UI", want: true},
+		{name: "legacy punctuation", in: "it's(a)~name!*", want: true},
+		{name: "leading underscore", in: "_foo", want: true},
+		{name: "at the length limit", in: strings.Repeat("a", 214), want: true},
+		{name: "empty", in: ""},
+		{name: "past the length limit", in: strings.Repeat("a", 215)},
+		{name: "leading dot", in: ".foo"},
+		{name: "dot dot", in: ".."},
+		{name: "leading dot in a scope", in: "@.acme/foo"},
+		{name: "leading dot in a scoped name", in: "@acme/.foo"},
+		{name: "dot dot as a scoped name", in: "@acme/.."},
+		{name: "slash in an unscoped name", in: "foo/bar"},
+		{name: "two slashes", in: "@acme/a/b"},
+		{name: "scope with no name", in: "@acme/"},
+		{name: "bare at", in: "@"},
+		{name: "no scope marker", in: "/foo"},
+		{name: "backslash", in: `foo\bar`},
+		{name: "percent", in: "%40acme%2fui"},
+		{name: "query", in: "foo?x"},
+		{name: "fragment", in: "foo#x"},
+		{name: "space", in: "foo bar"},
+		{name: "quote", in: `foo"bar`},
+		{name: "NUL", in: "foo\x00"},
+		{name: "newline", in: "foo\n"},
+		{name: "invalid UTF-8", in: "caf\xc3"},
+		{name: "non-ASCII letter", in: "caf\u00e9"},
+		{name: "Kelvin sign in a name", in: "\u212Ait"},
+		{name: "Kelvin sign in a scope", in: "@\u212Ait/new"},
+		{name: "fullwidth at", in: "\uFF20acme/ui"},
+		{name: "hyphen alone", in: "-"},
+		{name: "hyphen as a scoped name", in: "@acme/-"},
+		{name: "reserved", in: "node_modules"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := validReadName(tc.in); got != tc.want {
+				t.Fatalf("validReadName(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateName(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
