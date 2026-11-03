@@ -711,6 +711,9 @@ func TestPublish_ManifestPostgresCannotHoldIs400(t *testing.T) {
 		{name: "high surrogate before an ordinary escape", manifest: prefix + `"description":"\ud83dA"}`},
 		{name: "number too large", manifest: prefix + `"n":1e999999}`},
 		{name: "number too small", manifest: prefix + `"n":1e-999999}`},
+		{name: "exponent jsonb would write out in full", manifest: prefix + `"n":1e1000}`},
+		{name: "exponent just past the bound", manifest: prefix + `"n":1e65}`},
+		{name: "negative exponent just past the bound", manifest: prefix + `"n":-1E-65}`},
 		{name: "number with too many digits", manifest: prefix + `"n":` + strings.Repeat("9", 200000) + `}`},
 		{name: "nested past the bound", manifest: prefix + `"n":` + strings.Repeat("[", maxManifestDepth) + strings.Repeat("]", maxManifestDepth) + `}`},
 		{name: "nested to encoding/json's limit", manifest: prefix + `"n":` + strings.Repeat("[", 9999) + strings.Repeat("]", 9999) + `}`},
@@ -737,8 +740,9 @@ func TestPublish_UnusualManifestsAreStoredAndServed(t *testing.T) {
 	}{
 		{name: "a surrogate pair", version: "1.0.0", rest: `"description":"\ud83d\ude00"}`},
 		{name: "an escaped backslash before u0000 is not a NUL", version: "1.0.1", rest: `"description":"\\u0000"}`},
-		{name: "the largest number allowed", version: "1.0.2", rest: `"n":1e1000,"m":-1E-1000}`},
+		{name: "the largest number allowed", version: "1.0.2", rest: `"n":1e64,"m":-1E-64}`},
 		{name: "the longest number allowed", version: "1.0.3", rest: `"n":` + strings.Repeat("9", maxManifestNumber) + `}`},
+		{name: "ordinary numbers", version: "1.0.5", rest: `"config":{"port":8080,"ratio":0.75,"timeoutMs":3e4,"epsilon":2.5e-7}}`},
 		{name: "the deepest nesting allowed", version: "1.0.4", rest: `"n":` + strings.Repeat("[", maxManifestDepth-1) + strings.Repeat("]", maxManifestDepth-1) + `}`},
 	}
 	for _, tc := range cases {

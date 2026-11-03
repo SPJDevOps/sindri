@@ -34,9 +34,12 @@ const (
 	// manifest at encoding/json's own limit would store, then fail to decode once
 	// wrapped in files.metadata, and take its package's whole packument with it.
 	maxManifestDepth = 64
-	// maxManifestNumber bounds a number's length and its exponent, well inside
-	// what Postgres's numeric holds.
+	// maxManifestNumber bounds the length of a number as written.
 	maxManifestNumber = 1000
+	// maxManifestExponent bounds a number's exponent. jsonb stores a numeric and
+	// writes out every digit on read, so 1e1000 costs a few bytes to publish and
+	// a thousand in every packument read after that.
+	maxManifestExponent = 64
 
 	manifestEntry = "package/package.json"
 
@@ -714,7 +717,8 @@ func escapedUnit(raw []byte, start int) (uint16, bool) {
 }
 
 // storableNumber bounds a number's length and exponent, since jsonb stores it as
-// a numeric and overflows far short of what JSON can spell.
+// a numeric, which overflows far short of what JSON can spell and expands to its
+// full digits well before that.
 func storableNumber(number string) bool {
 	if len(number) > maxManifestNumber {
 		return false
@@ -724,5 +728,5 @@ func storableNumber(number string) bool {
 		return true
 	}
 	exponent, err := strconv.Atoi(number[i+1:])
-	return err == nil && exponent >= -maxManifestNumber && exponent <= maxManifestNumber
+	return err == nil && exponent >= -maxManifestExponent && exponent <= maxManifestExponent
 }

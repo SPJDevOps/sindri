@@ -391,6 +391,49 @@ func TestHashTarball_PropagatesReadErrors(t *testing.T) {
 	}
 }
 
+// Ordinary numbers must never trip the bound. This is the shape of a real manifest,
+// with the numbers packages do put in one.
+func TestInspectManifest_RealLookingManifestWithOrdinaryNumbersIsKept(t *testing.T) {
+	t.Parallel()
+	const manifest = `{
+  "name": "@acme/ui",
+  "version": "1.2.3",
+  "main": "index.js",
+  "license": "MIT",
+  "engines": {"node": ">=18"},
+  "dependencies": {"left-pad": "^1.3.0"},
+  "config": {"port": 8080, "ratio": 0.75, "offset": -12, "timeoutMs": 3e4, "epsilon": 2.5e-7, "limit": 1E+21},
+  "sideEffects": false,
+  "files": ["dist", "lib"]
+}`
+	got, err := inspectManifest(bytes.NewReader(buildTarball(t, tarEntry{name: manifestEntry, body: manifest})))
+	if err != nil {
+		t.Fatalf("inspectManifest: %v", err)
+	}
+	var want, have map[string]any
+	if err := json.Unmarshal([]byte(manifest), &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(got, &have); err != nil {
+		t.Fatal(err)
+	}
+	if !cmp.Equal(have, want) {
+		t.Fatalf("manifest changed:\n%s", cmp.Diff(want, have))
+	}
+}
+
+func TestInspectManifest_RefusesAHugeExponentWithFixedText(t *testing.T) {
+	t.Parallel()
+	const manifest = `{"name":"foo","version":"1.0.0","secret-marker":1e1000}`
+	got, err := inspectManifest(bytes.NewReader(buildTarball(t, tarEntry{name: manifestEntry, body: manifest})))
+	if !errors.Is(err, errTarballRefused) {
+		t.Fatalf("inspectManifest = %s, %v, want a refusal", got, err)
+	}
+	if strings.Contains(err.Error(), "secret-marker") || strings.Contains(err.Error(), "1e1000") {
+		t.Fatalf("refusal quotes the manifest: %v", err)
+	}
+}
+
 func TestManifestStorable(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -404,7 +447,10 @@ func TestManifestStorable(t *testing.T) {
 		{name: "surrogate pair", doc: `{"a":"\ud83d\ude00"}`, want: true},
 		{name: "uppercase hex", doc: `{"a":"\uD83D\uDE00"}`, want: true},
 		{name: "number inside a string is text", doc: `{"a":"1e999999"}`, want: true},
-		{name: "number at the end of the document", doc: `1e1000`, want: true},
+		{name: "number at the end of the document", doc: `1e64`, want: true},
+		{name: "largest exponent", doc: `{"a":1e64}`, want: true},
+		{name: "largest exponent, signed", doc: `{"a":1E+64}`, want: true},
+		{name: "smallest exponent", doc: `{"a":-1.5e-64}`, want: true},
 		{name: "escaped NUL", doc: `{"a":"\u0000"}`},
 		{name: "escaped NUL after an escaped backslash", doc: `{"a":"\\\u0000"}`},
 		{name: "escaped NUL in a key", doc: `{"\u0000":1}`},
@@ -415,8 +461,10 @@ func TestManifestStorable(t *testing.T) {
 		{name: "high surrogate before a non-surrogate", doc: `{"a":"\ud83d\u0041"}`},
 		{name: "two high surrogates", doc: `{"a":"\ud83d\ud83d"}`},
 		{name: "low surrogate first", doc: `{"a":"\ude00\ud83d"}`},
-		{name: "exponent too large", doc: `{"a":1e1001}`},
-		{name: "exponent too small", doc: `{"a":1E-1001}`},
+		{name: "exponent just too large", doc: `{"a":1e65}`},
+		{name: "exponent just too small", doc: `{"a":1E-65}`},
+		{name: "exponent that jsonb would write out in full", doc: `{"a":1e1000}`},
+		{name: "exponent at the end of the document", doc: `1e65`},
 		{name: "exponent past an int", doc: `{"a":1e99999999999999999999}`},
 		{name: "too many digits", doc: `{"a":` + strings.Repeat("1", maxManifestNumber+1) + `}`},
 		{name: "too deep", doc: strings.Repeat("[", maxManifestDepth+1) + strings.Repeat("]", maxManifestDepth+1)},
