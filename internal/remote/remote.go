@@ -46,6 +46,9 @@ var (
 // pages and OCI manifests. Package files and blobs stream instead.
 const maxMetadataBytes = 32 << 20
 
+// maxRedirects is net/http's own default, which setting CheckRedirect replaces.
+const maxRedirects = 10
+
 // Credentials looks up a secret by credentials_ref. The secret is never stored
 // in remotes and never logged.
 type Credentials interface {
@@ -69,8 +72,11 @@ func (s StaticCredentials) Lookup(_ context.Context, ref string) (string, string
 
 // Client talks to proxy upstreams.
 type Client struct {
-	reg     *registry.Registry
+	reg *registry.Registry
+	// http follows redirects but drops credentials leaving the first request's
+	// origin; pinned refuses to leave that origin at all.
 	http    *http.Client
+	pinned  *http.Client
 	creds   Credentials
 	timeout time.Duration
 	log     *slog.Logger
@@ -116,14 +122,47 @@ func New(opts Options) *Client {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	followed, pinned := redirectClients(opts.HTTPClient)
 	return &Client{
 		reg:        opts.Registry,
-		http:       opts.HTTPClient,
+		http:       followed,
+		pinned:     pinned,
 		creds:      opts.Credentials,
 		timeout:    opts.Timeout,
 		log:        opts.Logger,
 		tokenCache: make(map[string]cachedToken),
 	}
+}
+
+// redirectClients returns two copies of base with the redirect rules ADR 14 asks
+// for. net/http alone is not enough: it keeps Authorization across a redirect to
+// the same hostname on another port or scheme, and to any subdomain, and each of
+// those is another origin.
+func redirectClients(base *http.Client) (followed, pinned *http.Client) {
+	limit := base.CheckRedirect
+	if limit == nil {
+		limit = func(_ *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			return nil
+		}
+	}
+	f := *base
+	f.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !sameOrigin(req.URL.String(), via[0].URL.String()) {
+			req.Header.Del("Authorization")
+		}
+		return limit(req, via)
+	}
+	p := *base
+	p.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !sameOrigin(req.URL.String(), via[0].URL.String()) {
+			return errors.New("refusing a redirect to another origin")
+		}
+		return limit(req, via)
+	}
+	return &f, &p
 }
 
 func (c *Client) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -138,6 +177,10 @@ type upstreamRequest struct {
 	remote registry.Remote
 	// tokenKey scopes a cached bearer token; empty disables bearer handling.
 	tokenKey string
+	// pinOrigin refuses a redirect off the origin of url. For requests whose
+	// URL came from an upstream document, whose own host check a redirect would
+	// otherwise undo.
+	pinOrigin bool
 }
 
 // do sends an upstream request, applying credentials only where they belong
@@ -157,7 +200,11 @@ func (c *Client) do(ctx context.Context, ur upstreamRequest) (*http.Response, er
 		} else if err := c.applyCredentials(ctx, req, ur.remote); err != nil {
 			return nil, err
 		}
-		resp, err := c.http.Do(req)
+		client := c.http
+		if ur.pinOrigin {
+			client = c.pinned
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, err)
 		}
