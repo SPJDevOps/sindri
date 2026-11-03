@@ -88,6 +88,19 @@ func (s *npmStub) setTarball(uri string, body []byte) {
 	s.tarballs[uri] = body
 }
 
+// configure changes the stub under its lock, for what has no setter of its own.
+func (s *npmStub) configure(change func(*npmStub)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	change(s)
+}
+
+func (s *npmStub) firstAccept() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.accepts[0]
+}
+
 func (s *npmStub) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -284,8 +297,8 @@ func TestProxyNPM_PackumentRewritesOnlyTheTarball(t *testing.T) {
 	if got.Modified != "2026-01-01T00:00:00.000Z" || got.DistTags["next"] != "1.0.0" || got.Name != "@acme/new" {
 		t.Fatalf("top-level fields lost: %+v", got)
 	}
-	if e.stub.accepts[0] != "application/vnd.npm.install-v1+json, application/json;q=0.8" {
-		t.Fatalf("Accept = %q", e.stub.accepts[0])
+	if got := e.stub.firstAccept(); got != "application/vnd.npm.install-v1+json, application/json;q=0.8" {
+		t.Fatalf("Accept = %q", got)
 	}
 }
 
@@ -420,7 +433,7 @@ func TestProxyNPM_BadBytesAbortAndAreNotCached(t *testing.T) {
 			e := newNPMProxy(t, npmProxyConfig{ttl: 3600, negativeTTL: 300})
 			uri := "/foo/-/foo-1.0.0.tgz"
 			e.stub.setTarball(uri, []byte("served"))
-			e.stub.truncate[uri] = tc.truncate
+			e.stub.configure(func(s *npmStub) { s.truncate[uri] = tc.truncate })
 			e.stub.setDocument("/foo", npmDoc(t, "foo", map[string]map[string]any{"1.0.0": tc.dist(e.upstream.URL + uri)},
 				map[string]string{"latest": "1.0.0"}))
 			srv := e.serve(t)
@@ -510,14 +523,16 @@ func TestProxyNPM_CredentialsStayOnUpstreamOrigin(t *testing.T) {
 		ttl: 3600, negativeTTL: 300, credentialsRef: "mirror",
 		options: []envOption{withCredentials(remote.StaticCredentials{"mirror": {"mirror", "s3cret"}})},
 	})
-	e.stub.check = func(r *http.Request) bool {
-		u, p, ok := r.BasicAuth()
-		return ok && u == "mirror" && p == "s3cret"
-	}
+	e.stub.configure(func(s *npmStub) {
+		s.check = func(r *http.Request) bool {
+			u, p, ok := r.BasicAuth()
+			return ok && u == "mirror" && p == "s3cret"
+		}
+		s.redirects["/foo/-/foo-2.0.0.tgz"] = other.URL + "/foo-2.0.0.tgz"
+		s.redirects["/foo"] = "/foo-document"
+	})
 	tgz := []byte("private tarball")
 	e.stub.setTarball("/foo/-/foo-1.0.0.tgz", tgz)
-	e.stub.redirects["/foo/-/foo-2.0.0.tgz"] = other.URL + "/foo-2.0.0.tgz"
-	e.stub.redirects["/foo"] = "/foo-document"
 	e.stub.setDocument("/foo-document", npmDoc(t, "foo", map[string]map[string]any{
 		"1.0.0": {"tarball": e.upstream.URL + "/foo/-/foo-1.0.0.tgz", "integrity": sri512(tgz)},
 		"2.0.0": {"tarball": e.upstream.URL + "/foo/-/foo-2.0.0.tgz", "integrity": sri512([]byte("x"))},
@@ -631,7 +646,7 @@ func TestProxyNPM_NamesAreRefusedBeforeAnyUpstreamCall(t *testing.T) {
 				t.Fatalf("GET %s = %d %s, want 404", path, status, got)
 			}
 			if n := e.stub.count(); n != 0 {
-				t.Fatalf("GET %s made %d upstream requests: %v", path, n, e.stub.requests)
+				t.Fatalf("GET %s made %d upstream requests", path, n)
 			}
 		})
 	}
@@ -650,7 +665,7 @@ func TestProxyNPM_EncodedSpellingsAreOneName(t *testing.T) {
 		e.mustGet(t, "-/package/"+strings.ReplaceAll(spelling, "/", "%2f")+"/dist-tags")
 	}
 	if got := e.stub.countOf("/@acme%2fnew"); got != 1 {
-		t.Fatalf("%d upstream requests, want the spellings to share one: %v", got, e.stub.requests)
+		t.Fatalf("%d upstream requests, want the spellings to share one", got)
 	}
 	if n := e.cacheRows(t, registry.CacheKeyNPMPackument("@acme/new")); n != 1 {
 		t.Fatalf("%d cache rows under the decoded name, want 1", n)

@@ -12,10 +12,8 @@ import (
 )
 
 // NPMPackument is a resolved packument. A hosted package is derived from rows and
-// a proxied one is upstream's document, so exactly one field is set. Repo is the
-// repository that answered, and owns any tarball the document names.
+// a proxied one is upstream's document, so exactly one field is set.
 type NPMPackument struct {
-	Repo     string
 	Hosted   *registry.NPMPackage
 	Upstream *remote.NPMPackument
 }
@@ -38,13 +36,13 @@ func (r *Resolver) GetNPMPackument(ctx context.Context, repoName, name string) (
 		if err != nil {
 			return NPMPackument{}, err
 		}
-		return NPMPackument{Repo: repoName, Hosted: &pkg}, nil
+		return NPMPackument{Hosted: &pkg}, nil
 	case model.RepoTypeProxy:
 		doc, err := r.remote.FetchNPMPackument(ctx, repoName, name)
 		if err != nil {
 			return NPMPackument{}, npmProxyError(err)
 		}
-		return NPMPackument{Repo: repoName, Upstream: &doc}, nil
+		return NPMPackument{Upstream: &doc}, nil
 	case model.RepoTypeVirtual:
 		return NPMPackument{}, errNPMVirtual
 	default:
