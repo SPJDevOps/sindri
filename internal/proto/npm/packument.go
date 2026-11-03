@@ -118,7 +118,7 @@ func setJSON(fields map[string]json.RawMessage, key string, v any) error {
 // validateName on a hosted repository, where a name has passed publish, and the
 // wider validReadName anywhere upstream's names can appear. It runs before any
 // resolver or upstream call, and it is what makes the claim walk safe (see
-// validReadName). A virtual repository is not served yet.
+// validReadName).
 func (h *handler) authorizeRead(w http.ResponseWriter, r *http.Request, rt route) (model.Repository, bool) {
 	if !h.authorize(w, r, rt.repo, auth.RoleRead) {
 		return model.Repository{}, false
@@ -126,10 +126,6 @@ func (h *handler) authorizeRead(w http.ResponseWriter, r *http.Request, rt route
 	repo, err := h.reg.RequireNPMRepository(r.Context(), rt.repo)
 	if err != nil {
 		mapRegistryError(w, err)
-		return model.Repository{}, false
-	}
-	if repo.Type == model.RepoTypeVirtual {
-		writeError(w, http.StatusNotImplemented, "reading through a virtual npm repository is not implemented")
 		return model.Repository{}, false
 	}
 	nameOK := validReadName(rt.pkg)

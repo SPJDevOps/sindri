@@ -36,9 +36,12 @@ type npmStub struct {
 	redirects map[string]string
 	truncate  map[string]bool
 	status    int // when non-zero, every response
-	requests  []string
-	accepts   []string
-	check     func(*http.Request) bool // when set, a false answer is a 401
+	// tarballStatus, when non-zero, answers every request that is not for a
+	// document, so a packument can list a tarball whose download then fails.
+	tarballStatus int
+	requests      []string
+	accepts       []string
+	check         func(*http.Request) bool // when set, a false answer is a 401
 }
 
 func (s *npmStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +63,10 @@ func (s *npmStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if body, ok := s.documents[r.RequestURI]; ok {
 		_, _ = w.Write(body)
+		return
+	}
+	if s.tarballStatus != 0 {
+		w.WriteHeader(s.tarballStatus)
 		return
 	}
 	if body, ok := s.tarballs[r.RequestURI]; ok {
@@ -126,6 +133,13 @@ func (s *npmStub) countOf(uri string) int {
 	return n
 }
 
+func newNPMStub() *npmStub {
+	return &npmStub{
+		documents: map[string][]byte{}, tarballs: map[string][]byte{},
+		redirects: map[string]string{}, truncate: map[string]bool{},
+	}
+}
+
 // npmStubEnv is a test environment with one npm proxy in front of a stub.
 type npmStubEnv struct {
 	*testEnv
@@ -146,10 +160,7 @@ func newNPMProxy(t *testing.T, cfg npmProxyConfig) npmStubEnv {
 // newNPMProxyAt configures the upstream URL with a base path.
 func newNPMProxyAt(t *testing.T, basePath string, cfg npmProxyConfig) npmStubEnv {
 	t.Helper()
-	stub := &npmStub{
-		documents: map[string][]byte{}, tarballs: map[string][]byte{},
-		redirects: map[string]string{}, truncate: map[string]bool{},
-	}
+	stub := newNPMStub()
 	env := newEnv(t, stub.ServeHTTP, cfg.options...)
 	if _, err := env.reg.CreateRepository(t.Context(), registry.CreateRepositoryParams{
 		Name: npmProxy, Type: model.RepoTypeProxy, Protocol: model.ProtocolNPM,

@@ -847,9 +847,9 @@ func integrityOf(body []byte) string {
 	return "sha512-" + base64.StdEncoding.EncodeToString(sum[:])
 }
 
-// A proxy reads through its upstream, and a virtual repository stays 501 until
-// it has a resolver walk behind it. Neither accepts a write.
-func TestRead_ProxyReadsUpstreamAndVirtualIs501(t *testing.T) {
+// A proxy reads through its upstream and a virtual repository through its members,
+// and neither accepts a write of any kind.
+func TestRead_ProxyAndVirtualReadAndNeitherAcceptsAWrite(t *testing.T) {
 	f := newFixture(t, testPublicURL)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -873,20 +873,30 @@ func TestRead_ProxyReadsUpstreamAndVirtualIs501(t *testing.T) {
 			"/npm/" + repo + "/-/package/foo/dist-tags",
 		}
 	}
-	for _, path := range paths("up") {
-		if status, got, _ := f.do(adminToken, http.MethodGet, path, nil); status != http.StatusOK {
-			t.Fatalf("GET %s = %d %s, want 200", path, status, got)
-		}
-	}
-	for _, path := range paths("all") {
-		if status, got, _ := f.do(adminToken, http.MethodGet, path, nil); status != http.StatusNotImplemented {
-			t.Fatalf("GET %s = %d %s, want 501", path, status, got)
-		}
-	}
 	for _, repo := range []string{"up", "all"} {
+		for _, path := range paths(repo) {
+			if status, got, _ := f.do(adminToken, http.MethodGet, path, nil); status != http.StatusOK {
+				t.Fatalf("GET %s = %d %s, want 200", path, status, got)
+			}
+		}
+		_, doc, _ := f.do(adminToken, http.MethodGet, "/npm/"+repo+"/foo", nil)
+		if want := testPublicURL + "/npm/" + repo + "/foo/-/foo-1.0.0.tgz"; !bytes.Contains(doc, []byte(want)) {
+			t.Fatalf("packument through %s = %s, want a tarball at %s", repo, doc, want)
+		}
+
 		body := publishBody(t, "foo", "1.0.0", packageTarball(t, "foo", "1.0.0"))
-		if status, got, _ := f.do(adminToken, http.MethodPut, "/npm/"+repo+"/foo", body); status != http.StatusMethodNotAllowed {
-			t.Fatalf("PUT to %s = %d %s, want 405", repo, status, got)
+		writes := []struct {
+			method, path string
+			body         []byte
+		}{
+			{http.MethodPut, "/npm/" + repo + "/foo", body},
+			{http.MethodPut, "/npm/" + repo + "/-/package/foo/dist-tags/beta", []byte(`"1.0.0"`)},
+			{http.MethodDelete, "/npm/" + repo + "/-/package/foo/dist-tags/beta", nil},
+		}
+		for _, w := range writes {
+			if status, got, _ := f.do(adminToken, w.method, w.path, w.body); status != http.StatusMethodNotAllowed {
+				t.Fatalf("%s %s = %d %s, want 405", w.method, w.path, status, got)
+			}
 		}
 	}
 }

@@ -47,6 +47,7 @@ const (
 type testEnv struct {
 	handler  http.Handler
 	reg      *registry.Registry
+	resolver *resolve.Resolver
 	db       *db.DB
 	upstream *httptest.Server
 	requests *atomic.Int64
@@ -122,7 +123,7 @@ func newEnv(t *testing.T, upstream http.HandlerFunc, options ...envOption) *test
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
-	return &testEnv{handler: srv.Handler(), reg: reg, db: database, upstream: up, requests: &requests}
+	return &testEnv{handler: srv.Handler(), reg: reg, resolver: resolver, db: database, upstream: up, requests: &requests}
 }
 
 func (e *testEnv) do(t *testing.T, method, path string, body []byte, contentType string) *httptest.ResponseRecorder {
