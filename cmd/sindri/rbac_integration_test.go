@@ -22,6 +22,7 @@ import (
 // as the gate's testdata/config/sindri.yaml.
 const rbacRepos = `
 # --- desired
+publicUrl: https://sindri.test
 repos:
   docker:
     protocol: oci
@@ -35,6 +36,10 @@ repos:
     protocol: oci
     read: [team:security]
     write: [team:security]
+  internal-npm:
+    protocol: npm
+    read: [team:payments, team:platform]
+    write: [team:platform]
 `
 
 func sha(b []byte) string {
@@ -107,19 +112,29 @@ func TestRBAC_AnonymousPullAndInstallRefused(t *testing.T) {
 	}
 
 	paths := []struct {
-		name, path, challenge string
+		name, method, path, challenge string
 	}{
-		{"OCIBase", "/v2/", "Basic"},
-		{"OCIManifest", "/v2/docker/demo/app/manifests/1.0", "Basic"},
-		{"OCIBlob", "/v2/docker/demo/app/blobs/" + m.Layers[0].Digest.String(), "Basic"},
-		{"OCITags", "/v2/docker/demo/app/tags/list", "Basic"},
-		{"PyPIRootIndex", "/pypi/internal-py/simple/", "Basic"},
-		{"PyPIProjectIndex", "/pypi/internal-py/simple/demo-package/", "Basic"},
-		{"PyPIDownload", "/pypi/internal-py/packages/demo-package/demo_package-1.0-py3-none-any.whl", "Basic"},
-		{"ManagementAPI", "/api/v1/repositories", "Bearer"},
-		{"Audit", "/api/v1/audit", "Bearer"},
-		{"GCCandidates", "/api/v1/gc/candidates", "Bearer"},
-		{"Job", "/api/v1/jobs/1", "Bearer"},
+		{"OCIBase", "", "/v2/", "Basic"},
+		{"OCIManifest", "", "/v2/docker/demo/app/manifests/1.0", "Basic"},
+		{"OCIBlob", "", "/v2/docker/demo/app/blobs/" + m.Layers[0].Digest.String(), "Basic"},
+		{"OCITags", "", "/v2/docker/demo/app/tags/list", "Basic"},
+		{"PyPIRootIndex", "", "/pypi/internal-py/simple/", "Basic"},
+		{"PyPIProjectIndex", "", "/pypi/internal-py/simple/demo-package/", "Basic"},
+		{"PyPIDownload", "", "/pypi/internal-py/packages/demo-package/demo_package-1.0-py3-none-any.whl", "Basic"},
+		{"NPMPackument", "", "/npm/internal-npm/demo-package", "Bearer"},
+		{"NPMScopedPackument", "", "/npm/internal-npm/@acme%2fui", "Bearer"},
+		{"NPMTarball", "", "/npm/internal-npm/demo-package/-/demo-package-1.0.0.tgz", "Bearer"},
+		{"NPMScopedTarball", "", "/npm/internal-npm/@acme%2fui/-/ui-1.0.0.tgz", "Bearer"},
+		{"NPMDistTags", "", "/npm/internal-npm/-/package/demo-package/dist-tags", "Bearer"},
+		{"NPMSetDistTag", http.MethodPut, "/npm/internal-npm/-/package/demo-package/dist-tags/beta", "Bearer"},
+		{"NPMRemoveDistTag", http.MethodDelete, "/npm/internal-npm/-/package/demo-package/dist-tags/beta", "Bearer"},
+		{"NPMPublish", http.MethodPut, "/npm/internal-npm/demo-package", "Bearer"},
+		{"NPMWhoami", "", "/npm/internal-npm/-/whoami", "Bearer"},
+		{"NPMUnknownPath", "", "/npm/internal-npm/-/nothing/here", "Bearer"},
+		{"ManagementAPI", "", "/api/v1/repositories", "Bearer"},
+		{"Audit", "", "/api/v1/audit", "Bearer"},
+		{"GCCandidates", "", "/api/v1/gc/candidates", "Bearer"},
+		{"Job", "", "/api/v1/jobs/1", "Bearer"},
 	}
 	creds := []struct {
 		name string
@@ -133,7 +148,11 @@ func TestRBAC_AnonymousPullAndInstallRefused(t *testing.T) {
 	for _, p := range paths {
 		for _, c := range creds {
 			t.Run(p.name+"/"+c.name, func(t *testing.T) {
-				r := s.request(http.MethodGet, p.path, nil, c.set)
+				method := p.method
+				if method == "" {
+					method = http.MethodGet
+				}
+				r := s.request(method, p.path, nil, c.set)
 				if r.status != http.StatusUnauthorized {
 					t.Fatalf("status %d, want 401: %s", r.status, r.body)
 				}
