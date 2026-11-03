@@ -76,18 +76,6 @@ func TestNPM_BytesPlacedInOneRepositoryAreNotReadThroughAnother(t *testing.T) {
 			},
 			want: []int{http.StatusNotFound},
 		},
-		{
-			name: "AVirtualRepositoryOverAProxyThatAdvertisesTheSameIntegrity",
-			arrange: func(t *testing.T, e *testEnv, tgz []byte) string {
-				up := e.createProxyNPM(t, "npmjs", 3600)
-				up.setDocument("/@acme%2fui", npmDoc(t, "@acme/ui", map[string]map[string]any{
-					"1.0.0": {"tarball": up.url + "/gone/ui-1.0.0.tgz", "integrity": sri512(tgz)},
-				}, map[string]string{"latest": "1.0.0"}))
-				e.createVirtualNPM(t, "all", "npmjs")
-				return "/npm/all" + tarballPath
-			},
-			want: []int{http.StatusNotFound, http.StatusBadGateway},
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,4 +107,28 @@ func containsStatus(want []int, got int) bool {
 		}
 	}
 	return false
+}
+
+// Through a virtual repository the proxy member's packument lists the version, so
+// the walk reaches the tarball read itself. Upstream advertises a's exact
+// integrity and has no such file: only the proxy's own placement can answer, and
+// it holds nothing, so the answer is a 404 and upstream was asked.
+func TestNPM_VirtualOverAProxyDoesNotServeAnotherRepositorysBytes(t *testing.T) {
+	e := newEnv(t, http.NotFound)
+	e.createHostedNPM(t, "a")
+	tgz := e.publishNPM(t, "a", "@acme/ui", "1.0.0")
+	up := e.createProxyNPM(t, "npmjs", 3600)
+	const missing = "/gone/ui-1.0.0.tgz"
+	up.setDocument("/@acme%2fui", npmDoc(t, "@acme/ui", map[string]map[string]any{
+		"1.0.0": {"tarball": up.url + missing, "integrity": sri512(tgz)},
+	}, map[string]string{"latest": "1.0.0"}))
+	e.createVirtualNPM(t, "all", "npmjs")
+
+	body := e.wantNPM(t, "/npm/all/@acme/ui/-/ui-1.0.0.tgz", http.StatusNotFound)
+	if bytes.Contains(body, tgz) {
+		t.Fatal("the 404 carries repository a's tarball")
+	}
+	if n := up.countOf(missing); n != 1 {
+		t.Fatalf("upstream was asked for the tarball %d times, want 1: the read never reached it", n)
+	}
 }

@@ -70,13 +70,20 @@ func newEnv(t *testing.T) *env {
 	}))
 	e := &env{t: t, cas: store, h: h, reg: reg, lc: lc, ev: ev, srv: root}
 
+	// The npm proxy's upstream fails the test on any request: the UI reads what
+	// is cached and never reaches out.
+	silentUpstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("the UI contacted the upstream: %s %s", r.Method, r.URL)
+	}))
+	t.Cleanup(silentUpstream.Close)
+
 	for _, repo := range []registry.CreateRepositoryParams{
 		{Name: "team-a", Type: model.RepoTypeHosted, Protocol: model.ProtocolOCI, Access: model.Access{Read: []string{"team:a"}}},
 		{Name: "team-b", Type: model.RepoTypeHosted, Protocol: model.ProtocolOCI, Access: model.Access{Read: []string{"team:b"}}},
 		{Name: "py", Type: model.RepoTypeHosted, Protocol: model.ProtocolPyPI, Access: model.Access{Read: []string{"team:a"}}},
 		{Name: "npm", Type: model.RepoTypeHosted, Protocol: model.ProtocolNPM, Access: model.Access{Read: []string{"team:a"}}},
 		{Name: "npm-other", Type: model.RepoTypeHosted, Protocol: model.ProtocolNPM, Access: model.Access{Read: []string{"team:a"}}},
-		{Name: "npmjs", Type: model.RepoTypeProxy, Protocol: model.ProtocolNPM, UpstreamURL: "https://registry.npmjs.org", TTLSeconds: 60,
+		{Name: "npmjs", Type: model.RepoTypeProxy, Protocol: model.ProtocolNPM, UpstreamURL: silentUpstream.URL, TTLSeconds: 60,
 			Access: model.Access{Read: []string{auth.Authenticated}}},
 		{Name: "npm-all", Type: model.RepoTypeVirtual, Protocol: model.ProtocolNPM, Members: []string{"npm", "npmjs"},
 			Access: model.Access{Read: []string{"team:a"}}},
@@ -419,7 +426,7 @@ func TestUI_NPMProxyPageListsWhatIsCachedWithNoDistTags(t *testing.T) {
 	}
 	page := e.get("bob", link[1])
 	if page.status != http.StatusOK || !strings.Contains(page.body, "@acme/ui") ||
-		!strings.Contains(page.body, "ui-1.0.0.tgz") || !strings.Contains(page.body, "upstream") {
+		!strings.Contains(page.body, "ui-1.0.0.tgz") || !strings.Contains(page.body, `class="pill upstream"`) {
 		t.Fatalf("proxy package page: %d\n%s", page.status, page.body)
 	}
 	if strings.Contains(page.body, "Dist-tags") {
