@@ -795,9 +795,15 @@ func TestTarball_PlacementCheckedFirst(t *testing.T) {
 	f.createRepo(registry.CreateRepositoryParams{Name: "team/other", Type: model.RepoTypeHosted})
 	tgz := packageTarball(t, "foo", "1.0.0")
 	f.mustPublishTo(testRepo, "foo", "foo", "1.0.0", tgz)
+	// The other repository holds the package, under another version, so its 404
+	// can only come from the placement of this one file.
+	f.mustPublishTo("team/other", "foo", "foo", "2.0.0", packageTarball(t, "foo", "2.0.0"))
 
 	if status, _, _ := f.do(adminToken, http.MethodGet, "/npm/"+testRepo+"/foo/-/foo-1.0.0.tgz", nil); status != http.StatusOK {
 		t.Fatalf("GET through the placed repository = %d, want 200", status)
+	}
+	if status, _, _ := f.do(adminToken, http.MethodGet, "/npm/team/other/foo/-/foo-2.0.0.tgz", nil); status != http.StatusOK {
+		t.Fatalf("GET of what the other repository does hold = %d, want 200", status)
 	}
 	status, got, _ := f.do(adminToken, http.MethodGet, "/npm/team/other/foo/-/foo-1.0.0.tgz", nil)
 	if status != http.StatusNotFound {

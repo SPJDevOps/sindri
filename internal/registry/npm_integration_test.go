@@ -440,11 +440,28 @@ func TestGetNPMTarball_NotPlacedInOtherRepository(t *testing.T) {
 	f := newNPMFixture(t)
 	f.hosted("npm-other")
 	f.mustPublish("left-pad", "1.0.0", "latest", "bytes-1")
+	// The other repository holds the same package and the very same digest, under
+	// another version, so only the placement of this file name can refuse the read.
+	if err := f.publishTo("npm-other", "left-pad", "2.0.0", "latest", "bytes-1"); err != nil {
+		t.Fatalf("publish to the other repository: %v", err)
+	}
+	if n := f.count(`SELECT count(*) FROM blobs`); n != 1 {
+		t.Fatalf("blobs = %d, want one deduplicated blob", n)
+	}
+
+	held, heldBody, err := f.reg.GetNPMTarball(t.Context(), "npm-other", "left-pad", "left-pad-2.0.0.tgz")
+	if err != nil {
+		t.Fatalf("GetNPMTarball of what the other repository holds: %v", err)
+	}
+	_ = heldBody.Close()
+	if want := model.NewDigest(model.AlgorithmSHA256, sha256Sum("bytes-1")); held.Digest != want {
+		t.Fatalf("digest = %s, want the one both repositories share", held.Digest)
+	}
 
 	_, rc, err := f.reg.GetNPMTarball(t.Context(), "npm-other", "left-pad", "left-pad-1.0.0.tgz")
 	if rc != nil {
 		_ = rc.Close()
-		t.Fatal("served bytes through a repository that does not hold them (I2)")
+		t.Fatal("served bytes through a repository that does not place this file (I2)")
 	}
 	if !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrNotPlaced) {
 		t.Fatalf("err = %v, want ErrNotFound or ErrNotPlaced", err)
