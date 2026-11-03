@@ -666,6 +666,16 @@ func TestInspectManifest_RefusesReplacedNamesWindowsReadsAsTheManifest(t *testin
 		"c:package/package.json",
 		"C:package.json",
 		"c:/package/c:/package.json",
+		// The NTFS 8.3 name of package.json.
+		"package/PACKAG~1.JSO",
+		"package/packag~1.jso",
+		"other/PACKAG~2.JSO",
+		"PACKAG~1.JSO",
+		"package/PACKA~10.JSO",
+		"package/PA1B2C~1.JSO",
+		`package\PACKAG~1.JSO`,
+		"package/c:/PACKAG~1.JSO",
+		"package/PACKAG~1.JSO.",
 		// Trailing dots and spaces on the base name.
 		"package/package.json.",
 		"package/package.json ",
@@ -727,6 +737,9 @@ func TestInspectManifest_AcceptsReplacedNamesThatAreNotAliases(t *testing.T) {
 		"package/1:/package.json",
 		"package/package.jso",
 		"package/package.json.js",
+		"package/nested/PACKAG~1.JSO",
+		"package/PACKAG~1.JSON",
+		"package/README~1.JSO",
 	}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
@@ -791,6 +804,17 @@ func TestInspectManifest_RefusesManifestAliases(t *testing.T) {
 		{name: "uppercase directory alone", reason: "install over", entries: []tarEntry{alias("PACKAGE/package.json")}},
 		{name: "uppercase directory after the manifest", reason: "install over", entries: []tarEntry{manifest, alias("PACKAGE/package.json")}},
 		{name: "uppercase archive root", reason: "install over", entries: []tarEntry{manifest, alias("PACKAGE.JSON")}},
+		{name: "8.3 alias after the manifest", reason: "install over", entries: []tarEntry{manifest, alias("package/PACKAG~1.JSO")}},
+		{name: "8.3 alias before the manifest", reason: "install over", entries: []tarEntry{alias("package/PACKAG~1.JSO"), manifest}},
+		{name: "8.3 alias alone", reason: "install over", entries: []tarEntry{alias("package/PACKAG~1.JSO")}},
+		{name: "8.3 alias in lowercase", reason: "install over", entries: []tarEntry{manifest, alias("package/packag~1.jso")}},
+		{name: "8.3 alias in mixed case", reason: "install over", entries: []tarEntry{manifest, alias("package/Packag~1.Jso")}},
+		{name: "8.3 alias with another digit", reason: "install over", entries: []tarEntry{manifest, alias("package/PACKAG~9.JSO")}},
+		{name: "8.3 alias with two digits", reason: "install over", entries: []tarEntry{manifest, alias("package/PACKA~12.JSO")}},
+		{name: "8.3 alias with three digits", reason: "install over", entries: []tarEntry{manifest, alias("package/PACK~123.JSO")}},
+		{name: "8.3 alias in its hashed form", reason: "install over", entries: []tarEntry{manifest, alias("package/PA1B2C~1.JSO")}},
+		{name: "8.3 alias under another first component", reason: "install over", entries: []tarEntry{manifest, alias("other/PACKAG~1.JSO")}},
+		{name: "8.3 alias at the archive root", reason: "install over", entries: []tarEntry{manifest, alias("PACKAG~1.JSO")}},
 		{name: "backslash alone", reason: "entry name", entries: []tarEntry{alias(`package\package.json`)}},
 		{name: "backslash after the manifest", reason: "entry name", entries: []tarEntry{manifest, alias(`package\package.json`)}},
 		{name: "backslash and uppercase", reason: "entry name", entries: []tarEntry{manifest, alias(`package\PACKAGE.JSON`)}},
@@ -809,11 +833,23 @@ func TestInspectManifest_RefusesManifestAliases(t *testing.T) {
 		})
 	}
 
-	t.Run("a nested variant is not an alias", func(t *testing.T) {
-		t.Parallel()
-		tarball := buildTarball(t, manifest, alias("package/nested/PACKAGE.JSON"))
-		if _, err := inspectManifest(bytes.NewReader(tarball)); err != nil {
-			t.Fatalf("inspectManifest: %v", err)
-		}
-	})
+	for _, name := range []string{
+		"package/nested/PACKAGE.JSON",
+		"package/nested/PACKAG~1.JSO",
+		"package/PACKAG~1.JSON",
+		"package/PACKAG~1.TXT",
+		"package/PACKAG~X.JSO",
+		"package/PACKAG~.JSO",
+		"package/PACKAG1.JSO",
+		"package/README~1.JSO",
+		"package/x-PACKAG~1.JSO",
+	} {
+		t.Run("not an alias: "+name, func(t *testing.T) {
+			t.Parallel()
+			tarball := buildTarball(t, manifest, alias(name))
+			if _, err := inspectManifest(bytes.NewReader(tarball)); err != nil {
+				t.Fatalf("inspectManifest: %v", err)
+			}
+		})
+	}
 }

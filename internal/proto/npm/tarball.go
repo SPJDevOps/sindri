@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -49,6 +50,13 @@ const (
 	typeDir     byte = '5'
 	typePAX     byte = 'x'
 )
+
+// manifestShortName matches the 8.3 names NTFS can give package.json. The numeric
+// tail grows as it shortens the stem (PACKA~10, PACK~100), and past a few collisions
+// the stem becomes two letters and a hash (PA1B2C~1), which a tarball can force by
+// holding enough similar names. Every form starts pa, has a stem and tail of at most
+// eight bytes, and ends .JSO.
+var manifestShortName = regexp.MustCompile(`(?i)^pa[0-9a-z]{0,4}~[0-9]{1,6}\.jso$`)
 
 var (
 	// errTarballRefused marks a tarball outside the grammar scanManifest accepts.
@@ -604,10 +612,16 @@ func checkEntryName(name string, isDir bool) error {
 // component whatever it is, and the last entry wins, so a tarball holding
 // package/package.json and other/package.json would show readers one manifest
 // and install another: the manifest confusion ADR 24 exists to prevent. Case is
-// folded because the filesystem installing the package may fold it.
+// folded because the filesystem installing the package may fold it, and the NTFS
+// short name counts for the same reason: where 8.3 names are on, writing
+// PACKAG~1.JSO writes package.json.
 func installsAsManifest(name string) bool {
 	clean := strings.TrimSuffix(name, "/")
-	return strings.EqualFold(path.Base(clean), "package.json") && strings.Count(clean, "/") <= 1
+	if strings.Count(clean, "/") > 1 {
+		return false
+	}
+	base := path.Base(clean)
+	return strings.EqualFold(base, "package.json") || manifestShortName.MatchString(base)
 }
 
 // sanitizeManifest drops the fields that describe the registry's copy rather
