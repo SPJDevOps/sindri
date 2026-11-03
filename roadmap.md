@@ -883,8 +883,8 @@ the claim that a third protocol is cheap.
 - [x] `npm` in `repos:` short form, `testdata/config/sindri.yaml`, and `testdata/manifests/`,
   so both golden tests cover it
 - [ ] npm added to the anonymous-access test, the I2 placement tests, and the UI
-- [ ] Docs: a configuration reference page listing every field, and the README "Not in v1"
-  list updated
+- [ ] Docs: a configuration reference page listing every field, the README "Not in v1"
+  list updated, and an npm example in the quickstart, which its gate script runs
 
 **Out of scope.** `npm unpublish` beyond the management API delete, the npm audit
 endpoint, npm's search API, and npm provenance attestations (later, with signature
