@@ -69,6 +69,9 @@ type NPMPackument struct {
 	Fields   map[string]json.RawMessage // every top-level field as upstream sent it
 	DistTags map[string]string
 	Versions map[string]NPMVersion
+	// Dropped counts the version entries the document listed that were left out
+	// because they could not be served safely.
+	Dropped int
 }
 
 // versionWithFilename finds the version whose dist.tarball has this basename. A
@@ -118,6 +121,7 @@ func parseNPMPackument(name string, body []byte) (NPMPackument, error) {
 			doc.Versions[version] = v
 		}
 	}
+	doc.Dropped = len(entries) - len(doc.Versions)
 
 	var tags map[string]string
 	if raw, ok := fields["dist-tags"]; ok {
@@ -241,6 +245,11 @@ func (c *Client) fetchAndCacheNPMPackument(ctx context.Context, repoName, name s
 		pinOrigin: true,
 	})
 	if err != nil {
+		reason := "request failed"
+		if errors.Is(err, errRedirectRefused) {
+			reason = "redirect refused"
+		}
+		c.logPackumentFailure(ctx, repoName, name, reason)
 		return NPMPackument{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -252,17 +261,30 @@ func (c *Client) fetchAndCacheNPMPackument(ctx context.Context, repoName, name s
 			if perr := c.reg.PutCacheEntry(ctx, repoName, key, registry.CacheMiss, ""); perr != nil {
 				return NPMPackument{}, perr
 			}
+		} else {
+			c.logPackumentFailure(ctx, repoName, name, "status", slog.Int("status", resp.StatusCode))
 		}
 		return NPMPackument{}, err
 	}
-	body, err := readMetadata(resp.Body)
+	body, err := readMetadata(resp.Body, c.maxPackument)
 	if err != nil {
+		reason := "unreadable"
+		if errors.Is(err, errMetadataTooLarge) {
+			reason = "oversize"
+		}
+		c.logPackumentFailure(ctx, repoName, name, reason, slog.Int64("limit", c.maxPackument))
 		return NPMPackument{}, err
 	}
 	// Parsed before it is stored, so a bad document never replaces a good one.
 	doc, err := parseNPMPackument(name, body)
 	if err != nil {
+		c.logPackumentFailure(ctx, repoName, name, "unparsable")
 		return NPMPackument{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, err)
+	}
+	if dropped := doc.Dropped; dropped > 0 {
+		// A count per fetch, not a line per version: large documents list thousands.
+		c.log.WarnContext(ctx, "npm packument versions dropped as unservable",
+			slog.String("repository", repoName), slog.String("package", name), slog.Int("dropped", dropped))
 	}
 	digest, err := c.reg.StoreMetadataBlob(ctx, body)
 	if err != nil {
@@ -272,6 +294,15 @@ func (c *Client) fetchAndCacheNPMPackument(ctx context.Context, repoName, name s
 		return NPMPackument{}, err
 	}
 	return doc, nil
+}
+
+// logPackumentFailure records why a fetch failed: a fixed reason and the names
+// involved, never the URL (it can carry userinfo), headers, or body.
+func (c *Client) logPackumentFailure(ctx context.Context, repoName, name, reason string, extra ...slog.Attr) {
+	attrs := append([]slog.Attr{
+		slog.String("repository", repoName), slog.String("package", name), slog.String("reason", reason),
+	}, extra...)
+	c.log.LogAttrs(ctx, slog.LevelWarn, "npm packument fetch failed", attrs...)
 }
 
 // npmPackumentURL escapes the scope's slash as clients do: @scope%2fname.

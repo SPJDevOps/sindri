@@ -288,3 +288,12 @@ func TestNPMPackument_VersionWithFilename(t *testing.T) {
 		t.Fatalf("ambiguous = %v, want ErrUpstreamUnavailable", err)
 	}
 }
+
+func TestMaxNPMPackumentBytes_IsLargerThanTheOtherMetadataBound(t *testing.T) {
+	if maxNPMPackumentBytes != 128<<20 {
+		t.Fatalf("maxNPMPackumentBytes = %d, want 128 MiB", maxNPMPackumentBytes)
+	}
+	if maxMetadataBytes != 32<<20 {
+		t.Fatalf("maxMetadataBytes = %d, want 32 MiB for PyPI and OCI", maxMetadataBytes)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -703,7 +704,6 @@ func TestProxyNPM_BadDocumentIsUpstreamFailureAndNotCached(t *testing.T) {
 		name string
 		body []byte
 	}{
-		{name: "PastTheMetadataBound", body: append([]byte(`{"name":"foo","pad":"`), bytes.Repeat([]byte("x"), 32<<20)...)},
 		{name: "NotJSON", body: []byte(`<html>maintenance</html>`)},
 		{name: "AnotherPackage", body: []byte(`{"name":"bar","versions":{}}`)},
 	}
@@ -723,6 +723,117 @@ func TestProxyNPM_BadDocumentIsUpstreamFailureAndNotCached(t *testing.T) {
 			e.stub.setDocument("/foo", tc.body)
 			if body := e.mustGet(t, "foo"); !bytes.Contains(body, []byte("foo-1.0.0.tgz")) {
 				t.Fatalf("stale document = %s", body)
+			}
+		})
+	}
+}
+
+// logBuffer is a concurrency-safe log sink for asserting what was logged.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// paddedPackument is a valid packument for foo, padded with one unused field to
+// at least size bytes.
+func paddedPackument(t *testing.T, e npmStubEnv, size int) []byte {
+	t.Helper()
+	e.serveOneVersion(t, "/foo", "foo")
+	var doc map[string]any
+	if err := json.Unmarshal(e.stub.documents["/foo"], &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["pad"] = strings.Repeat("x", size)
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+// A packument is allowed to be far larger than a PyPI page or an OCI manifest:
+// real ones are tens of megabytes. One past the old 32 MiB bound is served; one
+// past the npm bound is a 502 that neither poisons the cache nor displaces a good
+// copy, and the reason is logged.
+func TestProxyNPM_LargePackumentIsServedAndOneBeyondTheBoundIsRefused(t *testing.T) {
+	logs := &logBuffer{}
+	const bound = 40 << 20
+	e := newNPMProxy(t, npmProxyConfig{ttl: 1, negativeTTL: 300, options: []envOption{
+		func(o *remote.Options) {
+			o.Logger = slog.New(slog.NewTextHandler(logs, nil))
+			o.MaxNPMPackumentBytes = bound
+		},
+	}})
+
+	e.stub.setDocument("/foo", paddedPackument(t, e, 33<<20))
+	if body := e.mustGet(t, "foo"); len(body) < 33<<20 {
+		t.Fatalf("served %d bytes, want the whole 33 MiB document", len(body))
+	}
+
+	waitPastTTL()
+	e.stub.setDocument("/foo", paddedPackument(t, e, bound))
+	if body := e.mustGet(t, "foo"); len(body) > 33<<20+1<<20 {
+		t.Fatalf("an oversize refresh displaced the good copy: %d bytes", len(body))
+	}
+	got := logs.String()
+	for _, want := range []string{"repository=" + npmProxy, "package=foo", "reason=oversize"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("log lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Authorization") || strings.Contains(got, "xxxx") {
+		t.Fatalf("log carries a header or body:\n%.500s", got)
+	}
+
+	// With no good copy there is nothing to fall back on.
+	fresh := newNPMProxy(t, npmProxyConfig{ttl: 1, negativeTTL: 300, options: []envOption{
+		func(o *remote.Options) { o.MaxNPMPackumentBytes = bound },
+	}})
+	fresh.stub.setDocument("/foo", paddedPackument(t, fresh, bound))
+	fresh.wantStatus(t, "foo", http.StatusBadGateway)
+	if n := fresh.cacheRows(t, registry.CacheKeyNPMPackument("foo")); n != 0 {
+		t.Fatalf("an oversize document wrote %d cache rows", n)
+	}
+}
+
+func TestProxyNPM_FailureReasonsAreLoggedWithoutDetail(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(e npmStubEnv)
+		want  string
+	}{
+		{name: "Status", setup: func(e npmStubEnv) { e.stub.setStatus(http.StatusServiceUnavailable) }, want: "reason=status status=503"},
+		{name: "Unparsable", setup: func(e npmStubEnv) { e.stub.setDocument("/foo", []byte("<html>secret-body</html>")) }, want: "reason=unparsable"},
+		{name: "RefusedRedirect", setup: func(e npmStubEnv) {
+			e.stub.configure(func(s *npmStub) { s.redirects["/foo"] = "http://elsewhere.invalid/foo" })
+		}, want: "reason=\"redirect refused\""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &logBuffer{}
+			e := newNPMProxy(t, npmProxyConfig{ttl: 1, negativeTTL: 300, options: []envOption{
+				func(o *remote.Options) { o.Logger = slog.New(slog.NewTextHandler(logs, nil)) },
+			}})
+			tc.setup(e)
+			e.wantStatus(t, "foo", http.StatusBadGateway)
+			got := logs.String()
+			if !strings.Contains(got, tc.want) || !strings.Contains(got, "package=foo") || !strings.Contains(got, "repository="+npmProxy) {
+				t.Fatalf("log lacks %q:\n%s", tc.want, got)
+			}
+			if strings.Contains(got, "secret-body") || strings.Contains(got, "elsewhere.invalid") {
+				t.Fatalf("log carries upstream content:\n%s", got)
 			}
 		})
 	}

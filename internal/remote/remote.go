@@ -43,8 +43,17 @@ var (
 )
 
 // maxMetadataBytes bounds upstream documents read into memory: PyPI project
-// pages and OCI manifests. Package files and blobs stream instead.
+// pages and OCI manifests. Package files and blobs stream instead. npm
+// packuments have their own, larger bound.
 const maxMetadataBytes = 32 << 20
+
+// maxNPMPackumentBytes bounds an npm packument, which lists every version ever
+// published and so runs to tens of megabytes for popular packages (renovate is
+// 36.6 MB), past what a PyPI page or an OCI manifest ever reaches.
+const maxNPMPackumentBytes = 128 << 20
+
+// errRedirectRefused is why a pinned request stopped at a redirect.
+var errRedirectRefused = errors.New("refusing a redirect to another origin")
 
 // maxRedirects is net/http's own default, which setting CheckRedirect replaces.
 const maxRedirects = 10
@@ -80,6 +89,8 @@ type Client struct {
 	creds   Credentials
 	timeout time.Duration
 	log     *slog.Logger
+	// maxPackument bounds an npm packument read into memory.
+	maxPackument int64
 
 	// tokenCache holds bearer tokens obtained from WWW-Authenticate
 	// challenges, keyed by registry host and image, since a token's scope is
@@ -103,6 +114,9 @@ type Options struct {
 	// keeps moving.
 	Timeout time.Duration
 	Logger  *slog.Logger
+	// MaxNPMPackumentBytes bounds an npm packument read into memory; zero means
+	// 128 MiB. Tests lower it to stay cheap.
+	MaxNPMPackumentBytes int64
 }
 
 // New returns a Client.
@@ -122,15 +136,19 @@ func New(opts Options) *Client {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	if opts.MaxNPMPackumentBytes <= 0 {
+		opts.MaxNPMPackumentBytes = maxNPMPackumentBytes
+	}
 	followed, pinned := redirectClients(opts.HTTPClient)
 	return &Client{
-		reg:        opts.Registry,
-		http:       followed,
-		pinned:     pinned,
-		creds:      opts.Credentials,
-		timeout:    opts.Timeout,
-		log:        opts.Logger,
-		tokenCache: make(map[string]cachedToken),
+		reg:          opts.Registry,
+		http:         followed,
+		pinned:       pinned,
+		creds:        opts.Credentials,
+		timeout:      opts.Timeout,
+		log:          opts.Logger,
+		maxPackument: opts.MaxNPMPackumentBytes,
+		tokenCache:   make(map[string]cachedToken),
 	}
 }
 
@@ -158,7 +176,7 @@ func redirectClients(base *http.Client) (followed, pinned *http.Client) {
 	p := *base
 	p.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if !sameOrigin(req.URL.String(), via[0].URL.String()) {
-			return errors.New("refusing a redirect to another origin")
+			return errRedirectRefused
 		}
 		return limit(req, via)
 	}
@@ -177,9 +195,11 @@ type upstreamRequest struct {
 	remote registry.Remote
 	// tokenKey scopes a cached bearer token; empty disables bearer handling.
 	tokenKey string
-	// pinOrigin refuses a redirect off the origin of url. For requests whose
-	// URL came from an upstream document, whose own host check a redirect would
-	// otherwise undo.
+	// pinOrigin refuses a redirect off the origin of url (scheme and host, port
+	// included). Set only for npm: tarball downloads, whose URL came from an
+	// upstream document and whose own host check a redirect would otherwise
+	// undo, and packument requests, whose URL is built from the configured
+	// upstream but whose credentials must not follow a redirect either.
 	pinOrigin bool
 }
 

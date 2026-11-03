@@ -125,7 +125,7 @@ func (c *Client) fetchAndCacheOCIManifest(ctx context.Context, repoName, image, 
 		return registry.Manifest{}, err
 	}
 
-	body, err := readMetadata(resp.Body)
+	body, err := readMetadata(resp.Body, maxMetadataBytes)
 	if err != nil {
 		return registry.Manifest{}, err
 	}
@@ -144,15 +144,18 @@ func (c *Client) fetchAndCacheOCIManifest(ctx context.Context, repoName, image, 
 	return man, nil
 }
 
+// errMetadataTooLarge is why readMetadata refused a document.
+var errMetadataTooLarge = errors.New("document exceeds the size bound")
+
 // readMetadata reads a bounded upstream document, failing rather than
 // truncating when it is larger than the bound.
-func readMetadata(r io.Reader) ([]byte, error) {
-	body, err := io.ReadAll(io.LimitReader(r, maxMetadataBytes+1))
+func readMetadata(r io.Reader, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading body: %w", ErrUpstreamUnavailable, err)
 	}
-	if len(body) > maxMetadataBytes {
-		return nil, fmt.Errorf("%w: document exceeds %d bytes", ErrUpstreamUnavailable, maxMetadataBytes)
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("%w: %w (%d bytes)", ErrUpstreamUnavailable, errMetadataTooLarge, limit)
 	}
 	return body, nil
 }
