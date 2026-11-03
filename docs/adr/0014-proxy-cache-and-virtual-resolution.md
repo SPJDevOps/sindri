@@ -49,7 +49,9 @@ bytes are checked against the digest and length upstream promised; only then is
 the staged upload committed and placed. Memory use is constant in the file
 size. When verification fails after headers are sent, the adapter cuts the
 connection with `panic(http.ErrAbortHandler)`, so no client mistakes a bad body
-for a complete one; OCI and pip clients verify digests themselves as well. A
+for a complete one; OCI and pip clients verify digests themselves as well. (Amended in
+M9: an abort is invisible when the response declared its length first. npm streams declare
+none, and PyPI and OCI still rely on the client's digest check. See ADR 24.) A
 client that disconnects early abandons the staged copy. The upstream timeout
 covers response headers and then each gap between body reads, so a slow but
 steady large layer is not cut off. A HEAD on an uncached blob is an upstream
@@ -83,6 +85,9 @@ Docker Hub host adds it for single-segment images, so `…/dockerhub/alpine` and
 `Credentials` interface. The secret is never stored in Postgres and never
 logged. It is sent only to the scheme and host of `upstream_url`: an upstream
 index may link files on any host, and a credential must not follow those links.
+(Amended in M9: net/http alone kept `Authorization` for a redirect to the same hostname on
+another port. Credentials now stop at any redirect off the first request's origin, for
+every protocol.)
 A bearer challenge's realm comes from the upstream and receives the credential
 only over https or on the upstream's own origin. Bearer tokens are cached per
 registry host and image, the scope a pull token covers. Nothing supplies secrets

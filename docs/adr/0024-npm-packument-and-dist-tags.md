@@ -98,7 +98,82 @@ packuments across members".
 **Proxy packuments are cached as upstream sent them and rewritten per read.** They live
 under the existing `ttl`. Each read rewrites `dist.tarball` to the repository the client
 asked for, including a virtual one, so installs stay behind `auth.Authorize` and placement.
-Upstream `dist.integrity` is verified when a tarball is cached.
+Upstream `dist.integrity` is verified when a tarball is cached. (Amended in M9 when the
+proxy was built; the paragraphs below say what "as upstream sent them" came to.)
+
+**A proxy asks for abbreviated documents only, and that costs three things.** Sindri sends
+`Accept: application/vnd.npm.install-v1+json`, so the cached document has no `time` map and
+no readme. `npm view` therefore shows less. `npm install --before` and pnpm's release-age
+setting both read `time`, so neither works through a proxy. Fetching full documents would
+fix that and make every cached packument several times larger; this is not done. It narrows
+"as upstream sent them" to "as upstream sent the abbreviated form".
+
+**The packument is parsed with exact keys and its `name` must match the request.** Go's
+struct decoding is case-insensitive and would read a `DIST` that npm ignores. A version that
+cannot be served safely (a bad version string or filename, a malformed entry) is left out
+with any dist-tag naming it. Two versions claiming one filename are a 502, because choosing
+between their hashes would depend on map order. Sindri also reads `dist.integrity` as the
+strongest of sha512, sha384, and sha256, falling back to sha1 from the SRI string or
+`dist.shasum`; the blob key stays sha256.
+
+**A tarball is fetched only from the upstream's own host and base path.** `dist.tarball` is
+author-supplied, and the fetch carries the upstream's credential. The scheme and host are
+forced to the upstream's, userinfo and fragment are dropped, and the resolved path must stay
+under the upstream's base path on a segment boundary. Dot segments and encoded separators
+are refused in decoded or encoded form, to any depth of encoding, rather than cleaned. A
+redirect that leaves the first request's origin is refused, and credentials stop at any such
+redirect for every protocol: net/http alone kept `Authorization` for the same hostname on
+another port. A redirect to the same origin, issued by the upstream itself, is not checked
+against the base path. The server chose it, and a packument author cannot cause one without
+an open redirect on that host. If one exists, a credentialed request can reach another path
+on that host, which matters on a shared host such as a multi-tenant registry.
+
+**A version with neither `integrity` nor `shasum` is listed, and its tarball is a 502.**
+Sindri will not cache bytes it cannot check. The same answer covers a tarball URL off the
+upstream.
+
+**An uncached proxy stream declares no length.** The hash is known only after the last byte,
+so a declared `Content-Length` would frame the response as complete before an integrity
+abort could land. Chunked framing makes the abort visible to npm. A placed tarball declares
+its length. This refines ADR 14, which still holds for PyPI and OCI: both declare a length
+on an unverified stream and rely on the client checking the digest. A placed tarball is served
+as it was cached even if upstream later changes that version's hash, and the client then
+fails with `EINTEGRITY`.
+
+**In a virtual repository the first member with the package owns its tarballs.** For a
+proxy member, "has the package" means its packument resolves, and that is checked before any
+placed copy is read. A tarball it does not list, or lists and upstream lacks, is a 404 and a
+later member is not asked, including from outside a nested virtual. Otherwise a second proxy
+could supply a tarball for a version the first member's document never offered.
+
+**An upstream 5xx, or a document that fails to parse, fails the walk with a 502.** A 404, a
+negative cache entry, or a 401/403 is a miss and the walk moves on. A stale document still
+answers from its own member during an outage, so an outage cannot change which member a
+name resolves to, and an outage on a proxy does not touch a claimed name, since the proxy is
+not contacted. Only hosted members claim: a proxy's cached `packages` rows look like hosted
+rows, and `claimOwner` is what keeps them out. Names through a virtual use `validReadName`,
+ASCII only, and a hosted member compares exactly while the claim compares in lowercase. So
+`JSONStream` against a hosted `jsonstream` is claimed and then a 404.
+
+**A 401 or 403 from a proxy member is a miss that moves the walk on.** This is released
+behaviour shared with PyPI and OCI (`absent` in `resolve.go`), and changing it alters all
+three. The risk is real. With members `[private-proxy, public-proxy]`, an expired credential
+on the first makes a private name resolve from the public proxy for the negative TTL. A
+claim by a hosted member still holds, so it affects only names that live upstream on a
+private registry. Not changed here; SIN-55 decides whether a refusal should fail the walk.
+
+**A placed tarball outlives its package's 404.** If upstream answers 404 for a package after
+a hit, a direct proxy read still serves a placed tarball by exact filename, while a virtual
+walk sees the miss and moves on. The virtual is right, since the tarball follows its
+packument. The direct read is an availability choice. Retention evicts placements only for
+a cache hit, so those files are never evicted. Tracked as SIN-54, with PyPI.
+
+**A hosted package row survives the deletion of its last file.** The claim is the `packages`
+row, so deleting a file removes the version when emptied and keeps the package, hidden from
+listings and absent on reads. A virtual still answers 404 for the name and does not ask a
+proxy. Publishing to it reuses the row. Deleting the repository releases the claim. This
+covers PyPI as well as npm. Rows lost to deletes made before this fix cannot be recovered,
+so such a name stays unclaimed until it is published again.
 
 **`dist.tarball` is absolute, from a new top-level `publicUrl`.** ADR 13's root-relative
 links do not work for npm. With a clean cache, install failed with `ENOENT` on
@@ -166,10 +241,16 @@ matches `pypi`. The roadmap's `npmjs` changes.
   stays out of it.
 - Tag moves are recorded and OCI tag moves still are not. Bringing OCI in line is separate
   work.
-- npm inherits a gap that already exists for PyPI: `Registry.DeleteFile` removes an emptied
-  package row, and `PackageExistsInRepo` reads that row, so deleting a package's last file
-  releases its name claim, although section 4 says "ever published". It also lets a deleted
-  version number be published again. This needs its own fix, and that fix must cover npm.
+- A name claim now survives deleting a package's last file, as section 4 says "ever
+  published" means. A deleted version number can still be published again, because the
+  version row goes with the file. That gap stays open under SIN-52 and should close before
+  v1.1.0.
+- A proxy cannot see `time` or the readme, so `npm install --before` and pnpm's release-age
+  setting do not work through one.
+- A proxy takes only tarballs on its own host under its base path, with no off-origin
+  redirects. Registries that write `%2f` into a tarball URL, or redirect downloads to a CDN,
+  get a 502 or are left out. Bearer credentials and private upstreams are SIN-53.
+- A refused credential on a proxy member lets the walk fall to the next one (SIN-55).
 
 ## Rejected
 
@@ -184,6 +265,18 @@ matches `pypi`. The roadmap's `npmjs` changes.
   a GC root, so a dist-tag could keep a deleted version's tarball readable.
 - **Recording tag moves in `lifecycle_events`.** Its actions are approve and revoke, every
   row needs a stage, and it is keyed by digest. A tag move is none of those.
+- **Fetching full packuments from the upstream.** It would restore `time` and the readme at
+  several times the cache size for every package, and the abbreviated form is what installs
+  use.
+- **Declaring a length on a proxied tarball and aborting on a bad hash.** The length frames
+  the body as complete, and net/http then computes the end of the response from it, so the
+  abort cannot be told from a finished download.
+- **Cleaning a `dist.tarball` path.** Normalizing dot segments and encodings is the
+  behaviour a hostile author depends on. Refusing the spellings leaves nothing to agree on.
+- **Checking a same-origin redirect against the base path.** The upstream chose it, and
+  pinning it would break registries that move tarballs on their own host.
+- **Failing the walk on a 401/403.** Correct for a private upstream, but it changes PyPI and
+  OCI, which have shipped. Left to SIN-55.
 - **Merging packuments per version.** A hostile `99.0.0` can appear under a name it should
   never reach. ADR 14 already rejected merging, and I5 forbids it.
 - **Declaring scopes in config.** It closes the first-publish gap at the cost of a field
