@@ -215,9 +215,9 @@ func (v *validator) validateRepo(r *config.Repository, stages map[string]struct{
 
 	spec := r.Spec
 	switch spec.Protocol {
-	case model.ProtocolOCI, model.ProtocolPyPI:
+	case model.ProtocolOCI, model.ProtocolPyPI, model.ProtocolNPM:
 	default:
-		v.add(src.Errorf("protocol", "%q is not a protocol this build serves, want oci or pypi", spec.Protocol))
+		v.add(src.Errorf("protocol", "%q is not a protocol this build serves, want oci, pypi, or npm", spec.Protocol))
 	}
 
 	switch spec.Type {

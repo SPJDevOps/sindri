@@ -25,6 +25,8 @@ const (
 	ProtocolOCI Protocol = "oci"
 	// ProtocolPyPI is the Python package index protocol.
 	ProtocolPyPI Protocol = "pypi"
+	// ProtocolNPM is the npm registry protocol.
+	ProtocolNPM Protocol = "npm"
 )
 
 // ManagedBy records whether a repository row is owned by config reconcile or
@@ -129,6 +131,8 @@ const (
 	SubjectKindOCIIndex SubjectKind = "oci-index"
 	// SubjectKindPyPIDist is a wheel or sdist.
 	SubjectKindPyPIDist SubjectKind = "pypi-dist"
+	// SubjectKindNPMTarball is an npm package tarball.
+	SubjectKindNPMTarball SubjectKind = "npm-tarball"
 	// SubjectKindFile is a file published through the management API.
 	SubjectKindFile SubjectKind = "file"
 )
@@ -137,6 +141,7 @@ const (
 const (
 	ProvenanceOCIPush    = "oci-push"
 	ProvenancePyPIUpload = "pypi-upload"
+	ProvenanceNPMPublish = "npm-publish"
 	ProvenanceAPIPublish = "api-publish"
 )
 

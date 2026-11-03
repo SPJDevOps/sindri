@@ -47,6 +47,10 @@ var (
 	// thing consumers pinned a hash of, so it does not change under them.
 	ErrFileExists = errors.New("file already published with different content")
 
+	// ErrVersionExists means an exclusive publish named a version that is
+	// already published. npm versions are immutable even for identical bytes.
+	ErrVersionExists = errors.New("version already published")
+
 	// ErrHasHistory means a delete would remove a repository the lifecycle
 	// ledger refers to. The ledger is append-only, so the repository stays.
 	ErrHasHistory = errors.New("repository has lifecycle history")
@@ -203,6 +207,19 @@ type PublishParams struct {
 	// Provenance is the publisher's claim about where these bytes came from.
 	// It is recorded on the subject the publish creates, unverified (ADR 16).
 	Provenance model.Provenance
+
+	// ExclusiveVersion refuses a version that already exists, whatever the
+	// bytes (ErrVersionExists). The check is the insert itself, so two
+	// concurrent publishes of one version have exactly one winner.
+	ExclusiveVersion bool
+
+	// DistTag is the tag an npm publish moves to this version. It is required
+	// for an npm repository, so no path can place a tarball without it. The
+	// package's first publish also sets latest, whatever the tag says.
+	DistTag string
+
+	// Actor is recorded on the dist-tag events the publish writes.
+	Actor string
 }
 
 // Publish stores bytes in the CAS and creates placement rows. A digest already
@@ -230,6 +247,15 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	if repo.Type != string(model.RepoTypeHosted) {
 		return model.File{}, fmt.Errorf("%w: %s is %s", ErrReadOnly, p.Repo, repo.Type)
 	}
+	npm := model.Protocol(repo.Protocol) == model.ProtocolNPM
+	if npm && p.DistTag == "" {
+		return model.File{}, fmt.Errorf("%w: an npm publish needs a dist-tag", ErrInvalidInput)
+	}
+	// A version is immutable (ADR 24). Without this a caller could replace its
+	// bytes through the upsert below.
+	if npm && !p.ExclusiveVersion {
+		return model.File{}, fmt.Errorf("%w: an npm publish must not replace a version", ErrInvalidInput)
+	}
 
 	info, err := r.cas.Put(ctx, p.Body, p.ExpectDigest, p.Size)
 	if err != nil {
@@ -251,7 +277,7 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		return model.File{}, fmt.Errorf("recording blob %s: %w", info.Digest, err)
 	}
 
-	normalized := normalizePackageName(p.Package)
+	normalized := NormalizeName(model.Protocol(repo.Protocol), p.Package)
 	pkg, err := q.GetOrCreatePackage(ctx, db.GetOrCreatePackageParams{
 		RepoID:         repo.ID,
 		NormalizedName: normalized,
@@ -261,12 +287,26 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		return model.File{}, fmt.Errorf("ensuring package %s: %w", p.Package, err)
 	}
 
-	ver, err := q.GetOrCreateVersion(ctx, db.GetOrCreateVersionParams{
-		PackageID: pkg.ID,
-		Version:   p.Version,
-	})
-	if err != nil {
-		return model.File{}, fmt.Errorf("ensuring version %s: %w", p.Version, err)
+	var ver db.Version
+	if p.ExclusiveVersion {
+		ver, err = q.InsertVersionExclusive(ctx, db.InsertVersionExclusiveParams{
+			PackageID: pkg.ID,
+			Version:   p.Version,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return model.File{}, fmt.Errorf("%w: %s %s", ErrVersionExists, p.Package, p.Version)
+			}
+			return model.File{}, fmt.Errorf("creating version %s: %w", p.Version, err)
+		}
+	} else {
+		ver, err = q.GetOrCreateVersion(ctx, db.GetOrCreateVersionParams{
+			PackageID: pkg.ID,
+			Version:   p.Version,
+		})
+		if err != nil {
+			return model.File{}, fmt.Errorf("ensuring version %s: %w", p.Version, err)
+		}
 	}
 
 	placeParams := db.UpsertFileParams{
@@ -311,11 +351,33 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	}
 
 	kind := model.SubjectKindFile
-	if repo.Protocol == string(model.ProtocolPyPI) {
+	switch model.Protocol(repo.Protocol) {
+	case model.ProtocolPyPI:
 		kind = model.SubjectKindPyPIDist
+	case model.ProtocolNPM:
+		kind = model.SubjectKindNPMTarball
+	case model.ProtocolOCI:
 	}
 	if err := recordSubject(ctx, q, repo, info.Digest, info.Size, kind, p.Provenance); err != nil {
 		return model.File{}, err
+	}
+
+	if p.DistTag != "" {
+		if err := moveDistTag(ctx, q, repo.Name, pkg, p.DistTag, ver, p.Actor); err != nil {
+			return model.File{}, err
+		}
+		// Only the package's first version sets latest. After that a publish
+		// moves its own tag alone, so deleting latest's version and then
+		// publishing a prerelease cannot make the prerelease latest.
+		versions, err := q.CountVersionsByPackage(ctx, pkg.ID)
+		if err != nil {
+			return model.File{}, fmt.Errorf("counting versions of %s: %w", p.Package, err)
+		}
+		if versions == 1 {
+			if err := moveDistTag(ctx, q, repo.Name, pkg, latestTag, ver, p.Actor); err != nil {
+				return model.File{}, err
+			}
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -335,9 +397,16 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 // GetFile resolves a placed file and returns a reader. Placement is checked
 // before every cas.Get (invariant I2).
 func (r *Registry) GetFile(ctx context.Context, repo, pkg, version, filename string) (model.File, io.ReadCloser, error) {
+	repoRow, err := r.q.GetRepositoryByName(ctx, repo)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.File{}, nil, ErrNotFound
+		}
+		return model.File{}, nil, fmt.Errorf("looking up repository %s: %w", repo, err)
+	}
 	file, err := r.q.GetFile(ctx, db.GetFileParams{
 		Name:           repo,
-		NormalizedName: normalizePackageName(pkg),
+		NormalizedName: NormalizeName(model.Protocol(repoRow.Protocol), pkg),
 		Version:        version,
 		Filename:       filename,
 	})
@@ -400,8 +469,9 @@ func (r *Registry) CheckPlacement(ctx context.Context, repo string, digest model
 	return nil
 }
 
-// DeleteFile unlinks a placement. It never calls cas.Delete.
-func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename string) error {
+// DeleteFile unlinks a placement. It never calls cas.Delete. actor is
+// recorded on the dist-tag events a removed npm version leaves behind.
+func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename, actor string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning delete transaction: %w", err)
@@ -409,9 +479,18 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename 
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := r.q.WithTx(tx)
 
+	repoRow, err := q.GetRepositoryByName(ctx, repo)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("looking up repository for delete: %w", err)
+	}
+	normalized := NormalizeName(model.Protocol(repoRow.Protocol), pkg)
+
 	file, err := q.GetFile(ctx, db.GetFileParams{
 		Name:           repo,
-		NormalizedName: normalizePackageName(pkg),
+		NormalizedName: normalized,
 		Version:        version,
 		Filename:       filename,
 	})
@@ -422,13 +501,9 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename 
 		return fmt.Errorf("resolving file for delete: %w", err)
 	}
 
-	repoRow, err := q.GetRepositoryByName(ctx, repo)
-	if err != nil {
-		return fmt.Errorf("looking up repository for delete: %w", err)
-	}
 	pkgRow, err := q.GetPackageByRepoAndName(ctx, db.GetPackageByRepoAndNameParams{
 		RepoID:         repoRow.ID,
-		NormalizedName: normalizePackageName(pkg),
+		NormalizedName: normalized,
 	})
 	if err != nil {
 		return fmt.Errorf("looking up package for delete: %w", err)
@@ -438,7 +513,7 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename 
 
 	n, err := q.DeleteFile(ctx, db.DeleteFileParams{
 		Name:           repo,
-		NormalizedName: normalizePackageName(pkg),
+		NormalizedName: normalized,
 		Version:        version,
 		Filename:       filename,
 	})
@@ -449,9 +524,36 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename 
 		return ErrNotFound
 	}
 
+	// Dist-tags cascade with their version, so record the tags a removal takes
+	// with it before the row goes. The history outlives the version (ADR 24).
+	var strandedTags []string
+	if model.Protocol(repoRow.Protocol) == model.ProtocolNPM {
+		if _, err := q.LockPackage(ctx, pkgRow.ID); err != nil {
+			return fmt.Errorf("locking package %s: %w", pkg, err)
+		}
+		strandedTags, err = q.ListDistTagsForVersion(ctx, versionID)
+		if err != nil {
+			return fmt.Errorf("listing dist-tags of version %s: %w", version, err)
+		}
+	}
+
 	// Empty parent cleanup. Blob rows and CAS bytes stay (GC is later).
-	if _, err := q.DeleteVersionIfEmpty(ctx, versionID); err != nil {
+	removed, err := q.DeleteVersionIfEmpty(ctx, versionID)
+	if err != nil {
 		return fmt.Errorf("cleaning empty version: %w", err)
+	}
+	if removed > 0 {
+		for _, tag := range strandedTags {
+			if err := q.InsertDistTagEvent(ctx, db.InsertDistTagEventParams{
+				Repository:  repo,
+				Package:     pkgRow.DisplayName,
+				Tag:         tag,
+				FromVersion: textCursor(version),
+				Actor:       actor,
+			}); err != nil {
+				return fmt.Errorf("recording removal of dist-tag %s: %w", tag, err)
+			}
+		}
 	}
 	if _, err := q.DeletePackageIfEmpty(ctx, pkgRow.ID); err != nil {
 		return fmt.Errorf("cleaning empty package: %w", err)
@@ -529,7 +631,7 @@ func (r *Registry) ListVersions(ctx context.Context, p ListVersionsParams) (Page
 
 	pkg, err := r.q.GetPackageByRepoAndName(ctx, db.GetPackageByRepoAndNameParams{
 		RepoID:         repo.ID,
-		NormalizedName: normalizePackageName(p.Package),
+		NormalizedName: NormalizeName(model.Protocol(repo.Protocol), p.Package),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -666,6 +768,16 @@ func validatePlacementNames(repo, pkg, version, filename string) error {
 		return fmt.Errorf("%w: filename is required", ErrInvalidInput)
 	}
 	return nil
+}
+
+// NormalizeName returns the key a protocol stores a package under. npm names
+// are case-sensitive and distinguish "-", "_", and ".", so folding them the
+// PyPI way would merge packages that the protocol keeps apart.
+func NormalizeName(p model.Protocol, name string) string {
+	if p == model.ProtocolNPM {
+		return strings.TrimSpace(name)
+	}
+	return normalizePackageName(name)
 }
 
 // normalizePackageName folds a package name the way PyPI does (PEP 503). For

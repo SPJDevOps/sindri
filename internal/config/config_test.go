@@ -415,3 +415,75 @@ func TestDuration_StringDropsZeroUnits(t *testing.T) {
 		}
 	}
 }
+
+func TestParse_PublicUrl(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr []string
+		// wantAbsent must not appear in the error: it is a secret.
+		wantAbsent string
+	}{
+		{name: "TrailingSlashIsDropped", input: "publicUrl: http://localhost:8080/", want: "http://localhost:8080"},
+		{name: "HTTPSIsAccepted", input: "publicUrl: https://sindri.example", want: "https://sindri.example"},
+		{name: "PlainHTTPOffLoopbackIsRefused", input: "publicUrl: http://sindri.example", wantErr: []string{"publicUrl", "https"}},
+		{name: "PathIsRefused", input: "publicUrl: https://sindri.example/base", wantErr: []string{"publicUrl", "root"}},
+		{name: "NotAURLIsRefused", input: "publicUrl: not a url", wantErr: []string{"publicUrl", "not a URL"}},
+		{name: "CredentialsAreRefused", input: "publicUrl: https://user:hunter2@sindri.example", wantErr: []string{"publicUrl", "credentials"}, wantAbsent: "hunter2"},
+		{name: "UsernameOnlyIsRefused", input: "publicUrl: https://hunter2@sindri.example", wantErr: []string{"publicUrl", "credentials"}, wantAbsent: "hunter2"},
+		{name: "CredentialsOverPlainHTTPAreRefusedWithoutEchoingThem", input: "publicUrl: http://user:hunter2@sindri.example", wantErr: []string{"publicUrl", "credentials"}, wantAbsent: "hunter2"},
+		{name: "QueryValueIsNotEchoed", input: "publicUrl: https://sindri.example/?token=hunter2", wantErr: []string{"publicUrl", "root"}, wantAbsent: "hunter2"},
+		{name: "FragmentValueIsNotEchoed", input: "publicUrl: https://sindri.example/#hunter2", wantErr: []string{"publicUrl", "root"}, wantAbsent: "hunter2"},
+		{name: "PathValueIsNotEchoed", input: "publicUrl: https://sindri.example/hunter2", wantErr: []string{"publicUrl", "root"}, wantAbsent: "hunter2"},
+		{name: "UnparseableValueIsNotEchoed", input: `publicUrl: "https://hunter2:%zz@sindri.example"`, wantErr: []string{"publicUrl", "not a URL"}, wantAbsent: "hunter2"},
+		{name: "QueryIsRefused", input: "publicUrl: https://sindri.example?a=b", wantErr: []string{"publicUrl", "root"}},
+		{name: "BareQuestionMarkIsRefused", input: "publicUrl: https://sindri.example?", wantErr: []string{"publicUrl", "root"}},
+		{name: "FragmentIsRefused", input: "publicUrl: https://sindri.example#frag", wantErr: []string{"publicUrl", "root"}},
+		{name: "DoubleSlashIsRefused", input: "publicUrl: https://x//", wantErr: []string{"publicUrl", "root"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.Parse([]byte(tc.input), "sindri.yaml")
+			if len(tc.wantErr) > 0 {
+				if err == nil {
+					t.Fatalf("Parse succeeded with PublicURL %q, want an error", cfg.PublicURL)
+				}
+				for _, s := range tc.wantErr {
+					if !strings.Contains(err.Error(), s) {
+						t.Errorf("error %q does not contain %q", err, s)
+					}
+				}
+				if tc.wantAbsent != "" && strings.Contains(err.Error(), tc.wantAbsent) {
+					t.Errorf("error %q echoes %q", err, tc.wantAbsent)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.PublicURL != tc.want {
+				t.Errorf("PublicURL = %q, want %q", cfg.PublicURL, tc.want)
+			}
+		})
+	}
+}
+
+func TestParse_NpmRepositoryRequiresPublicUrl(t *testing.T) {
+	_, err := config.Parse([]byte("repos:\n  a: { protocol: npm }\n"), "sindri.yaml")
+	if err == nil {
+		t.Fatal("an npm repository without publicUrl loaded, want an error")
+	}
+	for _, s := range []string{"publicUrl", "npm"} {
+		if !strings.Contains(err.Error(), s) {
+			t.Errorf("error %q does not contain %q", err, s)
+		}
+	}
+
+	if _, err := config.Parse([]byte("publicUrl: http://localhost:8080\nrepos:\n  a: { protocol: npm }\n"), "sindri.yaml"); err != nil {
+		t.Errorf("an npm repository with publicUrl: %v", err)
+	}
+	if _, err := config.Parse([]byte("repos:\n  a: { protocol: pypi }\n"), "sindri.yaml"); err != nil {
+		t.Errorf("a config with no npm repository needs no publicUrl: %v", err)
+	}
+}

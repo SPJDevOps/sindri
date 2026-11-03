@@ -359,7 +359,7 @@ func desugarRepo(c *errs, e *shortRepo, byName map[string]*shortRepo, d typeDefa
 	switch e.typ {
 	case model.RepoTypeHosted:
 		if e.proto == "" {
-			c.add(e.src.Line, field+".protocol", "a hosted repository needs a protocol: oci or pypi")
+			c.add(e.src.Line, field+".protocol", "a hosted repository needs a protocol: oci, pypi, or npm")
 		}
 	case model.RepoTypeProxy:
 		repo.Spec.Upstream = desugarUpstream(c, e, d)
@@ -470,7 +470,7 @@ func desugarUpstream(c *errs, e *shortRepo, d typeDefaults) *Upstream {
 		return nil
 	}
 	if e.proto == "" {
-		c.add(e.src.Line, e.src.Path+".protocol", "a proxy with an explicit url needs a protocol: oci or pypi")
+		c.add(e.src.Line, e.src.Path+".protocol", "a proxy with an explicit url needs a protocol: oci, pypi, or npm")
 	}
 	return up
 }
@@ -561,7 +561,7 @@ func desugarMembers(c *errs, e *shortRepo, byName map[string]*shortRepo) ([]Memb
 	}
 	if proto == "" {
 		c.add(e.m.lineOf("members"), e.src.Path+".protocol",
-			"cannot be inferred because no member is declared in this file; write protocol: oci or pypi")
+			"cannot be inferred because no member is declared in this file; write protocol: oci, pypi, or npm")
 	}
 	return refs, proto
 }

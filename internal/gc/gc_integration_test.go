@@ -428,7 +428,7 @@ func TestGC_PyPIFileSurvivesAndDeletedFileIsCollected(t *testing.T) {
 	}
 	kept := publish("1.0", "kept sdist")
 	dropped := publish("2.0", "deleted sdist")
-	if err := f.reg.DeleteFile(ctx, "py", "demo", "2.0", "demo-2.0.tar.gz"); err != nil {
+	if err := f.reg.DeleteFile(ctx, "py", "demo", "2.0", "demo-2.0.tar.gz", "test"); err != nil {
 		t.Fatalf("DeleteFile: %v", err)
 	}
 	f.age()
@@ -724,7 +724,7 @@ func TestGC_PushThatDedupsAgainstACollectedBlobRewritesItsBytes(t *testing.T) {
 	if err := publish(ctx); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	if err := f.reg.DeleteFile(ctx, "py", "demo", "1.0", "demo-1.0.tar.gz"); err != nil {
+	if err := f.reg.DeleteFile(ctx, "py", "demo", "1.0", "demo-1.0.tar.gz", "test"); err != nil {
 		t.Fatalf("DeleteFile: %v", err)
 	}
 	f.age()

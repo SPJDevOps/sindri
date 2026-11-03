@@ -98,7 +98,10 @@ ARCHITECTURE.md section 8 and ADR 7.
 There are two golden tests. `TestManifests_ShortAndLongFormsAreIdentical` compares the
 loaded trees. `TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState` compares the
 database each form produces. A new configuration field is not done until
-`testdata/config/sindri.yaml` and `testdata/manifests/` both use it.
+`testdata/config/sindri.yaml` and `testdata/manifests/` both use it. The exception is
+server-level settings (`listen`, `storage`, `database`, `auth`, `publicUrl`): manifests
+describe repositories and lifecycle, so these have no manifest form and appear in
+`testdata/config/sindri.yaml` only.
 
 The reconciler owns rows with `managed_by = config`, and records which trigger owns
 each (`serve --config` or `sindri apply`). The API, the reconciler, and the two
@@ -122,7 +125,9 @@ This is a registry. Supply-chain security is the product, so these are not style
 7. **Every route authorizes through `auth.Authorize`.** There is no anonymous path in
    v1, and a new route that skips the check is a security bug, not an omission
    (ADR 18). Group membership comes from the caller's token on each request; never
-   store or cache it.
+   store or cache it. One sanctioned exception: npm's two login routes, which npm
+   calls with no credential header. They expose no repository data, and a named
+   route-walk case guards them (ADR 24).
 8. **The UI is read-only and shows only what the caller may read.** Every page
    authorizes like the API and answers 404 for a repository the caller cannot
    read. Artifact pages check placement first. Templates carry no inline

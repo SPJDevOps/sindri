@@ -272,7 +272,7 @@ func TestValidateSet_ReportsEveryErrorLocated(t *testing.T) {
 	m, err := config.ParseManifests([]byte(`
 kind: Repository
 metadata: { name: a }
-spec: { type: hosted, protocol: npm }
+spec: { type: hosted, protocol: maven }
 ---
 kind: Repository
 metadata: { name: b }

@@ -74,7 +74,7 @@ func (r *Registry) PlaceCachedFile(ctx context.Context, p PlaceCachedFileParams)
 		return model.File{}, fmt.Errorf("recording blob %s: %w", info.Digest, err)
 	}
 
-	normalized := normalizePackageName(p.Package)
+	normalized := NormalizeName(model.Protocol(repo.Protocol), p.Package)
 	pkg, err := q.GetOrCreatePackage(ctx, db.GetOrCreatePackageParams{
 		RepoID:         repo.ID,
 		NormalizedName: normalized,

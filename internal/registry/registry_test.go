@@ -3,6 +3,8 @@ package registry
 import (
 	"errors"
 	"testing"
+
+	"github.com/spj/sindri/internal/model"
 )
 
 func TestValidateRepoName(t *testing.T) {
@@ -66,6 +68,31 @@ func TestNormalizePackageName(t *testing.T) {
 			t.Parallel()
 			if got := normalizePackageName(tc.in); got != tc.want {
 				t.Fatalf("normalizePackageName(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeName_NpmNamesDoNotCollide(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		protocol model.Protocol
+		in       string
+		want     string
+	}{
+		{name: "scoped name keeps scope and slash", protocol: model.ProtocolNPM, in: "@acme/ui", want: "@acme/ui"},
+		{name: "unscoped name with no separator", protocol: model.ProtocolNPM, in: "acmeui", want: "acmeui"},
+		{name: "dot is kept", protocol: model.ProtocolNPM, in: "foo.bar", want: "foo.bar"},
+		{name: "underscore is kept", protocol: model.ProtocolNPM, in: "foo_bar", want: "foo_bar"},
+		{name: "case is kept", protocol: model.ProtocolNPM, in: "JSONStream", want: "JSONStream"},
+		{name: "pypi still folds", protocol: model.ProtocolPyPI, in: "Foo_Bar.baz", want: "foo-bar-baz"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := NormalizeName(tc.protocol, tc.in); got != tc.want {
+				t.Fatalf("NormalizeName(%q, %q) = %q, want %q", tc.protocol, tc.in, got, tc.want)
 			}
 		})
 	}

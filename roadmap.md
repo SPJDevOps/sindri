@@ -866,10 +866,10 @@ the claim that a third protocol is cheap.
   publish, and dist-tags move. OCI and PyPI have nothing like it. Decide whether the
   packument is stored or derived from rows on each read (derived is the default
   expectation, as PyPI's index is), and how dist-tags fit the identity model
-- [ ] Hosted: publish, install, scoped packages (`@acme/ui`), `dist-tags`
+- [x] Hosted: publish, install, scoped packages (`@acme/ui`), `dist-tags`
   (`npm dist-tag add/rm`), and `npm deprecate`. Published versions are immutable, like
   PyPI files; re-publishing a version is refused
-- [ ] Integrity checked at write time: the tarball's `sha512` matches the `integrity` the
+- [x] Integrity checked at write time: the tarball's `sha512` matches the `integrity` the
   client sent, and the packument's `dist.integrity` is computed by Sindri, never copied
   from the client
 - [ ] Proxy to registry.npmjs.org (preset `npm`), with the cached tarball keyed by its
@@ -879,12 +879,12 @@ the claim that a third protocol is cheap.
 - [ ] Name claims for npm: a hosted package, **and a hosted scope**, is never served from a
   proxy. A hosted `@acme/*` claims every name in that scope.
   `TestDependencyConfusion_HostedNpmScopeIsNeverServedFromProxy` joins the guard tests
-- [ ] Auth: `npm login` and `_authToken`, through `auth.Authorize` like every other route
-- [ ] `npm` in `repos:` short form, `testdata/config/sindri.yaml`, and `testdata/manifests/`,
+- [x] Auth: `npm login` and `_authToken`, through `auth.Authorize` like every other route
+- [x] `npm` in `repos:` short form, `testdata/config/sindri.yaml`, and `testdata/manifests/`,
   so both golden tests cover it
 - [ ] npm added to the anonymous-access test, the I2 placement tests, and the UI
-- [ ] Docs: a configuration reference page listing every field, and the README "Not in v1"
-  list updated
+- [ ] Docs: a configuration reference page listing every field, the README "Not in v1"
+  list updated, and an npm example in the quickstart, which its gate script runs
 
 **Out of scope.** `npm unpublish` beyond the management API delete, the npm audit
 endpoint, npm's search API, and npm provenance attestations (later, with signature
@@ -994,7 +994,16 @@ Kept here so the work continues rather than restarts. Roughly in order:
 - **Kubernetes.** A Helm chart for Sindri, the split `--api-only` and `--worker-only`
   modes (the queue table is the prerequisite), and the admission webhook calling the
   decision endpoint. That webhook is the clearest demonstration of the whole thesis.
-- **Maven**, then Helm's own repository format if OCI charts turn out not to be enough.
+- **More protocols.** Each is a new adapter on the shared core, plus a small additive
+  migration for its protocol and subject kind, as npm needed (ADR 24). Order by what the
+  first adopters ask for.
+  - **Maven**: hosted, proxy, and virtual, with `maven-metadata.xml` and checksum files.
+  - **Go modules**: the `GOPROXY` protocol (`list`, `.info`, `.mod`, `.zip`, `@latest`),
+    plus a checksum-database story so `GONOSUMDB` is not the only way to use it.
+  - **Hugging Face**: the Hub download protocol for models and datasets behind
+    `HF_ENDPOINT`, proxying huggingface.co with hosted names that proxies cannot shadow.
+  - **Helm's own repository format** (`index.yaml` and chart tarballs), only if OCI charts
+    turn out not to be enough. Helm-over-OCI already works and is tested (v1.0.1).
 - **Signature verification** for cosign and Sigstore.
 - **Storage:** GCS and Azure Blob Storage.
 - **The paid layer:** per-CVE waivers with expiry, licence policy, org-wide rules teams

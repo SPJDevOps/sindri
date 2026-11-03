@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -295,7 +296,7 @@ func (a *api) listVersions(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := a.reg.ListVersions(r.Context(), registry.ListVersionsParams{
 		Repo:    chi.URLParam(r, "repo"),
-		Package: chi.URLParam(r, "name"),
+		Package: packageName(r),
 		After:   r.URL.Query().Get("cursor"),
 		Limit:   limit,
 	})
@@ -327,7 +328,7 @@ func (a *api) publishFile(w http.ResponseWriter, r *http.Request) {
 
 	file, err := a.reg.Publish(r.Context(), registry.PublishParams{
 		Repo:       chi.URLParam(r, "repo"),
-		Package:    chi.URLParam(r, "name"),
+		Package:    packageName(r),
 		Version:    chi.URLParam(r, "version"),
 		Filename:   chi.URLParam(r, "filename"),
 		MediaType:  mediaType,
@@ -348,7 +349,7 @@ func (a *api) getFile(w http.ResponseWriter, r *http.Request) {
 	}
 	file, rc, err := a.reg.GetFile(r.Context(),
 		chi.URLParam(r, "repo"),
-		chi.URLParam(r, "name"),
+		packageName(r),
 		chi.URLParam(r, "version"),
 		chi.URLParam(r, "filename"),
 	)
@@ -378,15 +379,34 @@ func (a *api) deleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 	err := a.reg.DeleteFile(r.Context(),
 		chi.URLParam(r, "repo"),
-		chi.URLParam(r, "name"),
+		packageName(r),
 		chi.URLParam(r, "version"),
 		chi.URLParam(r, "filename"),
+		actor(r),
 	)
 	if err != nil {
 		a.writeRegistryError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// packageName returns the {name} segment of a package route, decoded. chi routes
+// on r.URL.RawPath when it is set and returns that segment still escaped, which is
+// how a scoped npm name has to arrive: @acme%2Fui, since a bare slash would end the
+// segment. With RawPath empty the segment comes from r.URL.Path, which is already
+// decoded, and decoding it again would turn foo%2541 into fooA. net/url set RawPath
+// only after decoding it, so the error cannot happen; the name is then not found.
+func packageName(r *http.Request) string {
+	name := chi.URLParam(r, "name")
+	if r.URL.RawPath == "" {
+		return name
+	}
+	decoded, err := url.PathUnescape(name)
+	if err != nil {
+		return name
+	}
+	return decoded
 }
 
 func (a *api) writeRegistryError(w http.ResponseWriter, r *http.Request, err error) {

@@ -409,27 +409,40 @@ func (o *OIDC) validate() error {
 	if o.Issuer == "" {
 		return fmt.Errorf("auth.oidc.issuer: required")
 	}
-	u, err := url.Parse(o.Issuer)
-	if err != nil || u.Host == "" {
-		return fmt.Errorf("auth.oidc.issuer: %q is not a URL", o.Issuer)
-	}
-	plainLoopback := u.Scheme == "http" && isLoopback(u.Hostname())
-	if u.Scheme != "https" && !plainLoopback {
-		return fmt.Errorf("auth.oidc.issuer: must be https (plain http is accepted only for a loopback address)")
+	if _, err := parseHTTPSOrLoopback("auth.oidc.issuer", o.Issuer); err != nil {
+		return err
 	}
 	if o.ClientID == "" {
 		return fmt.Errorf("auth.oidc.clientId: required")
 	}
 	if o.RedirectURL != "" {
-		r, err := url.Parse(o.RedirectURL)
-		if err != nil || r.Host == "" {
-			return fmt.Errorf("auth.oidc.redirectUrl: %q is not a URL", o.RedirectURL)
-		}
 		// The session cookie is Secure exactly when this is https, so plain
 		// http is allowed only where nothing else can see the traffic.
-		if r.Scheme != "https" && (r.Scheme != "http" || !isLoopback(r.Hostname())) {
-			return fmt.Errorf("auth.oidc.redirectUrl: must be https (plain http is accepted only for a loopback address)")
+		if _, err := parseHTTPSOrLoopback("auth.oidc.redirectUrl", o.RedirectURL); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// parseHTTPSOrLoopback parses a URL setting, accepting https anywhere and
+// plain http only for a loopback address. Errors name the field.
+func parseHTTPSOrLoopback(field, raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("%s: %q is not a URL", field, raw)
+	}
+	if err := checkHTTPSOrLoopback(field, u); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// checkHTTPSOrLoopback applies the scheme rule to a parsed URL. Its error
+// never includes the URL.
+func checkHTTPSOrLoopback(field string, u *url.URL) error {
+	if u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())) {
+		return fmt.Errorf("%s: must be https (plain http is accepted only for a loopback address)", field)
 	}
 	return nil
 }

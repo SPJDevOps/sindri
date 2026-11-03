@@ -64,7 +64,7 @@ func (r *Registry) ListPackageFiles(ctx context.Context, repo, pkg string) ([]Pa
 	if _, err := r.requirePyPIRepo(ctx, repo); err != nil {
 		return nil, err
 	}
-	normalized := normalizePackageName(pkg)
+	normalized := NormalizeName(model.ProtocolPyPI, pkg)
 	if normalized == "" {
 		return nil, fmt.Errorf("%w: package name is required", ErrInvalidInput)
 	}
@@ -107,7 +107,7 @@ func (r *Registry) GetFileByFilename(ctx context.Context, repo, pkg, filename st
 	if _, err := r.requirePyPIRepo(ctx, repo); err != nil {
 		return PackageFile{}, nil, err
 	}
-	normalized := normalizePackageName(pkg)
+	normalized := NormalizeName(model.ProtocolPyPI, pkg)
 	if normalized == "" {
 		return PackageFile{}, nil, fmt.Errorf("%w: package name is required", ErrInvalidInput)
 	}
@@ -127,6 +127,12 @@ func (r *Registry) GetFileByFilename(ctx context.Context, repo, pkg, filename st
 		return PackageFile{}, nil, fmt.Errorf("resolving file %s/%s/%s: %w", repo, pkg, filename, err)
 	}
 
+	return r.openPlacedFile(ctx, repo, row)
+}
+
+// openPlacedFile checks that a resolved file is placed in repo (I2) and opens
+// its bytes. Every by-filename read goes through it.
+func (r *Registry) openPlacedFile(ctx context.Context, repo string, row db.GetFileByFilenameRow) (PackageFile, io.ReadCloser, error) {
 	digest, err := model.ParseDigest(row.BlobDigest)
 	if err != nil {
 		return PackageFile{}, nil, fmt.Errorf("stored digest %q: %w", row.BlobDigest, err)
