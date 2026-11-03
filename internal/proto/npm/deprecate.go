@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+	"unicode"
 )
 
 // maxDeprecationBytes bounds one deprecation message.
@@ -60,6 +62,11 @@ func readDeprecations(pkg string, metadata []byte) (map[string]*string, error) {
 
 	messages := make(map[string]*string, len(versions))
 	for version, raw := range versions {
+		// Every version that exists passed this check at publish, and a NUL would
+		// otherwise reach Postgres and come back as a 500.
+		if !validVersion(version) {
+			return nil, errors.New("deprecate body has an invalid version")
+		}
 		var entry map[string]json.RawMessage
 		var message *string
 		if json.Unmarshal(raw, &entry) != nil || decodeMember(entry["deprecated"], &message) != nil {
@@ -67,6 +74,9 @@ func readDeprecations(pkg string, metadata []byte) (map[string]*string, error) {
 		}
 		if message != nil && len(*message) > maxDeprecationBytes {
 			return nil, errors.New("a deprecation message is too long")
+		}
+		if message != nil && strings.ContainsFunc(*message, unicode.IsControl) {
+			return nil, errors.New("a deprecation message holds a control character")
 		}
 		messages[version] = message
 	}

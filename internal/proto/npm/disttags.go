@@ -74,6 +74,10 @@ func (h *handler) setDistTag(w http.ResponseWriter, r *http.Request, rt route) {
 		writeError(w, http.StatusBadRequest, "dist-tag body must be a JSON string naming a version")
 		return
 	}
+	if !validVersion(version) {
+		writeError(w, http.StatusBadRequest, "dist-tag body must name a valid version")
+		return
+	}
 	principal, _ := auth.PrincipalFromContext(r.Context())
 	if err := h.reg.SetDistTag(r.Context(), rt.repo, rt.pkg, rt.tag, version, principal.Subject); err != nil {
 		mapRegistryError(w, err)
