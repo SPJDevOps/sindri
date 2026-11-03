@@ -95,7 +95,8 @@ func hashTarball(r io.Reader) (tarballInfo, error) {
 
 // inspectManifest returns the tarball's package.json with the fields only
 // Sindri may set removed. It is what the packument later serves, so the document
-// a reader sees is the one that gets installed.
+// a reader sees is the one that gets installed. The tarball must fit the grammar
+// scanManifest accepts: the forms npm pack and tar-stream write.
 func inspectManifest(r io.Reader) (json.RawMessage, error) {
 	return scanManifest(r, maxUnpackedBytes)
 }

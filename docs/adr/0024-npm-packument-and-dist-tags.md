@@ -30,9 +30,15 @@ abbreviated `Accept` types; npm accepted it for both.
 `integrity` and `shasum`. The publish body's `versions` entry only has to agree on `name`
 and `version`; if it disagrees, the publish gets a 400. Every other client field is ignored,
 so what the packument says is what the tarball holds, and manifest confusion has nowhere to
-start. Sindri parses tarballs with its own strict grammar and refuses anything npm pack would
-not write, because a second parser that disagrees with an installer is how manifest confusion
-returns.
+start. Sindri parses tarballs with its own strict grammar, which accepts the forms npm pack
+and tar-stream write and refuses the rest, because a second parser that disagrees with an
+installer is how manifest confusion returns. A filename with a colon, or ending in a dot or a
+space, is refused at publish, since Windows reads it differently, and so is any other spelling
+of `package.json` at depth one or less, in any case or as the NTFS short name `PACKAG~1.JSO`.
+
+The manifest is stored in jsonb, so publish also refuses nesting past 64 levels, a number
+longer than 1000 bytes, and an exponent past ±64. jsonb writes out every digit on read, so
+`1e1000` would be small to publish and large in every packument after it.
 
 **Integrity is checked at write time, and client values never reach a reader.** A body
 carries one version and one attachment. Sindri hashes the decoded bytes before `cas.Put`. A
@@ -45,7 +51,8 @@ streamed under PyPI's 512 MiB bound.
 **A published version is immutable, even for identical bytes.** `InsertFileImmutable`
 treats identical bytes as a no-op, which is right for PyPI but not here, so the publish
 transaction refuses any version that exists. The answer is a 409 with an `error` field,
-which npm prints as `E409`.
+which npm prints as `E409`. `registry.Publish` refuses an npm publish without
+`ExclusiveVersion`, so no caller can opt out.
 
 **Dist-tags are pointers to versions, outside the identity model.**
 `dist_tags(package_id, tag, version_id)` cascades from both parents. A dist-tag is not a
@@ -58,14 +65,18 @@ change appends to `dist_tag_events` (repository, package, tag, from and to versi
 time). The table is append-only by trigger, and holds no foreign key to the package or
 version, so it outlives a delete. A package always has a `latest`: the first publish sets
 it whatever `--tag` says, `npm dist-tag rm latest` is refused, and if `latest`'s version is
-deleted, the packument reports the highest non-prerelease version until someone sets a tag.
+deleted, the packument reports the highest non-prerelease version, or the highest prerelease
+if that is all there is, until someone sets a tag. `DeleteRepository` writes no events: its
+tags cascade away unrecorded, and the repository's earlier events remain.
 
 **`npm deprecate` writes one field.** The client GETs the packument with `?write=true` and
 PUTs the whole document back without `_attachments`, sending `deprecated: ""` to clear. A
 PUT with no attachments therefore reads only `versions[*].deprecated`, into a new nullable
-`versions.deprecated`. An unknown version is refused, and everything else in the body,
-`dist-tags` and `dist` included, is ignored. It is not recorded, because it cannot change
-which bytes an install resolves.
+`versions.deprecated`. Only `""` clears: a listed version whose field is absent or null stays
+as it is, so a client holding a stale document cannot erase a message someone added since. An
+unknown version is refused, a message with a control character is a 400, and everything else
+in the body, `dist-tags` and `dist` included, is ignored. It is not recorded, because it cannot
+change which bytes an install resolves.
 
 **npm names key exactly.** `normalizePackageName` folds `@acme/ui` to `acmeui` and merges
 `foo.bar` with `foo_bar`. Those are different npm packages, so one could take over the
@@ -95,7 +106,8 @@ links do not work for npm. With a clean cache, install failed with `ENOENT` on
 `file:../../..` path into `package-lock.json`. The Host header stays rejected for ADR 13's
 reason. `config check` requires `publicUrl` when any npm repository exists, with the https
 rule `auth.oidc.redirectUrl` has. It must be the origin in the client's `registry=`: npm
-sent no token to a tarball on another host, which Sindri would answer with a 401.
+sent no token to a tarball on another host, which Sindri would answer with a 401. A reload
+reports that a changed `publicUrl` needs a restart.
 
 **Routes** live under `/npm/{repository}/` and are parsed from `r.URL.EscapedPath()`, since
 clients send `@acme%2fui` and a decoded path loses the boundary. `-` is already a reserved
@@ -125,8 +137,10 @@ body, and each gets a named case in the npm route-walk test. They are the only e
 security rule 7. The body holds a secret and is never logged (rule 4).
 
 **Migration `00008` is additive.** It widens the `protocol` and `kind` CHECK constraints and
-adds the two tables and the column. An older binary ignores all of it. Down restores the old
-constraints as `NOT VALID`, so a rollback succeeds with npm rows present and deletes none.
+adds the two tables and the column. An older binary ignores all of it, and the rollback path
+of running the previous binary does not run Down. Down, if run, keeps repositories, packages,
+versions, and files, and restores the old constraints as `NOT VALID`, so it succeeds with npm
+rows present. It does drop `dist_tags`, `dist_tag_events`, and `versions.deprecated`.
 
 **The preset stays `npm`.** It is what `presets.go` and ARCHITECTURE.md already say, and it
 matches `pypi`. The roadmap's `npmjs` changes.
@@ -147,6 +161,9 @@ matches `pypi`. The roadmap's `npmjs` changes.
 - Two proxies in one virtual repository do not combine versions; the first with the package
   wins. A team that needs otherwise can reorder the members.
 - `npm view` shows no readme, because the packument omits it.
+- The login path carries the username npm prompted for, so a token typed there by mistake
+  would reach the access log, which records the path. The password travels in the body and
+  stays out of it.
 - Tag moves are recorded and OCI tag moves still are not. Bringing OCI in line is separate
   work.
 - npm inherits a gap that already exists for PyPI: `Registry.DeleteFile` removes an emptied

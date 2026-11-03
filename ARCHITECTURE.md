@@ -87,7 +87,7 @@ matter what version the upstream offers.
 ```
               +-----------------------------------------------+
               |             Protocol Adapters                 |
-              |   OCI  |  PyPI  |  (npm, Maven, Helm: post-v1)|
+              |   OCI  |  PyPI | npm | (Maven, Helm: post-v1) |
               +--------------------+--------------------------+
                                    |
               +--------------------v--------------------------+
@@ -141,6 +141,7 @@ internal/
   proto/
     oci/                 OCI distribution spec handlers
     pypi/                PEP 503/691 index and upload
+    npm/                 packument, tarball, publish, dist-tags, deprecate, login (ADR 24)
   remote/                proxy upstream fetch and caching
   resolve/               virtual repository ordered resolution
   reconcile/             YAML to database convergence
@@ -307,8 +308,8 @@ every request (ADR 5).
 
 `normalized_name` is the protocol's canonical form, lowercased with separators folded for
 PyPI per PEP 503. npm names are stored as written, because npm distinguishes case and
-`-`, `_`, and `.`. Uniqueness is on the normalized form so that `Foo.Bar` and `foo-bar`
-cannot both be claimed.
+`-`, `_`, and `.`. Uniqueness is on the normalized form, so in a PyPI repository `Foo.Bar`
+and `foo-bar` cannot both be claimed.
 
 A repository name may contain slashes, so that `team/internal` reads naturally in a
 `docker pull` or an index URL. It may not contain a segment an adapter splits paths on
@@ -427,6 +428,7 @@ such as manifests and evidence documents, where a staging round trip buys nothin
 | `/pypi/{repo}/simple/...` | PyPI index, PEP 503 and 691 |
 | `/pypi/{repo}/packages/...` | PyPI file download |
 | `/pypi/{repo}/upload` | PyPI upload, twine's POST |
+| `/npm/{repo}/...` | npm registry: packument, tarball, publish, deprecate, dist-tags, whoami, login (ADR 24) |
 | `/api/v1/...` | management API |
 | `/api/v1/lifecycle/stages` | ordered stages and their gates |
 | `/api/v1/subjects/{digest}/...` | identity, evidence, promote, revoke, ledger |
@@ -447,9 +449,12 @@ the cause goes to the log, tied to the same request id.
 
 ### Authentication and authorization
 
-Every route except `/healthz`, `/readyz`, `/metrics`, and `/auth/*` needs a
-credential. There is no anonymous pull in v1. A credential arrives as a Bearer
-token or as the password of HTTP Basic, which is what docker, pip, and twine
+Every route except `/healthz`, `/readyz`, `/metrics`, `/auth/*`, and npm's two
+login routes needs a credential. There is no anonymous pull in v1. The login
+routes, `/npm/{repo}/-/v1/login` and `/npm/{repo}/-/user/org.couchdb.user:{name}`,
+expose no repository data: the first is a constant 404, and the second takes its
+credential in the body and verifies it (ADR 24). A credential arrives as a Bearer
+token or as the password of HTTP Basic, which is what docker, pip, twine, and npm
 send. Its shape picks the verifier:
 
 - a `sindri_` machine token, looked up by hash
@@ -459,7 +464,7 @@ send. Its shape picks the verifier:
 Users' groups come from their token on each request and are never stored.
 
 `auth.Authorize(principal, repository, role)` is the one authorization
-function, and every surface calls it: both adapters, the management API, and
+function, and every surface calls it: every adapter, the management API, and
 the UI guard. It is pure and reads only the repository row. Write implies read
 and admin implies everything. A caller who cannot read a repository is told it
 does not exist. A virtual repository answers only from members the caller can
@@ -573,6 +578,13 @@ The long form has three kinds: `Repository`, `OrgPolicy`, and `Lifecycle`. The s
 the repository `payments/python`. `OrgPolicy.spec.namespaces` names who may apply each
 namespace. They may change only that namespace, and never a `locked` repository
 (ADR 17).
+
+`publicUrl` is a top-level setting: the origin clients reach this server at. npm
+packuments carry absolute tarball links built from it, because the Host header is client
+input and root-relative links do not work for npm. `config check` requires it when any
+npm repository is declared, under the https rule `auth.oidc.redirectUrl` has. It must be
+an origin with no path, and the same origin as the client's `registry=`. A reload reports
+that a change needs a restart (ADR 24).
 
 ### 8.2 Inference rules
 
