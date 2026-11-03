@@ -251,6 +251,11 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	if npm && p.DistTag == "" {
 		return model.File{}, fmt.Errorf("%w: an npm publish needs a dist-tag", ErrInvalidInput)
 	}
+	// A version is immutable (ADR 24). Without this a caller could replace its
+	// bytes through the upsert below.
+	if npm && !p.ExclusiveVersion {
+		return model.File{}, fmt.Errorf("%w: an npm publish must not replace a version", ErrInvalidInput)
+	}
 
 	info, err := r.cas.Put(ctx, p.Body, p.ExpectDigest, p.Size)
 	if err != nil {

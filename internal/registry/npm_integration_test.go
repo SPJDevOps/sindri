@@ -193,6 +193,35 @@ func TestPublish_NpmRepositoryRefusesPublishWithoutDistTag(t *testing.T) {
 	}
 }
 
+func TestPublish_NpmRepositoryRefusesPublishThatMayReplaceAVersion(t *testing.T) {
+	f := newNPMFixture(t)
+	f.mustPublish("left-pad", "1.0.0", "latest", "bytes-1")
+
+	_, err := f.reg.Publish(t.Context(), registry.PublishParams{
+		Repo: f.repo, Package: "left-pad", Version: "1.0.0",
+		Filename:   "left-pad-1.0.0.tgz",
+		Body:       bytes.NewReader([]byte("other bytes")),
+		Size:       int64(len("other bytes")),
+		DistTag:    "latest",
+		Actor:      "alice",
+		Provenance: model.Provenance{SourceType: model.ProvenanceNPMPublish},
+	})
+	if !errors.Is(err, registry.ErrInvalidInput) {
+		t.Fatalf("publish without ExclusiveVersion = %v, want ErrInvalidInput", err)
+	}
+	_, rc, err := f.reg.GetNPMTarball(t.Context(), f.repo, "left-pad", "left-pad-1.0.0.tgz")
+	if err != nil {
+		t.Fatalf("GetNPMTarball: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	if body, _ := io.ReadAll(rc); string(body) != "bytes-1" {
+		t.Fatalf("tarball = %q, want the original bytes", body)
+	}
+	if n := f.count(`SELECT count(*) FROM blobs`); n != 1 {
+		t.Fatalf("blobs = %d, want the refused bytes never stored", n)
+	}
+}
+
 func TestRemoveDistTag_LatestIsRefused(t *testing.T) {
 	f := newNPMFixture(t)
 	f.mustPublish("left-pad", "1.0.0", "latest", "bytes-1")
