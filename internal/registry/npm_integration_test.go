@@ -248,7 +248,7 @@ func TestSetDeprecations_UnknownVersionWritesNothing(t *testing.T) {
 	f := newNPMFixture(t)
 	f.mustPublish("left-pad", "1.0.0", "latest", "bytes-1")
 
-	err := f.reg.SetDeprecations(t.Context(), f.repo, "left-pad", map[string]string{"1.0.0": "old", "9.9.9": "old"})
+	err := f.reg.SetDeprecations(t.Context(), f.repo, "left-pad", map[string]*string{"1.0.0": new("old"), "9.9.9": new("old")})
 	if !errors.Is(err, registry.ErrNotFound) {
 		t.Fatalf("SetDeprecations = %v, want ErrNotFound", err)
 	}
@@ -272,13 +272,13 @@ func TestSetDeprecations_EmptyMessageClears(t *testing.T) {
 		return got.Versions[0].Deprecated
 	}
 
-	if err := f.reg.SetDeprecations(t.Context(), f.repo, "left-pad", map[string]string{"1.0.0": "use something else"}); err != nil {
+	if err := f.reg.SetDeprecations(t.Context(), f.repo, "left-pad", map[string]*string{"1.0.0": new("use something else")}); err != nil {
 		t.Fatalf("deprecate: %v", err)
 	}
 	if got := deprecated(); got != "use something else" {
 		t.Fatalf("deprecated = %q", got)
 	}
-	if err := f.reg.SetDeprecations(t.Context(), f.repo, "left-pad", map[string]string{"1.0.0": ""}); err != nil {
+	if err := f.reg.SetDeprecations(t.Context(), f.repo, "left-pad", map[string]*string{"1.0.0": new("")}); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	if got := deprecated(); got != "" {
@@ -286,6 +286,27 @@ func TestSetDeprecations_EmptyMessageClears(t *testing.T) {
 	}
 	if n := f.count(`SELECT count(*) FROM versions WHERE deprecated IS NULL`); n != 1 {
 		t.Fatalf("a cleared message must be NULL, rows with NULL = %d", n)
+	}
+}
+
+func TestSetDeprecations_NilLeavesAVersionAsItIs(t *testing.T) {
+	f := newNPMFixture(t)
+	f.mustPublish("left-pad", "1.0.0", "latest", "bytes-1")
+	if err := f.reg.SetDeprecations(t.Context(), f.repo, "left-pad", map[string]*string{"1.0.0": new("old")}); err != nil {
+		t.Fatalf("deprecate: %v", err)
+	}
+	if err := f.reg.SetDeprecations(t.Context(), f.repo, "left-pad", map[string]*string{"1.0.0": nil}); err != nil {
+		t.Fatalf("SetDeprecations with nil: %v", err)
+	}
+	got, err := f.reg.GetNPMPackage(t.Context(), f.repo, "left-pad")
+	if err != nil {
+		t.Fatalf("GetNPMPackage: %v", err)
+	}
+	if got.Versions[0].Deprecated != "old" {
+		t.Fatalf("deprecated = %q, want it unchanged", got.Versions[0].Deprecated)
+	}
+	if err := f.reg.SetDeprecations(t.Context(), f.repo, "left-pad", map[string]*string{"9.9.9": nil}); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("nil for an unknown version = %v, want ErrNotFound", err)
 	}
 }
 

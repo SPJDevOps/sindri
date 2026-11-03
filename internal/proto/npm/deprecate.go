@@ -30,10 +30,13 @@ func (h *handler) handleDeprecate(w http.ResponseWriter, r *http.Request, rt rou
 	writeJSON(w, http.StatusCreated, map[string]bool{"ok": true})
 }
 
-// readDeprecations returns the message for each version the body lists: the
-// deprecated field, or "" when the version has none, which clears it. The top
-// level is read as handlePublish reads it. The errors never quote the document.
-func readDeprecations(pkg string, metadata []byte) (map[string]string, error) {
+// readDeprecations returns the message for each version the body lists. Only
+// deprecated: "" clears, as npm sends it. A field that is absent or null means no
+// change, because the client PUTs back a whole document it read earlier, and a
+// message someone added since then must survive that. Such a version is still
+// listed, so an unknown one is still refused. The top level is read as
+// handlePublish reads it. The errors never quote the document.
+func readDeprecations(pkg string, metadata []byte) (map[string]*string, error) {
 	top, err := decodeTopLevel(metadata)
 	if err != nil {
 		return nil, errors.New("deprecate body is not a JSON object")
@@ -55,21 +58,17 @@ func readDeprecations(pkg string, metadata []byte) (map[string]string, error) {
 		return nil, errors.New("deprecate body lists no versions")
 	}
 
-	messages := make(map[string]string, len(versions))
+	messages := make(map[string]*string, len(versions))
 	for version, raw := range versions {
 		var entry map[string]json.RawMessage
 		var message *string
 		if json.Unmarshal(raw, &entry) != nil || decodeMember(entry["deprecated"], &message) != nil {
 			return nil, errors.New("deprecate body has a version entry of the wrong type")
 		}
-		if message == nil {
-			messages[version] = ""
-			continue
-		}
-		if len(*message) > maxDeprecationBytes {
+		if message != nil && len(*message) > maxDeprecationBytes {
 			return nil, errors.New("a deprecation message is too long")
 		}
-		messages[version] = *message
+		messages[version] = message
 	}
 	return messages, nil
 }

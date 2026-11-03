@@ -260,9 +260,10 @@ func (r *Registry) RemoveDistTag(ctx context.Context, repo, name, tag, actor str
 }
 
 // SetDeprecations sets the deprecation message of each named version; an empty
-// message clears it. It is all or nothing: one unknown version refuses the
-// whole call with ErrNotFound and writes nothing.
-func (r *Registry) SetDeprecations(ctx context.Context, repo, name string, messages map[string]string) error {
+// message clears it, and nil leaves the version as it is. It is all or nothing:
+// one unknown version, even with nil, refuses the whole call with ErrNotFound and
+// writes nothing.
+func (r *Registry) SetDeprecations(ctx context.Context, repo, name string, messages map[string]*string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning deprecation transaction: %w", err)
@@ -282,9 +283,12 @@ func (r *Registry) SetDeprecations(ctx context.Context, repo, name string, messa
 			}
 			return fmt.Errorf("looking up version %s: %w", version, err)
 		}
+		if message == nil {
+			continue
+		}
 		if _, err := q.SetVersionDeprecated(ctx, db.SetVersionDeprecatedParams{
 			ID:         ver.ID,
-			Deprecated: pgtype.Text{String: message, Valid: message != ""},
+			Deprecated: pgtype.Text{String: *message, Valid: *message != ""},
 		}); err != nil {
 			return fmt.Errorf("deprecating version %s: %w", version, err)
 		}

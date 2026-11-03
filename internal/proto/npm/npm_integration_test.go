@@ -895,7 +895,7 @@ func TestPackument_ReportsDeprecatedAndFallsBackLatest(t *testing.T) {
 		for _, v := range []string{"1.9.0", "1.10.0", "2.0.0-rc.1"} {
 			f.mustPublishTagged("foo", v, "next")
 		}
-		if err := f.reg.SetDeprecations(ctx, testRepo, "foo", map[string]string{"1.9.0": "use 1.10"}); err != nil {
+		if err := f.reg.SetDeprecations(ctx, testRepo, "foo", map[string]*string{"1.9.0": new("use 1.10")}); err != nil {
 			t.Fatalf("SetDeprecations: %v", err)
 		}
 		if err := f.reg.DeleteFile(ctx, testRepo, "foo", "1.0.0", "foo-1.0.0.tgz", "alice"); err != nil {
@@ -1176,24 +1176,54 @@ func TestDeprecate_OnlyTheDeprecatedFieldIsRead(t *testing.T) {
 	}
 }
 
-func TestDeprecate_ClearAndAbsent(t *testing.T) {
+func TestDeprecate_OnlyAnEmptyStringClears(t *testing.T) {
 	f := newFixture(t, testPublicURL)
-	for _, v := range []string{"1.0.0", "2.0.0", "3.0.0"} {
+	for _, v := range []string{"1.0.0", "2.0.0", "3.0.0", "4.0.0"} {
 		f.mustPublish("foo", v)
 	}
-	if status, got := f.deprecate(adminToken, f.deprecateBody("foo", map[string]any{"1.0.0": "a", "2.0.0": "b", "3.0.0": "c"})); status != http.StatusCreated {
+	if status, got := f.deprecate(adminToken, f.deprecateBody("foo", map[string]any{"1.0.0": "a", "2.0.0": "b", "3.0.0": "c", "4.0.0": "d"})); status != http.StatusCreated {
 		t.Fatalf("deprecate = %d %s", status, got)
 	}
 
-	// 1.0.0 is cleared by an empty string, 2.0.0 by a missing field, and 3.0.0
-	// is not listed.
-	if status, got := f.deprecate(adminToken, f.deprecateBody("foo", map[string]any{"1.0.0": "", "2.0.0": absent})); status != http.StatusCreated {
+	// Only 1.0.0's empty string clears. A client that read the packument before
+	// someone else deprecated a version sends it back with no field, or a null,
+	// and that must not erase their message. 4.0.0 is not listed at all.
+	stale := f.deprecateBody("foo", map[string]any{"1.0.0": "", "2.0.0": absent, "3.0.0": nil})
+	if status, got := f.deprecate(adminToken, stale); status != http.StatusCreated {
 		t.Fatalf("clear = %d %s", status, got)
 	}
-	for v, want := range map[string]string{"1.0.0": "", "2.0.0": "", "3.0.0": "c"} {
+	for v, want := range map[string]string{"1.0.0": "", "2.0.0": "b", "3.0.0": "c", "4.0.0": "d"} {
 		if got := f.deprecatedOf("foo", v); got != want {
 			t.Fatalf("deprecated of %s = %q, want %q", v, got, want)
 		}
+	}
+}
+
+func TestDeprecate_NothingToChangeSucceedsAndChangesNothing(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublish("foo", "1.0.0")
+	if status, got := f.deprecate(adminToken, f.deprecateBody("foo", map[string]any{"1.0.0": "a"})); status != http.StatusCreated {
+		t.Fatalf("deprecate = %d %s", status, got)
+	}
+	if status, got := f.deprecate(adminToken, f.deprecateBody("foo", map[string]any{"1.0.0": absent})); status != http.StatusCreated {
+		t.Fatalf("PUT with no field = %d %s", status, got)
+	}
+	if got := f.deprecatedOf("foo", "1.0.0"); got != "a" {
+		t.Fatalf("deprecated = %q, want it unchanged", got)
+	}
+}
+
+// A stale document can list a version that has since been deleted. That is still
+// an unknown version, whether or not its entry has a deprecated field.
+func TestDeprecate_UnknownVersionWithNoFieldIs404AndWritesNothing(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	f.mustPublish("foo", "1.0.0")
+	status, got := f.deprecate(adminToken, f.deprecateBody("foo", map[string]any{"1.0.0": "old", "9.9.9": absent}))
+	if status != http.StatusNotFound {
+		t.Fatalf("deprecate = %d %s, want 404", status, got)
+	}
+	if d := f.deprecatedOf("foo", "1.0.0"); d != "" {
+		t.Fatalf("1.0.0 deprecated = %q after a refused call", d)
 	}
 }
 
