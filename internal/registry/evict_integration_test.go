@@ -219,6 +219,57 @@ func TestEvictProxyCache_StaleIndexHitEvictsTheProjectsCachedFiles(t *testing.T)
 	}
 }
 
+// Retention treats a cached packument as it treats a PyPI index: the entry and
+// the tarballs it justified go in one transaction. npm names key exactly, so a
+// name that PEP 503 would fold onto the evicted one keeps its files.
+func TestEvictProxyCache_StalePackumentEvictsOnlyThatPackagesTarballs(t *testing.T) {
+	f := newEvictFixture(t)
+	ctx := t.Context()
+	f.proxy("npmproxy", model.ProtocolNPM, 60, 0)
+	document, err := f.reg.StoreMetadataBlob(ctx, []byte(`{"name":"foo.bar"}`))
+	if err != nil {
+		t.Fatalf("StoreMetadataBlob: %v", err)
+	}
+	key := registry.CacheKeyNPMPackument("foo.bar")
+	if key != "npm:packument:foo.bar" {
+		t.Fatalf("CacheKeyNPMPackument = %q", key)
+	}
+	if err := f.reg.PutCacheEntry(ctx, "npmproxy", key, registry.CacheHit, document.String()); err != nil {
+		t.Fatalf("PutCacheEntry: %v", err)
+	}
+	for _, pkg := range []string{"foo.bar", "foo_bar", "Foo.Bar"} {
+		dist, err := f.cas.PutBytes(ctx, []byte("a cached tarball of "+pkg))
+		if err != nil {
+			t.Fatalf("PutBytes: %v", err)
+		}
+		if _, err := f.reg.PlaceCachedFile(ctx, registry.PlaceCachedFileParams{
+			Repo: "npmproxy", Package: pkg, Version: "1.0.0", Filename: pkg + "-1.0.0.tgz", Blob: dist,
+		}); err != nil {
+			t.Fatalf("PlaceCachedFile %s: %v", pkg, err)
+		}
+	}
+	f.fetchedAgo(key, 2*staleAfter)
+
+	if res := f.evict(); res.Hits != 1 {
+		t.Fatalf("evict = %+v, want one hit", res)
+	}
+	if n := f.entries(key); n != 0 {
+		t.Fatalf("remote_cache holds %d rows after evicting the packument", n)
+	}
+	if n := f.count(`SELECT count(*) FROM packages WHERE normalized_name = 'foo.bar'`); n != 0 {
+		t.Fatalf("the evicted package still has %d rows", n)
+	}
+	for table, n := range map[string]int{
+		"files":    f.count(`SELECT count(*) FROM files`),
+		"versions": f.count(`SELECT count(*) FROM versions`),
+		"packages": f.count(`SELECT count(*) FROM packages`),
+	} {
+		if n != 2 {
+			t.Fatalf("%s holds %d rows, want the two other names' rows untouched", table, n)
+		}
+	}
+}
+
 // A hosted repository is never a cache. Even a remote_cache row pointing at
 // one, which no code path writes, must not let retention remove a hosted tag.
 func TestEvictProxyCache_HostedRepositoriesAreNeverTouched(t *testing.T) {
