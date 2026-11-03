@@ -98,7 +98,10 @@ ARCHITECTURE.md section 8 and ADR 7.
 There are two golden tests. `TestManifests_ShortAndLongFormsAreIdentical` compares the
 loaded trees. `TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState` compares the
 database each form produces. A new configuration field is not done until
-`testdata/config/sindri.yaml` and `testdata/manifests/` both use it.
+`testdata/config/sindri.yaml` and `testdata/manifests/` both use it. The exception is
+server-level settings (`listen`, `storage`, `database`, `auth`, `publicUrl`): manifests
+describe repositories and lifecycle, so these have no manifest form and appear in
+`testdata/config/sindri.yaml` only.
 
 The reconciler owns rows with `managed_by = config`, and records which trigger owns
 each (`serve --config` or `sindri apply`). The API, the reconciler, and the two
