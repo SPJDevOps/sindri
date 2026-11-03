@@ -180,6 +180,9 @@ func restartSections(before, after *config.Config) []string {
 	if before.Listen != after.Listen {
 		out = append(out, "listen")
 	}
+	if before.PublicURL != after.PublicURL {
+		out = append(out, "publicUrl")
+	}
 	if before.Storage != after.Storage {
 		out = append(out, "storage")
 	}

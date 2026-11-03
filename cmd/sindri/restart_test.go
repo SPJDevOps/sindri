@@ -21,6 +21,11 @@ func TestRestartSections(t *testing.T) {
 			want:   []string{"worker"},
 		},
 		{
+			name:   "PublicURL",
+			change: func(c *config.Config) { c.PublicURL = "https://sindri.example.com" },
+			want:   []string{"publicUrl"},
+		},
+		{
 			name:   "AdminsReloadInPlace",
 			change: func(c *config.Config) { c.Auth.Admins = []string{"ops"} },
 		},
