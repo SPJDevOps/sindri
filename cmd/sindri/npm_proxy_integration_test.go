@@ -28,15 +28,17 @@ type npmUpstream struct {
 	documents map[string]map[string]any
 	files     map[string][]byte
 	requests  int
+	asked     map[string]int
 }
 
 func newNpmUpstream(t *testing.T) *npmUpstream {
 	t.Helper()
-	u := &npmUpstream{documents: map[string]map[string]any{}, files: map[string][]byte{}}
+	u := &npmUpstream{documents: map[string]map[string]any{}, files: map[string][]byte{}, asked: map[string]int{}}
 	u.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u.mu.Lock()
 		defer u.mu.Unlock()
 		u.requests++
+		u.asked[r.RequestURI]++
 		if doc, ok := u.documents[r.RequestURI]; ok {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(doc)
@@ -81,6 +83,12 @@ func (u *npmUpstream) requestCount() int {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.requests
+}
+
+func (u *npmUpstream) askedFor(uri string) int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.asked[uri]
 }
 
 func readTestFile(t *testing.T, path string) []byte {
@@ -170,4 +178,89 @@ func TestNpm_InstallsThroughAProxyAndAgainWithTheUpstreamDown(t *testing.T) {
 	}
 
 	n.mustFail("502", t.TempDir(), "install", "@acme/demo@2.0.0", "--fetch-retries=0")
+}
+
+// One virtual URL gives real npm a hosted package and a public one, and the lockfile
+// names only that URL. The stub offers a hostile @acme/lib@99.0.0, newest of all, and
+// a new name in the hosted scope. The hosted scope never reaches it.
+func TestNpm_OneVirtualURLInstallsAHostedAndAPublicPackage(t *testing.T) {
+	const virtual = "all"
+	up := newNpmUpstream(t)
+	addr := freeAddr(t)
+	repos := fmt.Sprintf("repos:\n  %s: { protocol: npm }\n  %s:\n    protocol: npm\n    upstream: { url: %q, ttl: 1h, negativeTtl: 1h }\n  %s: { members: [%s, %s] }\n",
+		npmRepo, npmProxyRepo, up.srv.URL, virtual, npmProxyRepo, npmRepo)
+	s := startServeOn(t, addr, testsupport.DatabaseURL(t), "", "publicUrl: http://"+addr+"\n"+repos, nil)
+	n := newNpm(t, s, virtual, bootstrapToken)
+
+	newNpm(t, s, npmRepo, bootstrapToken).publish("@acme/lib", "1.0.0")
+
+	publicPath, publicIntegrity := packIntegrity(t, n, writeNpmPackage(t, "left-pad", "1.3.0"))
+	up.addVersion("/left-pad", "left-pad", "1.3.0", readTestFile(t, publicPath), map[string]any{"integrity": publicIntegrity})
+	up.setLatest("/left-pad", "1.3.0")
+	for _, name := range []string{"@acme/lib", "@acme/new"} {
+		uri := "/" + strings.ReplaceAll(name, "/", "%2f")
+		hostilePath, hostileIntegrity := packIntegrity(t, n, writeNpmPackage(t, name, "99.0.0"))
+		up.addVersion(uri, name, "99.0.0", readTestFile(t, hostilePath), map[string]any{"integrity": hostileIntegrity})
+		up.setLatest(uri, "99.0.0")
+	}
+
+	dir, _ := n.install("@acme/lib", "left-pad")
+	if got := readTestFile(t, filepath.Join(dir, "node_modules", "@acme", "lib", "index.js")); !strings.Contains(string(got), "@acme/lib@1.0.0") {
+		t.Fatalf("installed %s, want the hosted 1.0.0", got)
+	}
+	if got := readTestFile(t, filepath.Join(dir, "node_modules", "left-pad", "index.js")); !strings.Contains(string(got), "left-pad@1.3.0") {
+		t.Fatalf("installed %s, want the public 1.3.0", got)
+	}
+
+	var lock struct {
+		Packages map[string]struct {
+			Resolved string `json:"resolved"`
+		} `json:"packages"`
+	}
+	if err := json.Unmarshal(readTestFile(t, filepath.Join(dir, "package-lock.json")), &lock); err != nil {
+		t.Fatal(err)
+	}
+	for name, file := range map[string]string{"@acme/lib": "lib-1.0.0.tgz", "left-pad": "left-pad-1.3.0.tgz"} {
+		want := "http://" + addr + "/npm/" + virtual + "/" + name + "/-/" + file
+		if got := lock.Packages["node_modules/"+name].Resolved; got != want {
+			t.Fatalf("%s resolved = %q, want %q", name, got, want)
+		}
+	}
+	if up.askedFor("/left-pad") == 0 {
+		t.Fatal("the public package never reached the upstream")
+	}
+
+	n.mustFail("ETARGET", t.TempDir(), "install", "@acme/lib@99.0.0")
+	n.mustFail("E404", t.TempDir(), "install", "@acme/new")
+	for _, uri := range []string{"/@acme%2flib", "/@acme%2fnew"} {
+		if got := up.askedFor(uri); got != 0 {
+			t.Fatalf("the hosted scope reached the upstream: %d requests for %s", got, uri)
+		}
+	}
+}
+
+// Through the real wiring: a token scoped to the virtual repository may address it
+// and may read none of its members. The virtual repository republishes nothing, and
+// a name the hosted member claims does not fall through to the proxy.
+func TestNpm_VirtualRepositoryAnswersOnlyFromMembersTheCallerMayRead(t *testing.T) {
+	const virtual = "all"
+	up := newNpmUpstream(t)
+	addr := freeAddr(t)
+	repos := fmt.Sprintf("repos:\n  %s: { protocol: npm }\n  %s:\n    protocol: npm\n    upstream: { url: %q, ttl: 1h, negativeTtl: 1h }\n  %s: { members: [%s, %s] }\n",
+		npmRepo, npmProxyRepo, up.srv.URL, virtual, npmRepo, npmProxyRepo)
+	s := startServeOn(t, addr, testsupport.DatabaseURL(t), "", "publicUrl: http://"+addr+"\n"+repos, nil)
+	newNpm(t, s, npmRepo, bootstrapToken).publish("@acme/lib", "1.0.0")
+
+	token := s.issueToken(`{"name":"ci-virtual","repository":"` + virtual + `","role":"read"}`)
+	for _, path := range []string{"@acme%2flib", "@acme/lib/-/lib-1.0.0.tgz", "@acme%2fnew", "left-pad"} {
+		if r := s.request(http.MethodGet, "/npm/"+virtual+"/"+path, nil, bearer(token.Token)); r.status != http.StatusNotFound {
+			t.Fatalf("GET %s = %d %s, want 404", path, r.status, r.body)
+		}
+	}
+	if r := s.request(http.MethodGet, "/npm/"+virtual+"/@acme%2flib", nil, bearer(bootstrapToken)); r.status != http.StatusOK {
+		t.Fatalf("an admin's read = %d %s, want 200", r.status, r.body)
+	}
+	if got := up.requestCount(); got != 0 {
+		t.Fatalf("%d upstream requests on behalf of a caller who may read no member", got)
+	}
 }
