@@ -285,7 +285,9 @@ func (r *Registry) ListMembers(ctx context.Context, virtualName string) ([]model
 }
 
 // PackageClaimed reports whether a hosted repository has ever published the
-// normalized package name. Used by the name-claim rule (I5).
+// normalized package name. Used by the name-claim rule (I5). The answer rests
+// on the package row, which DeleteFile keeps on a hosted repository, so only
+// deleting the repository releases a claim.
 func (r *Registry) PackageClaimed(ctx context.Context, repoName, normalizedName string) (bool, error) {
 	repo, err := r.q.GetRepositoryByName(ctx, repoName)
 	if err != nil {

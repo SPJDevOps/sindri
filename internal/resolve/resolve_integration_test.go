@@ -311,12 +311,25 @@ func TestDependencyConfusion_HostedNameIsNeverServedFromProxy(t *testing.T) {
 	})
 }
 
-func runDependencyConfusion(t *testing.T, members []string, tag string) {
+const (
+	confusionHostedFile  = "our_internal_lib-1.0.0-py3-none-any.whl"
+	confusionHostileFile = "our_internal_lib-99.0.0-py3-none-any.whl"
+)
+
+// confusionFixture is a virtual repository over a hosted member holding
+// our-internal-lib 1.0.0 and a proxy whose upstream offers a hostile 99.0.0.
+type confusionFixture struct {
+	*testEnv
+	hosted, virtual string
+	hostedWheel     []byte
+}
+
+func newConfusionFixture(t *testing.T, members []string, hostedName, tag string) *confusionFixture {
 	t.Helper()
 	hostedWheel := []byte("safe-1.0.0")
 	hostileWheel := []byte("hostile-99.0.0")
-	hostedFile := "our_internal_lib-1.0.0-py3-none-any.whl"
-	hostileFile := "our_internal_lib-99.0.0-py3-none-any.whl"
+	hostedFile := confusionHostedFile
+	hostileFile := confusionHostileFile
 
 	env := newEnv(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -337,7 +350,6 @@ func runDependencyConfusion(t *testing.T, members []string, tag string) {
 		}
 	})
 
-	hostedName := "hosted/internal-" + tag
 	proxyName := "proxy/pypi-" + tag
 	virtName := "python-" + tag
 	mapped := make([]string, len(members))
@@ -370,6 +382,14 @@ func runDependencyConfusion(t *testing.T, members []string, tag string) {
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
+	return &confusionFixture{testEnv: env, hosted: hostedName, virtual: virtName, hostedWheel: hostedWheel}
+}
+
+func runDependencyConfusion(t *testing.T, members []string, tag string) {
+	t.Helper()
+	env := newConfusionFixture(t, members, "hosted/internal-"+tag, tag)
+	virtName, hostedWheel := env.virtual, env.hostedWheel
+	hostedFile, hostileFile := confusionHostedFile, confusionHostileFile
 
 	before := env.requests.Load()
 	idx := env.do(t, http.MethodGet, "/pypi/"+virtName+"/simple/our-internal-lib/", nil,
@@ -394,6 +414,87 @@ func runDependencyConfusion(t *testing.T, members []string, tag string) {
 	}
 	if env.requests.Load() != before {
 		t.Fatalf("dependency confusion contacted upstream: before=%d after=%d", before, env.requests.Load())
+	}
+}
+
+// TestDependencyConfusion_DeletedHostedNameIsNeverServedFromProxy extends the I5
+// guard past deletion: a name stays claimed after its last file goes, so the
+// attacker's 99.0.0 cannot appear the moment the owner removes their only
+// release. The request fails loudly and upstream is never contacted.
+func TestDependencyConfusion_DeletedHostedNameIsNeverServedFromProxy(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		members []string
+		tag     string
+	}{
+		{"HostedFirst", []string{"hosted/internal", "proxy/pypi-public"}, "dhf"},
+		{"ProxyFirstStillClaims", []string{"proxy/pypi-public", "hosted/internal"}, "dpf"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// No slash in the name: the management API's {repo} is one path segment.
+			env := newConfusionFixture(t, tc.members, "internal-"+tc.tag, tc.tag)
+
+			del := env.do(t, http.MethodDelete, "/api/v1/repositories/"+env.hosted+
+				"/packages/our-internal-lib/versions/1.0.0/files/"+confusionHostedFile, nil, "")
+			if del.Code != http.StatusNoContent {
+				t.Fatalf("delete: %d %s", del.Code, del.Body.String())
+			}
+
+			before := env.requests.Load()
+			idx := env.do(t, http.MethodGet, "/pypi/"+env.virtual+"/simple/our-internal-lib/", nil,
+				"application/vnd.pypi.simple.v1+json")
+			if idx.Code != http.StatusNotFound {
+				t.Fatalf("index of a deleted name = %d, want 404: %s", idx.Code, idx.Body.String())
+			}
+			if strings.Contains(idx.Body.String(), "99.0.0") {
+				t.Fatalf("index leaked upstream version: %s", idx.Body.String())
+			}
+			dl := env.do(t, http.MethodGet, "/pypi/"+env.virtual+"/packages/our-internal-lib/"+confusionHostileFile, nil, "")
+			if dl.Code != http.StatusNotFound {
+				t.Fatalf("hostile file = %d, want 404", dl.Code)
+			}
+			if got := env.requests.Load(); got != before {
+				t.Fatalf("a deleted hosted name contacted upstream: before=%d after=%d", before, got)
+			}
+		})
+	}
+}
+
+// The name is claimed but has nothing to install, so neither root index offers
+// it. Publishing into the kept row brings it back, from the hosted member.
+func TestVirtual_EmptiedHostedNameLeavesTheIndexAndReturnsOnRepublish(t *testing.T) {
+	env := newConfusionFixture(t, []string{"hosted/internal", "proxy/pypi-public"}, "hosted/internal-rep", "rep")
+	roots := []string{env.hosted, env.virtual}
+	const jsonIndex = "application/vnd.pypi.simple.v1+json"
+
+	for _, repo := range roots {
+		root := env.do(t, http.MethodGet, "/pypi/"+repo+"/simple/", nil, jsonIndex)
+		if root.Code != http.StatusOK || !strings.Contains(root.Body.String(), "our-internal-lib") {
+			t.Fatalf("%s root before delete: %d %s", repo, root.Code, root.Body.String())
+		}
+	}
+
+	if err := env.reg.DeleteFile(t.Context(), env.hosted, "our-internal-lib", "1.0.0", confusionHostedFile, "test"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+	for _, repo := range roots {
+		root := env.do(t, http.MethodGet, "/pypi/"+repo+"/simple/", nil, jsonIndex)
+		if root.Code != http.StatusOK || strings.Contains(root.Body.String(), "our-internal-lib") {
+			t.Fatalf("%s root after delete: %d %s", repo, root.Code, root.Body.String())
+		}
+	}
+
+	wheel := []byte("safe-1.0.1")
+	if _, err := env.reg.Publish(t.Context(), registry.PublishParams{
+		Repo: env.hosted, Package: "our-internal-lib", Version: "1.0.1",
+		Filename: "our_internal_lib-1.0.1-py3-none-any.whl",
+		Body:     bytes.NewReader(wheel), Size: int64(len(wheel)), Immutable: true,
+	}); err != nil {
+		t.Fatalf("republish: %v", err)
+	}
+	idx := env.do(t, http.MethodGet, "/pypi/"+env.virtual+"/simple/our-internal-lib/", nil, jsonIndex)
+	if idx.Code != http.StatusOK || !strings.Contains(idx.Body.String(), "1.0.1") || strings.Contains(idx.Body.String(), "99.0.0") {
+		t.Fatalf("index after republish: %d %s", idx.Code, idx.Body.String())
 	}
 }
 

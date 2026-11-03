@@ -319,6 +319,40 @@ func TestUI_PyPIPackagePageGroupsFilesByVersion(t *testing.T) {
 	}
 }
 
+// A deleted name stays claimed (SIN-49) but has nothing to show.
+func TestUI_EmptiedPackageIsNotShown(t *testing.T) {
+	e := newEnv(t)
+	for _, name := range []string{"demo", "other"} {
+		if _, err := e.reg.Publish(t.Context(), registry.PublishParams{
+			Repo: "py", Package: name, Version: "1.0", Filename: name + "-1.0.tar.gz",
+			Body: strings.NewReader("sdist " + name), Size: int64(len("sdist " + name)),
+		}); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+	if err := e.reg.DeleteFile(t.Context(), "py", "demo", "1.0", "demo-1.0.tar.gz", "alice"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+
+	repo := e.get("alice", "/ui/r/py")
+	if repo.status != http.StatusOK || strings.Contains(repo.body, "demo") || !strings.Contains(repo.body, "other") {
+		t.Fatalf("repository page: %d\n%s", repo.status, repo.body)
+	}
+	if page := e.get("alice", "/ui/r/py/-/package?name=demo"); page.status != http.StatusNotFound {
+		t.Fatalf("package page of an emptied name = %d, want 404", page.status)
+	}
+}
+
+// OCI images have tags and no versions rows; hiding emptied names must not hide
+// them.
+func TestUI_OCIImageWithoutVersionsIsListed(t *testing.T) {
+	e := newEnv(t)
+	e.push("team-a", "team/app", "1.0", "x")
+	if r := e.get("alice", "/ui/r/team-a"); r.status != http.StatusOK || !strings.Contains(r.body, "team/app") {
+		t.Fatalf("repository page: %d\n%s", r.status, r.body)
+	}
+}
+
 func TestUI_LoadMoreReturnsOnlyRows(t *testing.T) {
 	e := newEnv(t)
 	for i := range pageSize + 5 {

@@ -555,8 +555,13 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 			}
 		}
 	}
-	if _, err := q.DeletePackageIfEmpty(ctx, pkgRow.ID); err != nil {
-		return fmt.Errorf("cleaning empty package: %w", err)
+	// A hosted package row is the name's claim (I5). It outlives the name's last
+	// file, or a proxy member could serve the name the moment its owner deleted
+	// it. Deleting the repository is what releases a claim.
+	if repoRow.Type != string(model.RepoTypeHosted) {
+		if _, err := q.DeletePackageIfEmpty(ctx, pkgRow.ID); err != nil {
+			return fmt.Errorf("cleaning empty package: %w", err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -572,7 +577,8 @@ type ListPackagesParams struct {
 	Limit int32
 }
 
-// ListPackages returns packages in a repository ordered by normalized name.
+// ListPackages returns packages in a repository ordered by normalized name. A
+// name kept only as a claim, with no versions left, is not listed.
 func (r *Registry) ListPackages(ctx context.Context, p ListPackagesParams) (Page[model.Package], error) {
 	repo, err := r.q.GetRepositoryByName(ctx, p.Repo)
 	if err != nil {
@@ -651,6 +657,11 @@ func (r *Registry) ListVersions(ctx context.Context, p ListVersionsParams) (Page
 	})
 	if err != nil {
 		return Page[model.Version]{}, fmt.Errorf("listing versions: %w", err)
+	}
+	// A package row kept as a claim is still no package to a reader. An OCI
+	// image has no versions rows at all, so an empty list says nothing there.
+	if len(rows) == 0 && p.After == "" && model.Protocol(repo.Protocol) != model.ProtocolOCI {
+		return Page[model.Version]{}, ErrNotFound
 	}
 
 	page := Page[model.Version]{Items: make([]model.Version, 0, len(rows))}

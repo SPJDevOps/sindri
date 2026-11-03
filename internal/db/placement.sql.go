@@ -660,10 +660,12 @@ func (q *Queries) ListFilesByPackage(ctx context.Context, arg ListFilesByPackage
 }
 
 const listPackagesByRepo = `-- name: ListPackagesByRepo :many
-SELECT id, repo_id, normalized_name, display_name FROM packages
-WHERE repo_id = $1
-  AND ($2::text IS NULL OR normalized_name > $2)
-ORDER BY normalized_name
+SELECT p.id, p.repo_id, p.normalized_name, p.display_name FROM packages p
+JOIN repositories r ON r.id = p.repo_id
+WHERE p.repo_id = $1
+  AND ($2::text IS NULL OR p.normalized_name > $2)
+  AND (r.protocol = 'oci' OR EXISTS (SELECT 1 FROM versions v WHERE v.package_id = p.id))
+ORDER BY p.normalized_name
 LIMIT $3
 `
 
@@ -673,6 +675,9 @@ type ListPackagesByRepoParams struct {
 	PageLimit int32       `json:"page_limit"`
 }
 
+// A hosted package row outlives its last version, because it is the name's
+// claim. Such a name has nothing to show, so it is not listed. OCI is exempt:
+// an image is a package and tags, and never has a versions row.
 func (q *Queries) ListPackagesByRepo(ctx context.Context, arg ListPackagesByRepoParams) ([]Package, error) {
 	rows, err := q.db.Query(ctx, listPackagesByRepo, arg.RepoID, arg.AfterName, arg.PageLimit)
 	if err != nil {
