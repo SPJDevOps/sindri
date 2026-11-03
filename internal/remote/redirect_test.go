@@ -61,7 +61,8 @@ func newRedirectFixture(t *testing.T) *redirectFixture {
 	return f
 }
 
-func (f *redirectFixture) get(t *testing.T, path string, pin bool) (*http.Response, error) {
+// get returns the final status of a request through the client.
+func (f *redirectFixture) get(t *testing.T, path string, pin bool) (int, error) {
 	t.Helper()
 	resp, err := f.client.do(t.Context(), upstreamRequest{
 		method:    http.MethodGet,
@@ -69,21 +70,22 @@ func (f *redirectFixture) get(t *testing.T, path string, pin bool) (*http.Respon
 		remote:    f.remote,
 		pinOrigin: pin,
 	})
-	if err == nil {
-		t.Cleanup(func() { _ = resp.Body.Close() })
+	if err != nil {
+		return 0, err
 	}
-	return resp, err
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, nil
 }
 
 func TestDo_RedirectOffOriginCarriesNoCredentials(t *testing.T) {
 	t.Parallel()
 	f := newRedirectFixture(t)
-	resp, err := f.get(t, "/away", false)
+	status, err := f.get(t, "/away", false)
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
-	if resp.StatusCode != http.StatusOK || f.hits.Load() != 1 {
-		t.Fatalf("status %d, %d offsite hits; want the redirect followed", resp.StatusCode, f.hits.Load())
+	if status != http.StatusOK || f.hits.Load() != 1 {
+		t.Fatalf("status %d, %d offsite hits; want the redirect followed", status, f.hits.Load())
 	}
 	if f.sawAuth.Load() {
 		t.Fatal("the upstream's credentials followed a redirect off its origin")
@@ -106,12 +108,12 @@ func TestDo_RedirectOnTheSameOriginKeepsCredentials(t *testing.T) {
 	t.Parallel()
 	for _, pin := range []bool{false, true} {
 		f := newRedirectFixture(t)
-		resp, err := f.get(t, "/here", pin)
+		status, err := f.get(t, "/here", pin)
 		if err != nil {
 			t.Fatalf("pin=%v: do: %v", pin, err)
 		}
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("pin=%v: status %d, want credentials kept on the same origin", pin, resp.StatusCode)
+		if status != http.StatusOK {
+			t.Fatalf("pin=%v: status %d, want credentials kept on the same origin", pin, status)
 		}
 	}
 }
@@ -137,7 +139,10 @@ func TestNew_KeepsAnInjectedRedirectPolicy(t *testing.T) {
 		}},
 	})
 	f := newRedirectFixture(t)
-	_, err := c.do(t.Context(), upstreamRequest{method: http.MethodGet, url: f.upstream.URL + "/here", remote: registry.Remote{UpstreamURL: f.upstream.URL}})
+	resp, err := c.do(t.Context(), upstreamRequest{method: http.MethodGet, url: f.upstream.URL + "/here", remote: registry.Remote{UpstreamURL: f.upstream.URL}})
+	if err == nil {
+		_ = resp.Body.Close()
+	}
 	if !errors.Is(err, refused) {
 		t.Fatalf("do = %v, want the injected policy's error", err)
 	}
