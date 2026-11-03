@@ -201,6 +201,14 @@ When a virtual repository resolves a package name:
 For npm, a hosted member holding any name in a scope claims the whole scope: one published
 `@acme/*` package claims every `@acme/*` name (ADR 24).
 
+"Ever published" is meant literally. The claim is the `packages` row, and on a hosted
+repository that row outlives the name's last file: deleting a file removes its version
+when emptied, never the package. An emptied name is hidden from listings and reads as
+absent, and a virtual repository answers 404 for it rather than asking a proxy member.
+Publishing to it again reuses the row. Deleting the repository is what releases a claim.
+OCI images are listed regardless of `versions`, because an image is a package with tags
+and has no `versions` rows.
+
 Step 2 is the dependency-confusion defence, and the failure mode it prevents is subtle:
 without it, an attacker publishes `our-internal-lib` version `99.0.0` to pypi.org, a
 developer asks for the newest version, and the proxy member wins. With it, the request
