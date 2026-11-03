@@ -207,7 +207,9 @@ For npm, a hosted member holding any name in a scope claims the whole scope: one
 repository that row outlives the name's last file: deleting a file removes its version
 when emptied, never the package. An emptied name is hidden from listings and reads as
 absent, and a virtual repository answers 404 for it rather than asking a proxy member.
-Publishing to it again reuses the row. Deleting the repository is what releases a claim.
+Publishing to it again reuses the row. Deleting the repository is what releases a claim,
+and `DeleteRepository` refuses a repository with promotion events, so for such a repository
+a claim has no release path today. It fails closed (ADR 24).
 OCI images are listed regardless of `versions`, because an image is a package with tags
 and has no `versions` rows.
 

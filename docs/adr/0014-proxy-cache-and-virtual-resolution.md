@@ -86,8 +86,11 @@ Docker Hub host adds it for single-segment images, so `…/dockerhub/alpine` and
 logged. It is sent only to the scheme and host of `upstream_url`: an upstream
 index may link files on any host, and a credential must not follow those links.
 (Amended in M9: net/http alone kept `Authorization` for a redirect to the same hostname on
-another port. Credentials now stop at any redirect off the first request's origin, for
-every protocol.)
+another port, from http to https, and to a subdomain. Credentials now stop at any redirect
+off the first request's origin (scheme and host, port included), for every protocol. A
+configured `http://` upstream that upgrades to https, or a credentialed upstream that
+redirects to a `cdn.` subdomain, therefore gets a 401 on the second request, which a virtual
+treats as a miss.)
 A bearer challenge's realm comes from the upstream and receives the credential
 only over https or on the upstream's own origin. Bearer tokens are cached per
 registry host and image, the scope a pull token covers. Nothing supplies secrets

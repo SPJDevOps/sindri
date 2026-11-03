@@ -187,7 +187,11 @@ func TestDependencyConfusion_HostedNpmScopeIsNeverServedFromProxy(t *testing.T) 
 	e.publishNPM(t, hosted, "jsonstream", "1.0.0")
 	e.publishNPM(t, hosted, "@kit/ui", "1.0.0")
 
-	// Each is a name the proxy would happily serve if it were ever asked.
+	// Each is a name the proxy would happily serve if it were ever asked. The
+	// Kelvin-sign spellings in the table below are the exception: the request
+	// reaches upstream percent-encoded, so none of these stub entries would answer
+	// it. For those the guard is the request count, which catches a regression
+	// that asks upstream at all.
 	for _, name := range []string{"@acme/ui", "@acme/new", "@ACME/new", "@ACME/ui", "JSONStream", "@Kit/new", "@Kit/ui"} {
 		up.offer(t, name, "hostile", "99.0.0")
 	}

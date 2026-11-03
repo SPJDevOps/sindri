@@ -142,9 +142,16 @@ fails with `EINTEGRITY`.
 
 **In a virtual repository the first member with the package owns its tarballs.** For a
 proxy member, "has the package" means its packument resolves, and that is checked before any
-placed copy is read. A tarball it does not list, or lists and upstream lacks, is a 404 and a
-later member is not asked, including from outside a nested virtual. Otherwise a second proxy
-could supply a tarball for a version the first member's document never offered.
+placed copy is read. A tarball the package's document does not list, or lists and upstream
+lacks, is a 404 when it is not already placed, and a later member is not asked, including
+from outside a nested virtual. Otherwise a second proxy could supply a tarball for a
+version the first member's document never offered.
+
+That check is of the package, not of the version: `FetchNPMTarball` serves a placed copy
+before it looks at the packument's listing. So after upstream removes one version and keeps
+the package, an exact-URL install of that version keeps getting the placed copy, through a
+virtual as well as directly. Retention does not evict it while its cache entry stays alive
+(SIN-54).
 
 **An upstream 5xx, or a document that fails to parse, fails the walk with a 502.** A 404, a
 negative cache entry, or a 401/403 is a miss and the walk moves on. A stale document still
@@ -157,10 +164,24 @@ ASCII only, and a hosted member compares exactly while the claim compares in low
 
 **A 401 or 403 from a proxy member is a miss that moves the walk on.** This is released
 behaviour shared with PyPI and OCI (`absent` in `resolve.go`), and changing it alters all
-three. The risk is real. With members `[private-proxy, public-proxy]`, an expired credential
-on the first makes a private name resolve from the public proxy for the negative TTL. A
-claim by a hosted member still holds, so it affects only names that live upstream on a
-private registry. Not changed here; SIN-55 decides whether a refusal should fail the walk.
+three. The risk is real. With members `[private-proxy, public-proxy]`, a broken credential
+on the first makes a private name resolve from the public proxy for as long as the
+credential stays broken. A denial is never negatively cached, so this is not bounded by the
+negative TTL: every read asks the private upstream again, is refused again, and falls to the
+public one. A stale private document stops answering too, because a denial returns before
+the stale fallback, which only an unavailable upstream reaches. A claim by a hosted member
+still holds, so it affects only names that live upstream on a private registry. Not changed
+here; SIN-55 decides whether a refusal should fail the walk. An npm-only change would be
+small, since npm resolves through its own closures, but it would leave PyPI and OCI
+different.
+
+**An npm packument is bounded at 128 MiB, and each read parses all of it.** PyPI pages and
+OCI manifests keep 32 MiB; a packument lists every version and real ones are large
+(`renovate` is 36.6 MB, `next` 25.7 MB, measured 2026-11-03). Over the bound is a 502 that
+neither poisons the cache nor displaces a good stale copy, and the reason is logged with the
+repository and package name, never the URL, headers or body. The cost is that every read,
+cached or not, loads and parses the whole document, and there is no request coalescing, so
+concurrent cold reads of one package each fetch it.
 
 **A placed tarball outlives its package's 404.** If upstream answers 404 for a package after
 a hit, a direct proxy read still serves a placed tarball by exact filename, while a virtual
@@ -171,7 +192,10 @@ a cache hit, so those files are never evicted. Tracked as SIN-54, with PyPI.
 **A hosted package row survives the deletion of its last file.** The claim is the `packages`
 row, so deleting a file removes the version when emptied and keeps the package, hidden from
 listings and absent on reads. A virtual still answers 404 for the name and does not ask a
-proxy. Publishing to it reuses the row. Deleting the repository releases the claim. This
+proxy. Publishing to it reuses the row. Deleting the repository releases the claim, but
+`DeleteRepository` refuses a repository that has promotion events, so such a repository's
+claim has no release path today. An accidental publish of `@types/foo` there blocks
+`@types/*` through that virtual until its members are restructured. It fails closed. This
 covers PyPI as well as npm. Rows lost to deletes made before this fix cannot be recovered,
 so such a name stays unclaimed until it is published again.
 
@@ -276,7 +300,8 @@ matches `pypi`. The roadmap's `npmjs` changes.
 - **Checking a same-origin redirect against the base path.** The upstream chose it, and
   pinning it would break registries that move tarballs on their own host.
 - **Failing the walk on a 401/403.** Correct for a private upstream, but it changes PyPI and
-  OCI, which have shipped. Left to SIN-55.
+  OCI, which have shipped. Left to SIN-55. Until then a denial is never negatively cached,
+  so a broken credential lets the public proxy answer for as long as it stays broken.
 - **Merging packuments per version.** A hostile `99.0.0` can appear under a name it should
   never reach. ADR 14 already rejected merging, and I5 forbids it.
 - **Declaring scopes in config.** It closes the first-publish gap at the cost of a field
