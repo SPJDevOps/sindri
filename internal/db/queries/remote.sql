@@ -49,6 +49,17 @@ SELECT EXISTS (
     WHERE repo_id = $1 AND normalized_name = $2
 )::bool AS exists;
 
+-- name: NPMNameClaimedInRepo :one
+-- starts_with rather than LIKE, so a name's characters need no escaping. An
+-- empty scope_prefix asks for the exact name alone.
+SELECT EXISTS (
+    SELECT 1 FROM packages
+    WHERE repo_id = sqlc.arg('repo_id')
+      AND (normalized_name = sqlc.arg('normalized_name')
+           OR (sqlc.arg('scope_prefix')::text <> ''
+               AND starts_with(normalized_name, sqlc.arg('scope_prefix')::text)))
+)::bool AS exists;
+
 -- name: UpsertRemoteCache :one
 INSERT INTO remote_cache (repo_id, cache_key, status, blob_digest, fetched_at)
 VALUES ($1, $2, $3, $4, $5)

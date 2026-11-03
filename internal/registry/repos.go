@@ -287,7 +287,8 @@ func (r *Registry) ListMembers(ctx context.Context, virtualName string) ([]model
 // PackageClaimed reports whether a hosted repository has ever published the
 // normalized package name. Used by the name-claim rule (I5). The answer rests
 // on the package row, which DeleteFile keeps on a hosted repository, so only
-// deleting the repository releases a claim.
+// deleting the repository releases a claim. On an npm repository any name in a
+// scope claims the whole scope, and names compare in ASCII lowercase (ADR 24).
 func (r *Registry) PackageClaimed(ctx context.Context, repoName, normalizedName string) (bool, error) {
 	repo, err := r.q.GetRepositoryByName(ctx, repoName)
 	if err != nil {
@@ -296,14 +297,51 @@ func (r *Registry) PackageClaimed(ctx context.Context, repoName, normalizedName 
 		}
 		return false, fmt.Errorf("looking up repository %s: %w", repoName, err)
 	}
-	exists, err := r.q.PackageExistsInRepo(ctx, db.PackageExistsInRepoParams{
-		RepoID:         repo.ID,
-		NormalizedName: normalizedName,
-	})
+	var exists bool
+	if model.Protocol(repo.Protocol) == model.ProtocolNPM {
+		name, scopePrefix := npmClaimKeys(normalizedName)
+		exists, err = r.q.NPMNameClaimedInRepo(ctx, db.NPMNameClaimedInRepoParams{
+			RepoID:         repo.ID,
+			NormalizedName: name,
+			ScopePrefix:    scopePrefix,
+		})
+	} else {
+		exists, err = r.q.PackageExistsInRepo(ctx, db.PackageExistsInRepoParams{
+			RepoID:         repo.ID,
+			NormalizedName: normalizedName,
+		})
+	}
 	if err != nil {
 		return false, fmt.Errorf("checking package claim %s/%s: %w", repoName, normalizedName, err)
 	}
 	return exists, nil
+}
+
+// npmClaimKeys returns the lowercase name a claim lookup compares and its
+// "@scope/" prefix, which is empty for a name with no scope. Hosted rows are
+// already lowercase because publish refuses anything else.
+//
+// Only ASCII is lowered. strings.ToLower folds the Kelvin sign to k, which
+// would compare a non-ASCII name against an ASCII row. Such a name therefore
+// matches nothing here and reads as unclaimed, so a read path must refuse it
+// before it asks.
+func npmClaimKeys(name string) (lowered, scopePrefix string) {
+	lowered = lowerASCII(name)
+	scope, _, hasSlash := strings.Cut(lowered, "/")
+	if hasSlash && len(scope) > 1 && scope[0] == '@' {
+		return lowered, scope + "/"
+	}
+	return lowered, ""
+}
+
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }
 
 // MatchRepositoryPrefix finds the longest repository name that is a prefix of

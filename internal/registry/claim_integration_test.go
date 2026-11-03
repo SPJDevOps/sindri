@@ -143,6 +143,118 @@ func TestDeleteFile_LastFileKeepsTheClaim(t *testing.T) {
 	}
 }
 
+// TestPackageClaimed_NPMScopeClaims is the registry half of ADR 24's scope claim:
+// a hosted name claims its whole @scope, lookups compare in ASCII lowercase, and
+// nothing else widens. The walk's end-to-end guard sits on top of this answer.
+func TestPackageClaimed_NPMScopeClaims(t *testing.T) {
+	f := newNPMFixture(t)
+	const other = "npm-other"
+	f.hosted(other)
+	for _, pkg := range []string{"@acme/ui", "@kit/ui", "@it/ui", "@gone/only", "jsonstream", "kit", "widgets"} {
+		f.mustPublish(pkg, "1.0.0", "latest", pkg)
+	}
+	if err := f.publishTo(other, "@elsewhere/ui", "1.0.0", "latest", "elsewhere"); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if err := f.reg.DeleteFile(t.Context(), f.repo, "@gone/only", "1.0.0", "@gone/only-1.0.0.tgz", "carol"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		repo  string
+		query string
+		want  bool
+	}{
+		{name: "exact scoped name", query: "@acme/ui", want: true},
+		{name: "exact unscoped name", query: "widgets", want: true},
+		{name: "another name in a claimed scope", query: "@acme/new", want: true},
+		{name: "uppercase scope", query: "@ACME/new", want: true},
+		{name: "uppercase exact scoped name", query: "@Acme/UI", want: true},
+		{name: "legacy mixed-case name against its lowercase row", query: "JSONStream", want: true},
+		{name: "scope with an empty package part over-claims", query: "@acme/", want: true},
+		{name: "nested path in a claimed scope over-claims", query: "@acme/a/b", want: true},
+
+		{name: "scope with no rows", query: "@other/x", want: false},
+		{name: "unclaimed unscoped name", query: "left-pad", want: false},
+		{name: "unscoped name resembling a scope", query: "acme", want: false},
+		{name: "unscoped path resembling a scope", query: "acme/ui", want: false},
+		{name: "scope spelling without a slash", query: "@acme", want: false},
+		{name: "unscoped row claims no scope of that name", query: "@widgets/x", want: false},
+		{name: "scope name extended past the boundary", query: "@acme2/x", want: false},
+		{name: "scope name cut short of the boundary", query: "@acm/x", want: false},
+		{name: "empty scope", query: "@/ui", want: false},
+		{name: "empty name", query: "", want: false},
+		{name: "like wildcards are literal", query: "@a%/x", want: false},
+		{name: "like single-character wildcard is literal", query: "@acm_/x", want: false},
+		{name: "another repository's scope", query: "@elsewhere/new", want: false},
+		{name: "scope in the repository that holds it", repo: other, query: "@elsewhere/new", want: true},
+
+		{name: "emptied package is still claimed", query: "@gone/only", want: true},
+		{name: "emptied package's scope is still claimed", query: "@gone/new", want: true},
+
+		// Lowering is ASCII only. Unicode lowercases these two to k and i, which
+		// would put a non-ASCII name on an ASCII row. Refusing such a name is the
+		// adapter's job; here it simply matches nothing.
+		{name: "kelvin sign in a name", query: "\u212Ait", want: false},
+		{name: "kelvin sign in a scope", query: "@\u212Ait/new", want: false},
+		{name: "kelvin sign in an exact scoped name", query: "@\u212Ait/ui", want: false},
+		{name: "dotted capital i in a scope", query: "@\u0130t/new", want: false},
+		{name: "non-ascii name with uppercase ascii", query: "@\u212AIT/new", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := tc.repo
+			if repo == "" {
+				repo = f.repo
+			}
+			if got := f.claimed(repo, tc.query); got != tc.want {
+				t.Fatalf("PackageClaimed(%s, %q) = %v, want %v", repo, tc.query, got, tc.want)
+			}
+		})
+	}
+}
+
+// A scope claim belongs to npm. Rows shaped like a scope are planted directly so
+// that these cases would notice the npm branch reaching another protocol.
+func TestPackageClaimed_OtherProtocolsMatchExactly(t *testing.T) {
+	f := newEvictFixture(t)
+	f.hostedRepo("pypi-hosted", model.ProtocolPyPI)
+	f.hostedRepo("oci-hosted", model.ProtocolOCI)
+	f.publishPyPI("pypi-hosted", "our-lib", "1.0.0")
+	for repo, row := range map[string]string{"pypi-hosted": "@acme/ui", "oci-hosted": "@acme/ui"} {
+		f.exec(`INSERT INTO packages (repo_id, display_name, normalized_name)
+			SELECT id, $2::text, $2::text FROM repositories WHERE name = $1`, repo, row)
+	}
+	f.exec(`INSERT INTO packages (repo_id, display_name, normalized_name)
+		SELECT id, 'team/app', 'team/app' FROM repositories WHERE name = 'oci-hosted'`)
+
+	cases := []struct {
+		name  string
+		repo  string
+		query string
+		want  bool
+	}{
+		{name: "pypi exact", repo: "pypi-hosted", query: "our-lib", want: true},
+		{name: "pypi exact on a scope-shaped row", repo: "pypi-hosted", query: "@acme/ui", want: true},
+		{name: "pypi other name in the scope", repo: "pypi-hosted", query: "@acme/new", want: false},
+		{name: "pypi is not lowered here", repo: "pypi-hosted", query: "OUR-LIB", want: false},
+		{name: "pypi other name", repo: "pypi-hosted", query: "other-lib", want: false},
+		{name: "oci exact", repo: "oci-hosted", query: "team/app", want: true},
+		{name: "oci exact on a scope-shaped row", repo: "oci-hosted", query: "@acme/ui", want: true},
+		{name: "oci other name in the scope", repo: "oci-hosted", query: "@acme/new", want: false},
+		{name: "oci other image in the namespace", repo: "oci-hosted", query: "team/other", want: false},
+		{name: "oci is not lowered here", repo: "oci-hosted", query: "Team/App", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := f.claimed(tc.repo, tc.query); got != tc.want {
+				t.Fatalf("PackageClaimed(%s, %q) = %v, want %v", tc.repo, tc.query, got, tc.want)
+			}
+		})
+	}
+}
+
 // Retention already removes an emptied proxy package; a delete must too, or a
 // cached name would linger in the proxy for good.
 func TestDeleteFile_ProxyEmptiedPackageIsRemoved(t *testing.T) {
