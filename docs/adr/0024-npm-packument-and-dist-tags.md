@@ -285,7 +285,7 @@ The recorded run had 59 candidate shapes (excluding controls): 40 accepted and c
 refused and so skipped. Of the 120 client rows, 119 agree, none disagree, and one is a
 client error: yarn 1.22.22 cannot extract a tarball with 7 stray zero bytes after the end
 marker ("Unexpected end of data"). Sindri accepts that tarball. yarn reads no manifest from it,
-so it is not manifest confusion; it is awaiting its own ticket. Every agree row installed the
+so it is not manifest confusion; it is tracked as SIN-59. Every agree row installed the
 name, version and description the parser read, not the decoy's.
 
 | Shape | npm | pnpm | yarn |
@@ -298,7 +298,7 @@ name, version and description the parser read, not the decoy's.
 | directories with and without a slash | agree | agree | agree |
 | manifest after other files | agree | agree | agree |
 | extra zero blocks | agree | agree | agree |
-| zero bytes short of a block | agree | agree | client error (awaiting ticket) |
+| zero bytes short of a block | agree | agree | client error (SIN-59) |
 | manifest split over prefix and name | agree | agree | agree |
 | manifest named by a pax path over a short name | agree | agree | agree |
 | pax with every allowed key | agree | agree | agree |
@@ -340,7 +340,7 @@ parser refuses, because an installer takes the decoy, sent to the clients anyway
 | manifest under another top directory | DISAGREE | DISAGREE | DISAGREE |
 | manifest in upper case | DISAGREE | agree | DISAGREE |
 
-Not tested: Windows name handling. Drive roots, 8.3 short names, trailing dots and spaces,
+Not tested (SIN-58): Windows name handling. Drive roots, 8.3 short names, trailing dots and spaces,
 UNC roots and backslashes cannot be exercised on this platform, so those refusals rest on
 reasoning and Unix reproductions only. The "upper case" control also depends on the
 filesystem: this run was on macOS, whose default filesystem folds case.

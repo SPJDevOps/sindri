@@ -312,7 +312,7 @@ func (f fieldsRead) String() string {
 // shape and client. A client error is otherwise a failure: it means nothing was
 // compared.
 var allowedClientErrors = map[string]string{
-	"zero bytes short of a block|yarn": "awaiting ticket",
+	"zero bytes short of a block|yarn": "SIN-59",
 }
 
 type differentialRow struct {
