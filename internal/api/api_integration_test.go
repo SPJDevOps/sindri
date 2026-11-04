@@ -226,3 +226,62 @@ func mustDo(t *testing.T, h http.Handler, method, path string, body []byte, cont
 		Header:     rec.Header(),
 	}
 }
+
+func TestPublish_InvalidProvenanceHeaderIsRefused(t *testing.T) {
+	cases := []struct {
+		name   string
+		header string
+		value  string
+	}{
+		{name: "InvalidUTF8InSourceRef", header: model.HeaderSourceRef, value: "git\xff"},
+		{name: "NULInSourceRef", header: model.HeaderSourceRef, value: "git\x00"},
+		{name: "InvalidUTF8InBuildRef", header: model.HeaderBuildRef, value: "ci\xc3"},
+		{name: "NULInBuildRef", header: model.HeaderBuildRef, value: "ci\x00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			database := testsupport.MigratedDB(t)
+			blobs := memstore.New()
+			reg := registry.New(database, cas.New(blobs, cas.WithReserver(db.NewBlobReserver(database, "memory"))), "memory")
+			srv, err := server.New(server.Options{
+				Address:  "127.0.0.1:0",
+				Database: database,
+				Blobs:    blobs,
+				API: api.Handler(api.Options{
+					Registry:  reg,
+					Auth:      auth.NewStaticBearer(testToken),
+					RequestID: server.RequestIDFromContext,
+				}),
+				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			})
+			if err != nil {
+				t.Fatalf("server.New: %v", err)
+			}
+			client := srv.Handler()
+			createRepo(t, client, "team-a", "oci")
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPut,
+				"/api/v1/repositories/team-a/packages/demo/versions/1.0.0/files/demo.txt",
+				strings.NewReader("payload"))
+			req.Header.Set("Authorization", "Bearer "+testToken)
+			req.Header.Set("Content-Type", "text/plain")
+			req.Header[tc.header] = []string{tc.value}
+			rec := httptest.NewRecorder()
+			client.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body)
+			}
+
+			var files, stored int
+			if err := database.Pool().QueryRow(t.Context(), `SELECT count(*) FROM files`).Scan(&files); err != nil {
+				t.Fatalf("counting files: %v", err)
+			}
+			if err := database.Pool().QueryRow(t.Context(), `SELECT count(*) FROM blobs`).Scan(&stored); err != nil {
+				t.Fatalf("counting blobs: %v", err)
+			}
+			if files != 0 || stored != 0 {
+				t.Fatalf("after the refusal: %d file rows and %d blobs, want none", files, stored)
+			}
+		})
+	}
+}

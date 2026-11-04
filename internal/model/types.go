@@ -1,8 +1,11 @@
 package model
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // RepoType names how a repository participates in resolution.
@@ -160,15 +163,28 @@ type Provenance struct {
 	BuildRef   string
 }
 
+// ErrInvalidProvenance means a provenance header holds a value the database
+// cannot store: bytes that are not valid UTF-8, or a NUL. The message names the
+// header and never quotes the value.
+var ErrInvalidProvenance = errors.New("invalid provenance header")
+
 // HeaderProvenance builds a provenance claim from request headers. get is a
 // header lookup such as http.Header.Get, taken as a function so this package
-// stays free of the HTTP layer.
-func HeaderProvenance(sourceType string, get func(string) string) Provenance {
-	return Provenance{
-		SourceType: sourceType,
-		SourceRef:  strings.TrimSpace(get(HeaderSourceRef)),
-		BuildRef:   strings.TrimSpace(get(HeaderBuildRef)),
+// stays free of the HTTP layer. A value that is not valid UTF-8 or holds a NUL
+// is refused, so a publish fails with a client error before any bytes are
+// stored rather than at the provenance insert after them.
+func HeaderProvenance(sourceType string, get func(string) string) (Provenance, error) {
+	sourceRef := strings.TrimSpace(get(HeaderSourceRef))
+	buildRef := strings.TrimSpace(get(HeaderBuildRef))
+	for _, h := range []struct{ name, value string }{
+		{HeaderSourceRef, sourceRef},
+		{HeaderBuildRef, buildRef},
+	} {
+		if !utf8.ValidString(h.value) || strings.ContainsRune(h.value, 0) {
+			return Provenance{}, fmt.Errorf("%w: %s must be valid UTF-8 without NUL bytes", ErrInvalidProvenance, h.name)
+		}
 	}
+	return Provenance{SourceType: sourceType, SourceRef: sourceRef, BuildRef: buildRef}, nil
 }
 
 // EvidenceType names what an evidence document attests to. v1 stores and gates

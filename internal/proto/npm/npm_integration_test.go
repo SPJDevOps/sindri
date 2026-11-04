@@ -71,6 +71,7 @@ func (p tokenPrincipals) Verify(_ context.Context, raw string) (auth.Principal, 
 type npmFixture struct {
 	t    *testing.T
 	ts   *httptest.Server
+	h    http.Handler
 	reg  *registry.Registry
 	data *db.DB
 }
@@ -111,7 +112,7 @@ func newFixtureLogging(t *testing.T, publicURL string, logger *slog.Logger) *npm
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	f := &npmFixture{t: t, ts: ts, reg: reg, data: database}
+	f := &npmFixture{t: t, ts: ts, h: srv.Handler(), reg: reg, data: database}
 	f.createRepo(registry.CreateRepositoryParams{Name: testRepo, Type: model.RepoTypeHosted})
 	return f
 }
@@ -150,6 +151,20 @@ func (f *npmFixture) put(pkgPath string, body []byte) (int, []byte) {
 	f.t.Helper()
 	status, got, _ := f.do(adminToken, http.MethodPut, "/npm/"+testRepo+"/"+pkgPath, body)
 	return status, got
+}
+
+// putWithHeaders publishes straight into the handler, because a real client
+// refuses to send a header value holding a NUL.
+func (f *npmFixture) putWithHeaders(pkgPath string, body []byte, headers map[string]string) (int, []byte) {
+	f.t.Helper()
+	req := httptest.NewRequestWithContext(f.t.Context(), http.MethodPut, "/npm/"+testRepo+"/"+pkgPath, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	for k, v := range headers {
+		req.Header[k] = []string{v}
+	}
+	rec := httptest.NewRecorder()
+	f.h.ServeHTTP(rec, req)
+	return rec.Code, rec.Body.Bytes()
 }
 
 func (f *npmFixture) mustPublishTo(repo, pkgPath, name, version string, tgz []byte) {
@@ -1380,5 +1395,38 @@ func TestDeprecate_OnAProxyIs405(t *testing.T) {
 	body := encodeDocument(t, f.deprecateBody("foo", map[string]any{"1.0.0": "x"}))
 	if status, got, _ := f.do(adminToken, http.MethodPut, "/npm/up/foo", body); status != http.StatusMethodNotAllowed {
 		t.Fatalf("PUT = %d %s, want 405", status, got)
+	}
+}
+
+func TestPublish_InvalidProvenanceHeaderIsRefused(t *testing.T) {
+	cases := []struct {
+		name   string
+		header string
+		value  string
+	}{
+		{name: "InvalidUTF8InSourceRef", header: model.HeaderSourceRef, value: "git\xff"},
+		{name: "NULInSourceRef", header: model.HeaderSourceRef, value: "git\x00"},
+		{name: "InvalidUTF8InBuildRef", header: model.HeaderBuildRef, value: "ci\xc3"},
+		{name: "NULInBuildRef", header: model.HeaderBuildRef, value: "ci\x00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, testPublicURL)
+			body := publishBody(t, "foo", "1.0.0", packageTarball(t, "foo", "1.0.0"))
+			blobsBefore := f.count(`SELECT count(*) FROM blobs`)
+
+			status, got := f.putWithHeaders("foo", body, map[string]string{tc.header: tc.value})
+			if status != http.StatusBadRequest {
+				t.Fatalf("PUT = %d %s, want 400", status, got)
+			}
+			wantJSONError(t, got)
+
+			if n := f.count(`SELECT count(*) FROM files`); n != 0 {
+				t.Fatalf("%d file rows after the refusal, want 0", n)
+			}
+			if blobsAfter := f.count(`SELECT count(*) FROM blobs`); blobsAfter != blobsBefore {
+				t.Fatalf("blobs went from %d to %d", blobsBefore, blobsAfter)
+			}
+		})
 	}
 }

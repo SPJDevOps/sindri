@@ -169,6 +169,13 @@ func (h *handler) handlePublish(w http.ResponseWriter, r *http.Request, rt route
 // publishSpooled checks a body holding one attachment, whose bytes are in spool,
 // and publishes it.
 func (h *handler) publishSpooled(w http.ResponseWriter, r *http.Request, rt route, spool io.ReadSeeker, metadata []byte) {
+	// Checked before any byte reaches the CAS, so a malformed claim is a 400
+	// and not a failed provenance insert after the tarball is stored.
+	provenance, err := model.HeaderProvenance(model.ProvenanceNPMPublish, r.Header.Get)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	doc, err := decodePublishRequest(metadata)
 	if err != nil {
 		// The JSON error is dropped because it can quote the document.
@@ -235,7 +242,7 @@ func (h *handler) publishSpooled(w http.ResponseWriter, r *http.Request, rt rout
 		ExclusiveVersion: true,
 		DistTag:          tag,
 		Actor:            principal.Subject,
-		Provenance:       model.HeaderProvenance(model.ProvenanceNPMPublish, r.Header.Get),
+		Provenance:       provenance,
 	}); err != nil {
 		mapRegistryError(w, err)
 		return

@@ -326,6 +326,11 @@ func (a *api) publishFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	provenance, err := model.HeaderProvenance(model.ProvenanceAPIPublish, r.Header.Get)
+	if err != nil {
+		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
 	file, err := a.reg.Publish(r.Context(), registry.PublishParams{
 		Repo:       chi.URLParam(r, "repo"),
 		Package:    packageName(r),
@@ -334,7 +339,7 @@ func (a *api) publishFile(w http.ResponseWriter, r *http.Request) {
 		MediaType:  mediaType,
 		Body:       r.Body,
 		Size:       size,
-		Provenance: model.HeaderProvenance(model.ProvenanceAPIPublish, r.Header.Get),
+		Provenance: provenance,
 	})
 	if err != nil {
 		a.writeRegistryError(w, r, err)
