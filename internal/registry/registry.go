@@ -299,6 +299,18 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 			}
 			return model.File{}, fmt.Errorf("creating version %s: %w", p.Version, err)
 		}
+		// A deleted version stays taken (SIN-52). The insert above waited for
+		// any delete in flight on this version, so its tombstone is visible
+		// here. Returning rolls the new version row back; the bytes stay in
+		// the CAS unplaced for GC.
+		retired, err := q.IsVersionRetired(ctx, db.IsVersionRetiredParams{PackageID: pkg.ID, Version: p.Version})
+		if err != nil {
+			return model.File{}, fmt.Errorf("checking retired versions of %s: %w", p.Package, err)
+		}
+		if retired {
+			return model.File{}, fmt.Errorf("%w: %s %s was published and deleted; a version is never reused",
+				ErrVersionExists, p.Package, p.Version)
+		}
 	} else {
 		ver, err = q.GetOrCreateVersion(ctx, db.GetOrCreateVersionParams{
 			PackageID: pkg.ID,
@@ -347,6 +359,20 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		file, err = q.UpsertFile(ctx, placeParams)
 		if err != nil {
 			return model.File{}, fmt.Errorf("placing file %s: %w", p.Filename, err)
+		}
+	}
+
+	// A deleted filename stays taken, whichever version held it (SIN-52). npm
+	// is checked by version above. This runs after the placement so the insert
+	// has waited for a delete in flight on the same file.
+	if !npm {
+		retired, err := q.IsFilenameRetired(ctx, db.IsFilenameRetiredParams{PackageID: pkg.ID, Filename: p.Filename})
+		if err != nil {
+			return model.File{}, fmt.Errorf("checking retired files of %s: %w", p.Package, err)
+		}
+		if retired {
+			return model.File{}, fmt.Errorf("%w: %s was published and deleted; a filename is never reused",
+				ErrFileExists, p.Filename)
 		}
 	}
 
@@ -534,6 +560,19 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 		strandedTags, err = q.ListDistTagsForVersion(ctx, versionID)
 		if err != nil {
 			return fmt.Errorf("listing dist-tags of version %s: %w", version, err)
+		}
+	}
+
+	// A hosted repository's published names are immutable, so a deleted file
+	// keeps its version and filename taken (SIN-52). A proxy only mirrors
+	// upstream, and has to be able to place the file again.
+	if repoRow.Type == string(model.RepoTypeHosted) {
+		if err := q.InsertRetiredFile(ctx, db.InsertRetiredFileParams{
+			PackageID: pkgRow.ID,
+			Version:   version,
+			Filename:  filename,
+		}); err != nil {
+			return fmt.Errorf("retiring %s: %w", filename, err)
 		}
 	}
 

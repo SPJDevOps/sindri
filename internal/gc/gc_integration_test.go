@@ -713,15 +713,17 @@ func TestGC_PushThatDedupsAgainstACollectedBlobRewritesItsBytes(t *testing.T) {
 		t.Fatalf("CreateRepository: %v", err)
 	}
 	payload := "an sdist deleted and then published again"
-	publish := func(ctx context.Context) error {
+	// A deleted filename is never reused (SIN-52), so the second publish of
+	// the same bytes comes under a new version.
+	publish := func(ctx context.Context, version string) error {
 		_, err := f.reg.Publish(ctx, registry.PublishParams{
-			Repo: "py", Package: "demo", Version: "1.0", Filename: "demo-1.0.tar.gz",
+			Repo: "py", Package: "demo", Version: version, Filename: "demo-" + version + ".tar.gz",
 			Body: strings.NewReader(payload), Size: int64(len(payload)),
 			ExpectDigest: sha256Of([]byte(payload)),
 		})
 		return err
 	}
-	if err := publish(ctx); err != nil {
+	if err := publish(ctx, "1.0"); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	if err := f.reg.DeleteFile(ctx, "py", "demo", "1.0", "demo-1.0.tar.gz", "test"); err != nil {
@@ -735,7 +737,7 @@ func TestGC_PushThatDedupsAgainstACollectedBlobRewritesItsBytes(t *testing.T) {
 	<-entered
 
 	published := make(chan error, 1)
-	go func() { published <- publish(context.WithoutCancel(ctx)) }()
+	go func() { published <- publish(context.WithoutCancel(ctx), "1.1") }()
 	assertBlocked(t, published, "the concurrent publish")
 
 	close(release)

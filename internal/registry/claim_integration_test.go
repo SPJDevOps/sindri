@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 
 	godigest "github.com/opencontainers/go-digest"
@@ -383,5 +384,190 @@ func TestListPackages_OCIImagesWithoutVersionsStayListed(t *testing.T) {
 		if got := f.listed(repo); !slices.Equal(got, []string{want}) {
 			t.Fatalf("ListPackages %s = %v, want [%s]", repo, got, want)
 		}
+	}
+}
+
+// publishPyPIAs places a PyPI distribution under an explicit filename and
+// bytes, as the upload adapter does.
+func (f *evictFixture) publishPyPIAs(repo, pkg, version, filename, body string) error {
+	f.t.Helper()
+	_, err := f.reg.Publish(f.t.Context(), registry.PublishParams{
+		Repo: repo, Package: pkg, Version: version, Filename: filename,
+		Body: bytes.NewReader([]byte(body)), Size: int64(len(body)), Immutable: true,
+	})
+	return err
+}
+
+// A published version is immutable (SIN-52): deleting its file must not free
+// the number, or a range install could pick up new bytes under the old one.
+func TestPublish_DeletedNpmVersionIsRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		pkg  string
+		body string
+	}{
+		{name: "unscoped identical bytes", pkg: "left-pad", body: "a"},
+		{name: "unscoped different bytes", pkg: "left-pad", body: "b"},
+		{name: "scoped identical bytes", pkg: "@acme/ui", body: "a"},
+		{name: "scoped different bytes", pkg: "@acme/ui", body: "b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNPMFixture(t)
+			f.mustPublish(tc.pkg, "1.0.0", "latest", "a")
+			if err := f.reg.DeleteFile(t.Context(), f.repo, tc.pkg, "1.0.0", tc.pkg+"-1.0.0.tgz", "carol"); err != nil {
+				t.Fatalf("DeleteFile: %v", err)
+			}
+
+			err := f.publish(tc.pkg, "1.0.0", "latest", tc.body)
+			if !errors.Is(err, registry.ErrVersionExists) {
+				t.Fatalf("republish of a deleted version = %v, want ErrVersionExists", err)
+			}
+			if n := f.count(`SELECT count(*) FROM files`); n != 0 {
+				t.Fatalf("files = %d, want the refused publish to place nothing", n)
+			}
+			if n := f.count(`SELECT count(*) FROM versions`); n != 0 {
+				t.Fatalf("versions = %d, want the refused publish to leave no version", n)
+			}
+			if err := f.publish(tc.pkg, "1.0.1", "latest", tc.body); err != nil {
+				t.Fatalf("publish of a new version: %v", err)
+			}
+		})
+	}
+}
+
+// PyPI's check is by filename within the package, whichever version held it.
+func TestPublish_DeletedPyPIFilenameIsRefused(t *testing.T) {
+	cases := []struct {
+		name    string
+		version string
+		body    string
+	}{
+		{name: "identical bytes", version: "1.0.0", body: "Our_Lib1.0.0"},
+		{name: "different bytes", version: "1.0.0", body: "other"},
+		{name: "under another version", version: "2.0.0", body: "other"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEvictFixture(t)
+			f.hostedRepo("hosted", model.ProtocolPyPI)
+			filename := f.publishPyPI("hosted", "Our_Lib", "1.0.0")
+			if err := f.reg.DeleteFile(t.Context(), "hosted", "Our_Lib", "1.0.0", filename, "carol"); err != nil {
+				t.Fatalf("DeleteFile: %v", err)
+			}
+
+			err := f.publishPyPIAs("hosted", "Our_Lib", tc.version, filename, tc.body)
+			if !errors.Is(err, registry.ErrFileExists) {
+				t.Fatalf("re-upload of a deleted filename = %v, want ErrFileExists", err)
+			}
+			if n := f.count(`SELECT count(*) FROM files`); n != 0 {
+				t.Fatalf("files = %d, want the refused upload to place nothing", n)
+			}
+
+			if err := f.publishPyPIAs("hosted", "Our_Lib", "1.0.0", "Our_Lib-1.0.0-py3-none-any.whl", "wheel"); err != nil {
+				t.Fatalf("a different filename in the same version: %v", err)
+			}
+		})
+	}
+}
+
+// The management API publishes without Immutable. It must not be a way around
+// the retirement.
+func TestPublish_DeletedFilenameIsRefusedWithoutImmutable(t *testing.T) {
+	f := newEvictFixture(t)
+	f.hostedRepo("hosted", model.ProtocolPyPI)
+	filename := f.publishPyPI("hosted", "our-lib", "1.0.0")
+	if err := f.reg.DeleteFile(t.Context(), "hosted", "our-lib", "1.0.0", filename, "carol"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+
+	_, err := f.reg.Publish(t.Context(), registry.PublishParams{
+		Repo: "hosted", Package: "our-lib", Version: "1.0.0", Filename: filename,
+		Body: bytes.NewReader([]byte("new")), Size: 3,
+	})
+	if !errors.Is(err, registry.ErrFileExists) {
+		t.Fatalf("non-immutable republish = %v, want ErrFileExists", err)
+	}
+}
+
+// A delete and a republish of one version, run together, never leave the new
+// bytes placed: the publish's insert waits for the delete, then sees its
+// tombstone.
+func TestPublish_RetiredVersionRacingADelete(t *testing.T) {
+	f := newNPMFixture(t)
+	const rounds = 15
+	for i := range rounds {
+		version := "1." + string(rune('0'+i%10)) + "." + string(rune('a'+i))
+		f.mustPublish("left-pad", version, "latest", "old")
+
+		var wg sync.WaitGroup
+		var deleteErr, publishErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			deleteErr = f.reg.DeleteFile(t.Context(), f.repo, "left-pad", version, "left-pad-"+version+".tgz", "carol")
+		}()
+		go func() {
+			defer wg.Done()
+			publishErr = f.publish("left-pad", version, "latest", "new")
+		}()
+		wg.Wait()
+
+		if deleteErr != nil {
+			t.Fatalf("round %d: DeleteFile: %v", i, deleteErr)
+		}
+		if !errors.Is(publishErr, registry.ErrVersionExists) {
+			t.Fatalf("round %d: publish = %v, want ErrVersionExists", i, publishErr)
+		}
+		if n := f.count(`SELECT count(*) FROM files f JOIN versions v ON v.id = f.version_id WHERE v.version = $1`, version); n != 0 {
+			t.Fatalf("round %d: %d files placed under retired version %s", i, n, version)
+		}
+	}
+}
+
+// A proxy caches what upstream serves, so deleting a cached file must let it
+// be placed again.
+func TestDeleteFile_ProxyFilesAreNotRetired(t *testing.T) {
+	f := newEvictFixture(t)
+	f.proxy("pypi-proxy", model.ProtocolPyPI, 60, 60)
+	place := func() {
+		t.Helper()
+		info, err := f.cas.PutBytes(t.Context(), []byte("cached"))
+		if err != nil {
+			t.Fatalf("PutBytes: %v", err)
+		}
+		if _, err := f.reg.PlaceCachedFile(t.Context(), registry.PlaceCachedFileParams{
+			Repo: "pypi-proxy", Package: "cached", Version: "1.0.0", Filename: "cached-1.0.0.tar.gz", Blob: info,
+		}); err != nil {
+			t.Fatalf("PlaceCachedFile: %v", err)
+		}
+	}
+	place()
+	if err := f.reg.DeleteFile(t.Context(), "pypi-proxy", "cached", "1.0.0", "cached-1.0.0.tar.gz", "carol"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+	if n := f.count(`SELECT count(*) FROM retired_files`); n != 0 {
+		t.Fatalf("retired_files = %d, want none for a proxy", n)
+	}
+	place()
+}
+
+func TestDeleteRepository_ReleasesRetiredNames(t *testing.T) {
+	f := newEvictFixture(t)
+	f.hostedRepo("hosted", model.ProtocolPyPI)
+	filename := f.publishPyPI("hosted", "our-lib", "1.0.0")
+	if err := f.reg.DeleteFile(t.Context(), "hosted", "our-lib", "1.0.0", filename, "carol"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+	if err := f.reg.DeleteRepository(t.Context(), "hosted"); err != nil {
+		t.Fatalf("DeleteRepository: %v", err)
+	}
+	if n := f.count(`SELECT count(*) FROM retired_files`); n != 0 {
+		t.Fatalf("retired_files = %d after deleting the repository, want 0", n)
+	}
+
+	f.hostedRepo("hosted", model.ProtocolPyPI)
+	if err := f.publishPyPIAs("hosted", "our-lib", "1.0.0", filename, "again"); err != nil {
+		t.Fatalf("publish into the recreated repository: %v", err)
 	}
 }

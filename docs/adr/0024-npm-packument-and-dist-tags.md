@@ -265,9 +265,14 @@ matches `pypi`. The roadmap's `npmjs` changes.
 - Tag moves are recorded and OCI tag moves still are not. Bringing OCI in line is separate
   work.
 - A name claim now survives deleting a package's last file, as section 4 says "ever
-  published" means. A deleted version number can still be published again, because the
-  version row goes with the file. That gap stays open under SIN-52 and should close before
-  v1.1.0.
+  published" means. A deleted version number is now refused too (SIN-52): deleting a
+  hosted file records its version in `retired_files` in the same transaction, and a
+  publish checks that table after its exclusive insert, so the insert's wait for an
+  in-flight delete makes the tombstone visible. The refusal is `ErrVersionExists`, the
+  same 409 as a live version, and it applies to identical bytes as well: this is a
+  behaviour change, because republishing a deleted version used to succeed. Versions
+  deleted before migration 00009 are not remembered and can still be published again.
+  A proxy repository retires nothing.
 - A proxy cannot see `time` or the readme, so `npm install --before` and pnpm's release-age
   setting do not work through one.
 - A proxy takes only tarballs on its own host under its base path, with no off-origin

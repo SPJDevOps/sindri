@@ -188,6 +188,13 @@ type RepositoryMember struct {
 	Position      int32     `json:"position"`
 }
 
+type RetiredFile struct {
+	PackageID uuid.UUID `json:"package_id"`
+	Version   string    `json:"version"`
+	Filename  string    `json:"filename"`
+	DeletedAt time.Time `json:"deleted_at"`
+}
+
 type SchemaOrigin struct {
 	ID            int16     `json:"id"`
 	InitializedAt time.Time `json:"initialized_at"`

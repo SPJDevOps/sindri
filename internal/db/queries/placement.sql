@@ -277,3 +277,24 @@ SELECT EXISTS (
     WHERE r.name = sqlc.arg('repo_name')
       AND rb.digest = sqlc.arg('digest')
 )::bool AS placed;
+
+-- name: InsertRetiredFile :exec
+-- Remembers that a hosted repository published and then deleted this file
+-- (SIN-52). Idempotent: a name retires once.
+INSERT INTO retired_files (package_id, version, filename)
+VALUES ($1, $2, $3)
+ON CONFLICT (package_id, version, filename) DO NOTHING;
+
+-- name: IsVersionRetired :one
+SELECT EXISTS (
+    SELECT 1 FROM retired_files
+    WHERE package_id = sqlc.arg('package_id') AND version = sqlc.arg('version')
+);
+
+-- name: IsFilenameRetired :one
+-- By filename within the package, whichever version it was under: the
+-- version-less PyPI download path resolves by filename alone.
+SELECT EXISTS (
+    SELECT 1 FROM retired_files
+    WHERE package_id = sqlc.arg('package_id') AND filename = sqlc.arg('filename')
+);

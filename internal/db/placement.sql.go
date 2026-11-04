@@ -585,6 +585,65 @@ func (q *Queries) InsertFileImmutable(ctx context.Context, arg InsertFileImmutab
 	return i, err
 }
 
+const insertRetiredFile = `-- name: InsertRetiredFile :exec
+INSERT INTO retired_files (package_id, version, filename)
+VALUES ($1, $2, $3)
+ON CONFLICT (package_id, version, filename) DO NOTHING
+`
+
+type InsertRetiredFileParams struct {
+	PackageID uuid.UUID `json:"package_id"`
+	Version   string    `json:"version"`
+	Filename  string    `json:"filename"`
+}
+
+// Remembers that a hosted repository published and then deleted this file
+// (SIN-52). Idempotent: a name retires once.
+func (q *Queries) InsertRetiredFile(ctx context.Context, arg InsertRetiredFileParams) error {
+	_, err := q.db.Exec(ctx, insertRetiredFile, arg.PackageID, arg.Version, arg.Filename)
+	return err
+}
+
+const isFilenameRetired = `-- name: IsFilenameRetired :one
+SELECT EXISTS (
+    SELECT 1 FROM retired_files
+    WHERE package_id = $1 AND filename = $2
+)
+`
+
+type IsFilenameRetiredParams struct {
+	PackageID uuid.UUID `json:"package_id"`
+	Filename  string    `json:"filename"`
+}
+
+// By filename within the package, whichever version it was under: the
+// version-less PyPI download path resolves by filename alone.
+func (q *Queries) IsFilenameRetired(ctx context.Context, arg IsFilenameRetiredParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isFilenameRetired, arg.PackageID, arg.Filename)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const isVersionRetired = `-- name: IsVersionRetired :one
+SELECT EXISTS (
+    SELECT 1 FROM retired_files
+    WHERE package_id = $1 AND version = $2
+)
+`
+
+type IsVersionRetiredParams struct {
+	PackageID uuid.UUID `json:"package_id"`
+	Version   string    `json:"version"`
+}
+
+func (q *Queries) IsVersionRetired(ctx context.Context, arg IsVersionRetiredParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isVersionRetired, arg.PackageID, arg.Version)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const linkRepositoryBlob = `-- name: LinkRepositoryBlob :exec
 INSERT INTO repository_blobs (repo_id, digest)
 VALUES ($1, $2)

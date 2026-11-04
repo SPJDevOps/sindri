@@ -59,6 +59,20 @@ is the constraint the schema cannot express because `files` has no
 `package_id`. `GetFileByFilename` additionally orders and limits to one row, so
 even pre-existing data cannot make a download non-deterministic.
 
+**A deleted filename stays taken (SIN-52).** Deleting a file from a hosted
+repository records `(package, version, filename)` in `retired_files` in the
+delete's transaction. A publish checks the filename against that table after its
+insert, in the same transaction, whichever version the filename was under, and
+refuses with `ErrFileExists` (409). Without this, deleting a file freed its name
+and a resolver that had already seen the filename could be served new bytes under
+it. This is a behaviour change: re-uploading a deleted filename was accepted, and
+is now refused even with identical bytes, because "same bytes" cannot be told
+apart from "same name, new build" once the original is gone. A new version is the
+way forward. The rule covers every publish into a hosted repository, including the
+management API's non-immutable one. Proxy repositories record nothing, so a
+cached file can be placed again. Files deleted before the migration are not
+remembered.
+
 **The upload streams, and the adapter hashes once.** The part is not read into
 memory. It is hashed where the multipart reader left it (memory budget or a
 temporary file), the client's `sha256_digest` is compared against that hash, and
