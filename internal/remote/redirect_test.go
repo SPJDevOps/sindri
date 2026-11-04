@@ -147,3 +147,65 @@ func TestNew_KeepsAnInjectedRedirectPolicy(t *testing.T) {
 		t.Fatalf("do = %v, want the injected policy's error", err)
 	}
 }
+
+// A pinned request carries the upstream's credentials, and on a shared host the
+// base path is what separates this upstream from another tenant's. A redirect
+// on the same origin must not take them across that line (ADR 24).
+func TestDo_PinnedRedirectOutsideTheBasePathCarriesNoCredentials(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		location string
+		wantAuth bool
+	}{
+		{name: "UnderTheBasePath", location: "/npm-a/-/file.tgz", wantAuth: true},
+		{name: "AnotherTenant", location: "/npm-b/-/file.tgz"},
+		{name: "NameSharingThePrefix", location: "/npm-ab/-/file.tgz"},
+		{name: "EncodedDotSegment", location: "/npm-a/%2e%2e/npm-b/file.tgz"},
+		{name: "DoubleEncodedDotSegment", location: "/npm-a/%252e%252e/npm-b/file.tgz"},
+		{name: "EncodedSlash", location: "/npm-a/..%2fnpm-b/file.tgz"},
+		{name: "DotSegmentResolvedByTheClient", location: "/npm-a/../npm-b/file.tgz"},
+		{name: "SecondHopLeaves", location: "/npm-a/hop"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var sawAuth atomic.Bool
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/npm-a/start":
+					w.Header().Set("Location", tc.location)
+					w.WriteHeader(http.StatusFound)
+				case "/npm-a/hop":
+					w.Header().Set("Location", "/npm-b/-/file.tgz")
+					w.WriteHeader(http.StatusFound)
+				default:
+					_, _, ok := r.BasicAuth()
+					sawAuth.Store(ok)
+					w.WriteHeader(http.StatusOK)
+				}
+			}))
+			t.Cleanup(upstream.Close)
+			client := New(Options{
+				Registry:    &registry.Registry{},
+				Credentials: StaticCredentials{"mirror": {"user", "s3cret"}},
+			})
+			resp, err := client.do(t.Context(), upstreamRequest{
+				method:    http.MethodGet,
+				url:       upstream.URL + "/npm-a/start",
+				remote:    registry.Remote{UpstreamURL: upstream.URL + "/npm-a", CredentialsRef: "mirror"},
+				pinOrigin: true,
+			})
+			if err != nil {
+				t.Fatalf("do: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status %d, want the redirect followed", resp.StatusCode)
+			}
+			if got := sawAuth.Load(); got != tc.wantAuth {
+				t.Fatalf("credentials reached the final hop = %v, want %v", got, tc.wantAuth)
+			}
+		})
+	}
+}

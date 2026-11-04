@@ -183,6 +183,26 @@ func redirectClients(base *http.Client) (followed, pinned *http.Client) {
 	return &f, &p
 }
 
+// pinnedTo returns the pinned client for one upstream. A redirect on the same
+// origin is still followed, since registries move tarballs on their own host,
+// but credentials stop at any hop outside the upstream's base path: on a shared
+// host that path is what separates this upstream from another tenant's. Each
+// hop is checked, because net/http copies the headers afresh for every one.
+func (c *Client) pinnedTo(upstream string) *http.Client {
+	p := *c.pinned
+	check := p.CheckRedirect
+	p.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := check(req, via); err != nil {
+			return err
+		}
+		if !underUpstreamPath(upstream, req.URL) {
+			req.Header.Del("Authorization")
+		}
+		return nil
+	}
+	return &p
+}
+
 func (c *Client) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, c.timeout)
 }
@@ -196,10 +216,11 @@ type upstreamRequest struct {
 	// tokenKey scopes a cached bearer token; empty disables bearer handling.
 	tokenKey string
 	// pinOrigin refuses a redirect off the origin of url (scheme and host, port
-	// included). Set only for npm: tarball downloads, whose URL came from an
-	// upstream document and whose own host check a redirect would otherwise
-	// undo, and packument requests, whose URL is built from the configured
-	// upstream but whose credentials must not follow a redirect either.
+	// included), and stops credentials at a redirect outside the upstream's base
+	// path. Set only for npm: tarball downloads, whose URL came from an upstream
+	// document and whose own checks a redirect would otherwise undo, and
+	// packument requests, whose URL is built from the configured upstream but
+	// whose credentials must not follow a redirect either.
 	pinOrigin bool
 }
 
@@ -222,7 +243,7 @@ func (c *Client) do(ctx context.Context, ur upstreamRequest) (*http.Response, er
 		}
 		client := c.http
 		if ur.pinOrigin {
-			client = c.pinned
+			client = c.pinnedTo(ur.remote.UpstreamURL)
 		}
 		resp, err := client.Do(req)
 		if err != nil {

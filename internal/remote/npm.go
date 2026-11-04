@@ -346,13 +346,23 @@ func npmTarballURL(upstream, tarball string) (string, error) {
 		return "", errors.New("tarball URL is on another host")
 	}
 	// base ends in a slash, so /npm-a does not admit /npm-ab.
-	basePath := base.EscapedPath()
-	path := u.EscapedPath()
-	if !strings.HasPrefix(path, basePath) || path == basePath {
+	if !strings.HasPrefix(u.EscapedPath(), base.EscapedPath()) || u.EscapedPath() == base.EscapedPath() {
 		return "", errors.New("tarball URL is outside the upstream's path")
 	}
 	u.Scheme, u.Host, u.User, u.Fragment = base.Scheme, base.Host, nil, ""
 	return u.String(), nil
+}
+
+// underUpstreamPath reports whether u's path stays under the upstream's base
+// path, in a form no server along the way could read as leaving it. An upstream
+// URL that does not parse admits nothing.
+func underUpstreamPath(upstream string, u *url.URL) bool {
+	base, err := url.Parse(strings.TrimRight(upstream, "/") + "/")
+	if err != nil {
+		return false
+	}
+	// base ends in a slash, so /npm-a does not admit /npm-ab.
+	return safeNPMTarballPath(u.EscapedPath()) && strings.HasPrefix(u.EscapedPath(), base.EscapedPath())
 }
 
 // safeNPMTarballPath refuses, rather than cleans, any segment that a server along
