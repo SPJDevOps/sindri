@@ -31,11 +31,19 @@ var (
 	// verification).
 	ErrUpstreamUnavailable = errors.New("upstream unavailable")
 
-	// ErrUpstreamDenied means the upstream refused access even after any
-	// credentials or bearer challenge. Docker Hub answers this way for names
-	// that do not exist, so resolution treats it as not found, but it is never
-	// negatively cached: a fixed credential should take effect at once.
+	// ErrUpstreamDenied means the upstream refused Sindri's credential, or
+	// the lack of one, and gave no sign that the name might simply not exist.
+	// It also wraps ErrUpstreamUnavailable: the member cannot be read, which
+	// fails a virtual walk (a later member must not answer for a name this one
+	// exists to serve), answers 502, serves a stale copy, and is never
+	// negatively cached, so a fixed credential takes effect at once.
 	ErrUpstreamDenied = errors.New("upstream denied access")
+
+	// ErrUpstreamHidden means an OCI registry refused in the way Docker Hub,
+	// quay.io and ghcr.io refuse names that do not exist: 401 or 403 to a
+	// caller that already holds a bearer token, or at the token endpoint of an
+	// anonymous proxy. It reads as not found, and is never negatively cached.
+	ErrUpstreamHidden = errors.New("upstream hides the name")
 
 	// ErrNegativeCached means a fresh negative cache entry says the name is
 	// missing upstream; no upstream call was made.
@@ -213,6 +221,8 @@ type upstreamRequest struct {
 	url    string
 	accept string
 	remote registry.Remote
+	// repo names the Sindri repository, for the log line a refusal earns.
+	repo string
 	// tokenKey scopes a cached bearer token; empty disables bearer handling.
 	tokenKey string
 	// pinOrigin refuses a redirect off the origin of url (scheme and host, port
@@ -226,8 +236,21 @@ type upstreamRequest struct {
 
 // do sends an upstream request, applying credentials only where they belong
 // and completing one bearer challenge when the upstream issues it. The caller
-// closes the response body.
+// closes the response body. A refusal is logged once, with the repository and
+// the status, never the URL or any header.
 func (c *Client) do(ctx context.Context, ur upstreamRequest) (*http.Response, error) {
+	resp, err := c.roundTrip(ctx, ur)
+	switch {
+	case err != nil && (errors.Is(err, ErrUpstreamDenied) || errors.Is(err, ErrUpstreamHidden)):
+		c.log.WarnContext(ctx, "upstream refused the request", "repository", ur.repo, "reason", err.Error())
+	case err == nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden):
+		c.log.WarnContext(ctx, "upstream refused the request", "repository", ur.repo, "status", resp.StatusCode)
+	}
+	return resp, err
+}
+
+// roundTrip is do without the refusal log.
+func (c *Client) roundTrip(ctx context.Context, ur upstreamRequest) (*http.Response, error) {
 	send := func(bearer string) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, ur.method, ur.url, nil)
 		if err != nil {
@@ -259,7 +282,7 @@ func (c *Client) do(ctx context.Context, ur upstreamRequest) (*http.Response, er
 	challenge := resp.Header.Get("WWW-Authenticate")
 	_ = resp.Body.Close()
 	if !strings.HasPrefix(strings.ToLower(challenge), "bearer ") {
-		return nil, fmt.Errorf("%w: status 401", ErrUpstreamDenied)
+		return nil, deniedError("status 401")
 	}
 	token, err := c.fetchBearerToken(ctx, challenge, ur)
 	if err != nil {
@@ -268,13 +291,19 @@ func (c *Client) do(ctx context.Context, ur upstreamRequest) (*http.Response, er
 	return send(token)
 }
 
+// deniedError is a refusal. It wraps ErrUpstreamUnavailable as well, so every
+// path that reports or recovers from an unreadable upstream treats it as one.
+func deniedError(detail string) error {
+	return fmt.Errorf("%w: %w: %s", ErrUpstreamDenied, ErrUpstreamUnavailable, detail)
+}
+
 // classify maps a non-200 upstream status to the error resolution acts on.
 func classify(status int) error {
 	switch status {
 	case http.StatusNotFound:
 		return ErrUpstreamNotFound
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return fmt.Errorf("%w: status %d", ErrUpstreamDenied, status)
+		return deniedError(fmt.Sprintf("status %d", status))
 	default:
 		return fmt.Errorf("%w: status %d", ErrUpstreamUnavailable, status)
 	}

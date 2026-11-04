@@ -242,6 +242,7 @@ func (c *Client) fetchAndCacheNPMPackument(ctx context.Context, repoName, name s
 		url:       npmPackumentURL(remote.UpstreamURL, name),
 		accept:    npmPackumentAccept,
 		remote:    remote,
+		repo:      repoName,
 		pinOrigin: true,
 	})
 	if err != nil {
@@ -470,6 +471,7 @@ func (c *Client) FetchNPMTarball(ctx context.Context, repoName, name, filename s
 		method:    http.MethodGet,
 		url:       fileURL,
 		remote:    remote,
+		repo:      repoName,
 		pinOrigin: true,
 	})
 	if err != nil {

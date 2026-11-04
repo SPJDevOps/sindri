@@ -153,8 +153,9 @@ the package, an exact-URL install of that version keeps getting the placed copy,
 virtual as well as directly. Retention does not evict it while its cache entry stays alive
 (SIN-54).
 
-**An upstream 5xx, or a document that fails to parse, fails the walk with a 502.** A 404, a
-negative cache entry, or a 401/403 is a miss and the walk moves on. A stale document still
+**An upstream 5xx, or a document that fails to parse, fails the walk with a 502.** A 404 or a
+negative cache entry is a miss and the walk moves on. A 401/403 is a refusal and fails it
+too, below. A stale document still
 answers from its own member during an outage, so an outage cannot change which member a
 name resolves to, and an outage on a proxy does not touch a claimed name, since the proxy is
 not contacted. Only hosted members claim: a proxy's cached `packages` rows look like hosted
@@ -162,18 +163,16 @@ rows, and `claimOwner` is what keeps them out. Names through a virtual use `vali
 ASCII only, and a hosted member compares exactly while the claim compares in lowercase. So
 `JSONStream` against a hosted `jsonstream` is claimed and then a 404.
 
-**A 401 or 403 from a proxy member is, for now, a miss that moves the walk on.** This is
-behaviour shared with PyPI and OCI (`absent` in `resolve.go`). SIN-55 decided on 2026-11-04
-that a refusal will fail the walk on all three protocols, before v1.1.0: the broken thing is
-Sindri's own upstream credential, not the package's presence. This paragraph describes the
-code until that lands. The risk it closes is real. With members `[private-proxy, public-proxy]`, a broken credential
-on the first makes a private name resolve from the public proxy for as long as the
-credential stays broken. A denial is never negatively cached, so this is not bounded by the
-negative TTL: every read asks the private upstream again, is refused again, and falls to the
-public one. A stale private document stops answering too, because a denial returns before
-the stale fallback, which only an unavailable upstream reaches. A claim by a hosted member
-still holds, so it affects only names that live upstream on a private registry. Docker Hub's
-denial handling is why a refusal counts as a miss today, so SIN-55 has to check it first.
+**A 401 or 403 from a proxy member fails the walk with a 502.** SIN-55 decided on 2026-11-04
+that a refusal fails the walk on all three protocols (ADR 14 has the rule table and the OCI
+exceptions): the broken thing is Sindri's own upstream credential, not the package's
+presence. The risk it closes is real. With members `[private-proxy, public-proxy]`, a broken
+credential on the first would otherwise make a private name resolve from the public proxy for
+as long as the credential stays broken. A refusal is never negatively cached, so that would
+not have been bounded by the negative TTL either. A stale private document keeps answering
+from its own member, as it does in an outage, because a refusal is also unavailable. A claim
+by a hosted member still holds, so this affects only names that live upstream on a private
+registry.
 
 **An npm packument is bounded at 128 MiB, and each read parses all of it.** PyPI pages and
 OCI manifests keep 32 MiB; a packument lists every version and real ones are large
@@ -274,7 +273,8 @@ matches `pypi`. The roadmap's `npmjs` changes.
 - A proxy takes only tarballs on its own host under its base path, with no off-origin
   redirects. Registries that write `%2f` into a tarball URL, or redirect downloads to a CDN,
   get a 502 or are left out. Bearer credentials and private upstreams are SIN-53.
-- A refused credential on a proxy member lets the walk fall to the next one (SIN-55).
+- A refused credential on a proxy member fails the walk with a 502 rather than letting it
+  fall to the next member (SIN-55).
 
 ## Rejected
 
@@ -300,7 +300,8 @@ matches `pypi`. The roadmap's `npmjs` changes.
 - **Refusing a same-origin redirect outside the base path.** It would break registries that
   move tarballs on their own host. Stopping the credentials closes the same risk.
 - **Failing the walk on a refusal for npm only.** Smaller, since npm resolves through its own
-  closures, but it would leave the protocols different. SIN-55 chose all three.
+  closures, but it would leave the protocols different. SIN-55 chose all three, with Docker
+  Hub, quay.io and ghcr.io's refusals of unknown names kept as misses (ADR 14).
 - **Merging packuments per version.** A hostile `99.0.0` can appear under a name it should
   never reach. ADR 14 already rejected merging, and I5 forbids it.
 - **Declaring scopes in config.** It closes the first-publish gap at the cost of a field

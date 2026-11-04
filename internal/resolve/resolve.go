@@ -65,13 +65,16 @@ var ErrNotFound = registry.ErrNotFound
 var ErrUpstreamUnavailable = remote.ErrUpstreamUnavailable
 
 // absent reports whether err means "this member does not have it", which moves
-// a virtual walk on to the next member rather than failing it.
+// a virtual walk on to the next member rather than failing it. A refusal of
+// Sindri's credential is not absence: it fails the walk, so a broken credential
+// on a private upstream cannot let a public one answer for the same name.
+// An OCI registry that hides names behind a refusal is the exception.
 func absent(err error) bool {
 	return errors.Is(err, registry.ErrNotFound) ||
 		errors.Is(err, registry.ErrNotPlaced) ||
 		errors.Is(err, remote.ErrUpstreamNotFound) ||
 		errors.Is(err, remote.ErrNegativeCached) ||
-		errors.Is(err, remote.ErrUpstreamDenied)
+		errors.Is(err, remote.ErrUpstreamHidden)
 }
 
 // SplitOCIPath finds the longest repository name prefix of path and returns

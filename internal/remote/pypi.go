@@ -56,7 +56,7 @@ func (c *Client) FetchPyPIIndex(ctx context.Context, repoName, project string) (
 		if err == nil {
 			return idx, nil
 		}
-		if errors.Is(err, ErrUpstreamNotFound) || errors.Is(err, ErrUpstreamDenied) {
+		if errors.Is(err, ErrUpstreamNotFound) {
 			return PyPIIndex{}, err
 		}
 		// Upstream down: serve stale.
@@ -90,6 +90,7 @@ func (c *Client) fetchAndCachePyPIIndex(ctx context.Context, repoName, project s
 		url:    strings.TrimRight(remote.UpstreamURL, "/") + "/" + project + "/",
 		accept: "application/vnd.pypi.simple.v1+json,application/json;q=0.9",
 		remote: remote,
+		repo:   repoName,
 	})
 	if err != nil {
 		return PyPIIndex{}, err
@@ -201,6 +202,7 @@ func (c *Client) FetchPyPIFile(ctx context.Context, repoName, project, version, 
 		method: http.MethodGet,
 		url:    fileURL,
 		remote: remote,
+		repo:   repoName,
 	})
 	if err != nil {
 		return registry.PackageFile{}, nil, err

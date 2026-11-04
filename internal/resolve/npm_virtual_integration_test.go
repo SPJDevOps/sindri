@@ -481,12 +481,16 @@ func TestVirtualNPM_AnUpstreamFailureFailsTheWalk(t *testing.T) {
 		})
 	}
 
-	// A member that only refused or lacks the name says nothing about availability.
-	t.Run("ARefusalIsAMiss", func(t *testing.T) {
+	// A refusal of Sindri's credential is a failure of the member, not a miss: a
+	// later member must not answer for a name the refusing one exists to serve.
+	t.Run("ARefusalFailsTheWalk", func(t *testing.T) {
 		e, first, second := newTwoProxies(t)
 		first.setStatus(http.StatusForbidden)
 		second.offer(t, "foo", "second", "1.0.0")
-		e.wantNPM(t, "/npm/both/foo", http.StatusOK)
+		e.wantNPM(t, "/npm/both/foo", http.StatusBadGateway)
+		if n := second.count(); n != 0 {
+			t.Fatalf("the second member got %d requests after the first refused", n)
+		}
 	})
 
 	// An outage serves what the member already has rather than changing the answer.
