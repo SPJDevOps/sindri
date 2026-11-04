@@ -262,6 +262,50 @@ rows present. It does drop `dist_tags`, `dist_tag_events`, and `versions.depreca
 **The preset stays `npm`.** It is what `presets.go` and ARCHITECTURE.md already say, and it
 matches `pypi`. The roadmap's `npmjs` changes.
 
+### Checked against installers (SIN-51)
+
+`scripts/npm-tarball-differential.sh` installs each tarball shape the parser accepts from a
+local file with npm 10.9.9, pnpm 10.34.9 and yarn 1.22.22 (`--ignore-scripts`, temp
+directories, pinned clients) and compares the installed `package.json` with what
+`inspectManifest` read. Each tarball holds only `package.json` variants whose name, version
+and description differ, so a disagreement shows which one was read. The harness is
+`internal/proto/npm/tarball_differential_test.go`, behind the `differential` build tag.
+It ran 39 candidate shapes: 21 accepted and compared, 18 refused and so skipped. Of the 63
+client rows, 62 agree, none disagree, and one is a client error: yarn 1.22.22 refuses to
+extract a tarball with 7 stray zero bytes after the end marker ("Unexpected end of data").
+That is a tarball Sindri accepts but one client cannot install. No client read a
+different manifest, so it is not manifest confusion. It is left unmarked here.
+
+| Shape | npm | pnpm | yarn |
+|---|---|---|---|
+| npm pack, pax path | agree | agree | agree |
+| npm pack, ustar prefix | agree | agree | agree |
+| tar-stream form | agree | agree | agree |
+| npm form with no owner | agree | agree | agree |
+| NUL typeflag | agree | agree | agree |
+| directories with and without a slash | agree | agree | agree |
+| manifest after other files | agree | agree | agree |
+| extra zero blocks | agree | agree | agree |
+| zero bytes short of a block | agree | agree | client error |
+| manifest split over prefix and name | agree | agree | agree |
+| manifest named by a pax path over a short name | agree | agree | agree |
+| pax with every allowed key | agree | agree | agree |
+| pax with no path | agree | agree | agree |
+| pax size repeating the header's | agree | agree | agree |
+| pax path over a name ending in a slash | agree | agree | agree |
+| pax path over a name cut after a parent segment | agree | agree | agree |
+| pax path over a name cut inside a character | agree | agree | agree |
+| decoy manifest as a plain second file | agree | agree | agree |
+| decoy manifest one directory down | agree | agree | agree |
+| decoy manifest two directories down | agree | agree | agree |
+| decoy manifest under the NTFS short-name lookalike | agree | agree | agree |
+
+Where a row says agree, the client installed exactly the name, version and description the
+parser read (`diff-shape-NN@1.NN.0 READ-BY-SINDRI`), never the decoy's. Not tested: Windows
+name handling. Drive roots, 8.3 short names, trailing dots and spaces, UNC roots and
+backslashes cannot be exercised on this platform, so those refusals rest on reasoning and
+Unix reproductions only.
+
 ## Consequences
 
 - A third protocol did need a schema change, and it also needed per-protocol normalization

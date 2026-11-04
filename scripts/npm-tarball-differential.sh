@@ -12,7 +12,12 @@ YARN_VERSION="${YARN_VERSION:-1.22.22}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/sindri-npm-differential.XXXXXX")"
-trap 'rm -rf "${WORK}"' EXIT
+# Go's module cache is read-only, so it must stay at its real location, not under
+# the temp home below.
+GOMODCACHE="$(go env GOMODCACHE)"
+GOCACHE="$(go env GOCACHE)"
+export GOMODCACHE GOCACHE
+trap 'chmod -R u+w "${WORK}" 2>/dev/null || true; rm -rf "${WORK}"' EXIT
 
 TOOLS="${WORK}/tools"
 mkdir -p "${TOOLS}" "${WORK}/home"
@@ -44,4 +49,6 @@ export SINDRI_DIFF_WORK="${WORK}/runs"
 mkdir -p "${SINDRI_DIFF_WORK}"
 
 cd "${ROOT}"
-go test -tags differential -count=1 -v -parallel 4 -run '^TestDifferential_' ./internal/proto/npm/
+go test -tags differential -count=1 -v -parallel 4 -run '^TestDifferential_' ./internal/proto/npm/ |
+  grep -Ev '^(=== (RUN|PAUSE|CONT|NAME)|\s*--- PASS)'
+exit "${PIPESTATUS[0]}"
