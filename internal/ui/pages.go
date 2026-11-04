@@ -185,8 +185,14 @@ type fileRow struct {
 }
 
 type versionGroup struct {
+	Version    string
+	Deprecated string // an npm deprecation message; empty otherwise
+	Files      []fileRow
+}
+
+type distTagRow struct {
+	Tag     string
 	Version string
-	Files   []fileRow
 }
 
 type packagePage struct {
@@ -194,12 +200,14 @@ type packagePage struct {
 	Repo     repoView
 	Package  string
 	Tags     []tagRow
+	DistTags []distTagRow
 	Versions []versionGroup
 	Cursor   string
 	More     string
 }
 
-// packagePage lists an OCI image's tags, or a PyPI project's files by version.
+// packagePage lists an OCI image's tags, or the files of a PyPI project or npm
+// package by version.
 func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model.Repository) {
 	name := r.URL.Query().Get("name")
 	if name == "" || repo.Type == model.RepoTypeVirtual {
@@ -236,6 +244,11 @@ func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model
 		return
 	}
 
+	if repo.Protocol == model.ProtocolNPM {
+		h.npmPackagePage(w, r, repo, name, data)
+		return
+	}
+
 	tags, err := h.opts.Registry.ListTags(r.Context(), registry.ListTagsParams{
 		Repo: repo.Name, Image: name, After: data.Cursor, Limit: pageSize,
 	})
@@ -255,6 +268,33 @@ func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model
 		data.More = packageHref(repo.Name, name) + "&" + url.Values{"cursor": {tags.NextCursor}}.Encode()
 	}
 	h.render(w, r, "package", "tag-rows", http.StatusOK, data)
+}
+
+// npmPackagePage lists what the registry holds for an npm package: every
+// version with its tarball and deprecation, and the dist-tags. A hosted
+// repository has dist-tags; a proxy's rows are versions it has cached, with none.
+// Nothing here contacts an upstream.
+func (h *handler) npmPackagePage(w http.ResponseWriter, r *http.Request, repo model.Repository, name string, data packagePage) {
+	pkg, err := h.opts.Registry.GetNPMPackage(r.Context(), repo.Name, name)
+	if err != nil {
+		h.registryError(w, r, err)
+		return
+	}
+	for _, v := range pkg.Versions {
+		data.Versions = append(data.Versions, versionGroup{
+			Version:    v.Version,
+			Deprecated: v.Deprecated,
+			Files: []fileRow{{
+				Filename: v.File.Filename, Size: v.File.Size,
+				Href: artifactHref(repo.Name, name, v.File.Digest),
+			}},
+		})
+	}
+	for tag, version := range pkg.DistTags {
+		data.DistTags = append(data.DistTags, distTagRow{Tag: tag, Version: version})
+	}
+	slices.SortFunc(data.DistTags, func(a, b distTagRow) int { return strings.Compare(a.Tag, b.Tag) })
+	h.render(w, r, "package", "", http.StatusOK, data)
 }
 
 type stageRow struct {

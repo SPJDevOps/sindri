@@ -5,6 +5,7 @@ package npm
 import (
 	"bytes"
 	"context"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -840,22 +842,95 @@ func TestTarball_OnlyTheExactFilenameExists(t *testing.T) {
 	}
 }
 
-func TestRead_ProxyAndVirtualAre501UntilSprint3(t *testing.T) {
+func integrityOf(body []byte) string {
+	sum := sha512.Sum512(body)
+	return "sha512-" + base64.StdEncoding.EncodeToString(sum[:])
+}
+
+// A proxy reads through its upstream and a virtual repository through its members,
+// and neither accepts a write of any kind.
+func TestRead_ProxyAndVirtualReadAndNeitherAcceptsAWrite(t *testing.T) {
 	f := newFixture(t, testPublicURL)
-	f.createRepo(registry.CreateRepositoryParams{Name: "up", Type: model.RepoTypeProxy, UpstreamURL: "https://registry.npmjs.org"})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/foo":
+			_, _ = w.Write([]byte(`{"name":"foo","dist-tags":{"latest":"1.0.0"},"versions":{"1.0.0":{"dist":{` +
+				`"tarball":"http://` + r.Host + `/foo/-/foo-1.0.0.tgz","integrity":"` + integrityOf([]byte("tarball")) + `"}}}}`))
+		case "/foo/-/foo-1.0.0.tgz":
+			_, _ = w.Write([]byte("tarball"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	f.createRepo(registry.CreateRepositoryParams{Name: "up", Type: model.RepoTypeProxy, UpstreamURL: upstream.URL, TTLSeconds: 3600})
 	f.createRepo(registry.CreateRepositoryParams{Name: "all", Type: model.RepoTypeVirtual, Members: []string{testRepo, "up"}})
+
+	paths := func(repo string) []string {
+		return []string{
+			"/npm/" + repo + "/foo",
+			"/npm/" + repo + "/foo/-/foo-1.0.0.tgz",
+			"/npm/" + repo + "/-/package/foo/dist-tags",
+		}
+	}
 	for _, repo := range []string{"up", "all"} {
-		t.Run(repo, func(t *testing.T) {
-			for _, path := range []string{"/npm/" + repo + "/foo", "/npm/" + repo + "/foo/-/foo-1.0.0.tgz"} {
-				if status, got, _ := f.do(adminToken, http.MethodGet, path, nil); status != http.StatusNotImplemented {
-					t.Fatalf("GET %s = %d %s, want 501", path, status, got)
-				}
+		for _, path := range paths(repo) {
+			if status, got, _ := f.do(adminToken, http.MethodGet, path, nil); status != http.StatusOK {
+				t.Fatalf("GET %s = %d %s, want 200", path, status, got)
 			}
-			body := publishBody(t, "foo", "1.0.0", packageTarball(t, "foo", "1.0.0"))
-			if status, got, _ := f.do(adminToken, http.MethodPut, "/npm/"+repo+"/foo", body); status != http.StatusMethodNotAllowed {
-				t.Fatalf("PUT = %d %s, want 405", status, got)
+		}
+		_, doc, _ := f.do(adminToken, http.MethodGet, "/npm/"+repo+"/foo", nil)
+		if want := testPublicURL + "/npm/" + repo + "/foo/-/foo-1.0.0.tgz"; !bytes.Contains(doc, []byte(want)) {
+			t.Fatalf("packument through %s = %s, want a tarball at %s", repo, doc, want)
+		}
+
+		body := publishBody(t, "foo", "1.0.0", packageTarball(t, "foo", "1.0.0"))
+		writes := []struct {
+			method, path string
+			body         []byte
+		}{
+			{http.MethodPut, "/npm/" + repo + "/foo", body},
+			{http.MethodPut, "/npm/" + repo + "/-/package/foo/dist-tags/beta", []byte(`"1.0.0"`)},
+			{http.MethodDelete, "/npm/" + repo + "/-/package/foo/dist-tags/beta", nil},
+		}
+		for _, w := range writes {
+			if status, got, _ := f.do(adminToken, w.method, w.path, w.body); status != http.StatusMethodNotAllowed {
+				t.Fatalf("%s %s = %d %s, want 405", w.method, w.path, status, got)
 			}
-		})
+		}
+	}
+}
+
+// A reader the repository does not know gets a 404, and upstream never hears of it.
+func TestRead_ProxyAuthorizesBeforeContactingUpstream(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	var hits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	t.Cleanup(upstream.Close)
+	f.createRepo(registry.CreateRepositoryParams{Name: "up", Type: model.RepoTypeProxy, UpstreamURL: upstream.URL, TTLSeconds: 3600})
+
+	for _, path := range []string{"/npm/up/foo", "/npm/up/foo/-/foo-1.0.0.tgz", "/npm/up/-/package/foo/dist-tags"} {
+		if status, got, _ := f.do(outsiderToken, http.MethodGet, path, nil); status != http.StatusNotFound {
+			t.Fatalf("GET %s = %d %s, want 404", path, status, got)
+		}
+	}
+	if hits.Load() != 0 {
+		t.Fatal("an unauthorized read reached upstream")
+	}
+}
+
+func TestPackument_ProxyWithNoPublicUrlIs503BeforeContactingUpstream(t *testing.T) {
+	f := newFixture(t, "")
+	var hits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	t.Cleanup(upstream.Close)
+	f.createRepo(registry.CreateRepositoryParams{Name: "up", Type: model.RepoTypeProxy, UpstreamURL: upstream.URL, TTLSeconds: 3600})
+
+	if status, got, _ := f.do(adminToken, http.MethodGet, "/npm/up/foo", nil); status != http.StatusServiceUnavailable {
+		t.Fatalf("GET = %d %s, want 503", status, got)
+	}
+	if hits.Load() != 0 {
+		t.Fatal("a read that cannot be answered reached upstream")
 	}
 }
 
@@ -1091,7 +1166,7 @@ func TestDistTags_InvalidInputs(t *testing.T) {
 	}
 }
 
-func TestDistTags_ProxyAndVirtualAreRefused(t *testing.T) {
+func TestDistTags_ProxyRefusesWrites(t *testing.T) {
 	f := newFixture(t, testPublicURL)
 	f.createRepo(registry.CreateRepositoryParams{Name: "up", Type: model.RepoTypeProxy, UpstreamURL: "https://registry.npmjs.org"})
 	for _, tc := range []struct {
@@ -1099,15 +1174,10 @@ func TestDistTags_ProxyAndVirtualAreRefused(t *testing.T) {
 		body   string
 		want   int
 	}{
-		{http.MethodGet, "", http.StatusNotImplemented},
 		{http.MethodPut, `"1.0.0"`, http.StatusMethodNotAllowed},
 		{http.MethodDelete, "", http.StatusMethodNotAllowed},
 	} {
-		tag := "beta"
-		path := "/npm/up/-/package/foo/dist-tags"
-		if tc.method != http.MethodGet {
-			path += "/" + tag
-		}
+		path := "/npm/up/-/package/foo/dist-tags/beta"
 		if status, got, _ := f.do(adminToken, tc.method, path, []byte(tc.body)); status != tc.want {
 			t.Fatalf("%s = %d %s, want %d", tc.method, status, got, tc.want)
 		}

@@ -110,3 +110,35 @@ func TestAPI_FoldedNamesAreUnchangedByDecoding(t *testing.T) {
 		})
 	}
 }
+
+// A name whose last file is deleted stays claimed, but to a reader it is gone:
+// the package list omits it and its versions answer 404, as they did before the
+// row was kept (SIN-49).
+func TestAPI_EmptiedPackageReadsAsAbsent(t *testing.T) {
+	e := newAuditEnv(t)
+	const repo = "npm-hosted"
+	if _, err := e.reg.CreateRepository(t.Context(), registry.CreateRepositoryParams{
+		Name: repo, Type: model.RepoTypeHosted, Protocol: model.ProtocolNPM,
+	}); err != nil {
+		t.Fatalf("CreateRepository: %v", err)
+	}
+	publishNPM(t, e, repo, "foo", "foo-1.0.0.tgz", "1.0.0", "latest")
+	publishNPM(t, e, repo, "bar", "bar-1.0.0.tgz", "1.0.0", "latest")
+	const base = "/api/v1/repositories/" + repo + "/packages"
+
+	if status, body := e.do(t, "admin", http.MethodDelete, base+"/foo/versions/1.0.0/files/foo-1.0.0.tgz"); status != http.StatusNoContent {
+		t.Fatalf("delete = %d %s, want 204", status, body)
+	}
+
+	status, body := e.do(t, "admin", http.MethodGet, base)
+	if status != http.StatusOK || strings.Contains(body, `"foo"`) || !strings.Contains(body, `"bar"`) {
+		t.Fatalf("list packages = %d %s, want bar alone", status, body)
+	}
+	if status, body := e.do(t, "admin", http.MethodGet, base+"/foo/versions"); status != http.StatusNotFound {
+		t.Fatalf("versions of the emptied name = %d %s, want 404", status, body)
+	}
+	claimed, err := e.reg.PackageClaimed(t.Context(), repo, "foo")
+	if err != nil || !claimed {
+		t.Fatalf("PackageClaimed = %v, %v; want the name still claimed", claimed, err)
+	}
+}

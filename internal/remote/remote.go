@@ -43,8 +43,20 @@ var (
 )
 
 // maxMetadataBytes bounds upstream documents read into memory: PyPI project
-// pages and OCI manifests. Package files and blobs stream instead.
+// pages and OCI manifests. Package files and blobs stream instead. npm
+// packuments have their own, larger bound.
 const maxMetadataBytes = 32 << 20
+
+// maxNPMPackumentBytes bounds an npm packument, which lists every version ever
+// published and so runs to tens of megabytes for popular packages (renovate is
+// 36.6 MB), past what a PyPI page or an OCI manifest ever reaches.
+const maxNPMPackumentBytes = 128 << 20
+
+// errRedirectRefused is why a pinned request stopped at a redirect.
+var errRedirectRefused = errors.New("refusing a redirect to another origin")
+
+// maxRedirects is net/http's own default, which setting CheckRedirect replaces.
+const maxRedirects = 10
 
 // Credentials looks up a secret by credentials_ref. The secret is never stored
 // in remotes and never logged.
@@ -69,11 +81,16 @@ func (s StaticCredentials) Lookup(_ context.Context, ref string) (string, string
 
 // Client talks to proxy upstreams.
 type Client struct {
-	reg     *registry.Registry
+	reg *registry.Registry
+	// http follows redirects but drops credentials leaving the first request's
+	// origin; pinned refuses to leave that origin at all.
 	http    *http.Client
+	pinned  *http.Client
 	creds   Credentials
 	timeout time.Duration
 	log     *slog.Logger
+	// maxPackument bounds an npm packument read into memory.
+	maxPackument int64
 
 	// tokenCache holds bearer tokens obtained from WWW-Authenticate
 	// challenges, keyed by registry host and image, since a token's scope is
@@ -97,6 +114,9 @@ type Options struct {
 	// keeps moving.
 	Timeout time.Duration
 	Logger  *slog.Logger
+	// MaxNPMPackumentBytes bounds an npm packument read into memory; zero means
+	// 128 MiB. Tests lower it to stay cheap.
+	MaxNPMPackumentBytes int64
 }
 
 // New returns a Client.
@@ -116,14 +136,71 @@ func New(opts Options) *Client {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Client{
-		reg:        opts.Registry,
-		http:       opts.HTTPClient,
-		creds:      opts.Credentials,
-		timeout:    opts.Timeout,
-		log:        opts.Logger,
-		tokenCache: make(map[string]cachedToken),
+	if opts.MaxNPMPackumentBytes <= 0 {
+		opts.MaxNPMPackumentBytes = maxNPMPackumentBytes
 	}
+	followed, pinned := redirectClients(opts.HTTPClient)
+	return &Client{
+		reg:          opts.Registry,
+		http:         followed,
+		pinned:       pinned,
+		creds:        opts.Credentials,
+		timeout:      opts.Timeout,
+		log:          opts.Logger,
+		maxPackument: opts.MaxNPMPackumentBytes,
+		tokenCache:   make(map[string]cachedToken),
+	}
+}
+
+// redirectClients returns two copies of base with the redirect rules ADR 14 asks
+// for. net/http alone is not enough: it keeps Authorization across a redirect to
+// the same hostname on another port or scheme, and to any subdomain, and each of
+// those is another origin.
+func redirectClients(base *http.Client) (followed, pinned *http.Client) {
+	limit := base.CheckRedirect
+	if limit == nil {
+		limit = func(_ *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			return nil
+		}
+	}
+	f := *base
+	f.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !sameOrigin(req.URL.String(), via[0].URL.String()) {
+			req.Header.Del("Authorization")
+		}
+		return limit(req, via)
+	}
+	p := *base
+	p.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !sameOrigin(req.URL.String(), via[0].URL.String()) {
+			return errRedirectRefused
+		}
+		return limit(req, via)
+	}
+	return &f, &p
+}
+
+// pinnedTo returns the pinned client for one upstream. A redirect on the same
+// origin is still followed, since registries move tarballs on their own host,
+// but credentials stop at any hop outside the upstream's base path: on a shared
+// host that path is what separates this upstream from another tenant's. Each
+// hop is checked, because net/http copies the headers afresh for every one.
+func (c *Client) pinnedTo(upstream string) *http.Client {
+	p := *c.pinned
+	check := p.CheckRedirect
+	p.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := check(req, via); err != nil {
+			return err
+		}
+		if !underUpstreamPath(upstream, req.URL) {
+			req.Header.Del("Authorization")
+		}
+		return nil
+	}
+	return &p
 }
 
 func (c *Client) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -138,6 +215,13 @@ type upstreamRequest struct {
 	remote registry.Remote
 	// tokenKey scopes a cached bearer token; empty disables bearer handling.
 	tokenKey string
+	// pinOrigin refuses a redirect off the origin of url (scheme and host, port
+	// included), and stops credentials at a redirect outside the upstream's base
+	// path. Set only for npm: tarball downloads, whose URL came from an upstream
+	// document and whose own checks a redirect would otherwise undo, and
+	// packument requests, whose URL is built from the configured upstream but
+	// whose credentials must not follow a redirect either.
+	pinOrigin bool
 }
 
 // do sends an upstream request, applying credentials only where they belong
@@ -157,7 +241,11 @@ func (c *Client) do(ctx context.Context, ur upstreamRequest) (*http.Response, er
 		} else if err := c.applyCredentials(ctx, req, ur.remote); err != nil {
 			return nil, err
 		}
-		resp, err := c.http.Do(req)
+		client := c.http
+		if ur.pinOrigin {
+			client = c.pinnedTo(ur.remote.UpstreamURL)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, err)
 		}

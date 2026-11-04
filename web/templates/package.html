@@ -9,11 +9,24 @@
   </div>
 </section>
 {{else}}
+{{if .DistTags}}
+<section class="section">
+  <h2 class="section-title">Dist-tags</h2>
+  <div class="rows">
+  {{range .DistTags}}
+    <div class="row"><span class="primary mono">{{.Tag}}</span><span class="secondary mono">{{.Version}}</span></div>
+  {{end}}
+  </div>
+</section>
+{{end}}
 <section class="section">
   <h2 class="section-title">Versions</h2>
   <div class="rows">
   {{range .Versions}}
     <div class="version-group">{{.Version}}</div>
+    {{if .Deprecated}}
+    <div class="row"><span class="primary"><span class="pill revoke">deprecated</span> {{.Deprecated}}</span></div>
+    {{end}}
     {{range .Files}}
     <div class="row"><a class="primary mono" href="{{.Href}}">{{.Filename}}</a><span class="secondary">{{bytes .Size}}</span></div>
     {{end}}

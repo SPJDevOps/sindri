@@ -142,7 +142,7 @@ internal/
     oci/                 OCI distribution spec handlers
     pypi/                PEP 503/691 index and upload
     npm/                 packument, tarball, publish, dist-tags, deprecate, login (ADR 24)
-  remote/                proxy upstream fetch and caching
+  remote/                proxy upstream fetch and caching: OCI, PyPI, npm
   resolve/               virtual repository ordered resolution
   reconcile/             YAML to database convergence
   queue/                 the jobs table: enqueue, claim under a lease, complete
@@ -177,7 +177,9 @@ provenance, evidence, and lifecycle apply.
 fetch, stream to the client, and cache into the CAS. They carry a positive TTL for
 metadata freshness and a negative TTL so that a missing package does not hammer upstream.
 Cached bytes are indistinguishable from any other blob in storage, but their placement row
-marks them as proxied, which is what keeps invariant I4 enforceable.
+marks them as proxied, which is what keeps invariant I4 enforceable. An npm proxy caches the
+abbreviated packument only and verifies each tarball against its `integrity` or `shasum`
+(ADR 24).
 
 **Virtual** repositories are the developer-facing view. One URL, an explicit ordered list
 of members, hosted first.
@@ -200,6 +202,16 @@ When a virtual repository resolves a package name:
 
 For npm, a hosted member holding any name in a scope claims the whole scope: one published
 `@acme/*` package claims every `@acme/*` name (ADR 24).
+
+"Ever published" is meant literally. The claim is the `packages` row, and on a hosted
+repository that row outlives the name's last file: deleting a file removes its version
+when emptied, never the package. An emptied name is hidden from listings and reads as
+absent, and a virtual repository answers 404 for it rather than asking a proxy member.
+Publishing to it again reuses the row. Deleting the repository is what releases a claim,
+and `DeleteRepository` refuses a repository with promotion events, so for such a repository
+a claim has no release path today. It fails closed (ADR 24).
+OCI images are listed regardless of `versions`, because an image is a package with tags
+and has no `versions` rows.
 
 Step 2 is the dependency-confusion defence, and the failure mode it prevents is subtle:
 without it, an attacker publishes `our-internal-lib` version `99.0.0` to pypi.org, a

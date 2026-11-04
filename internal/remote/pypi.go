@@ -106,7 +106,7 @@ func (c *Client) fetchAndCachePyPIIndex(ctx context.Context, repoName, project s
 		}
 		return PyPIIndex{}, err
 	}
-	body, err := readMetadata(resp.Body)
+	body, err := readMetadata(resp.Body, maxMetadataBytes)
 	if err != nil {
 		return PyPIIndex{}, err
 	}

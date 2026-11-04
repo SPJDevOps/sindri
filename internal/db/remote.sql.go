@@ -439,6 +439,31 @@ func (q *Queries) LockEvictableCacheEntry(ctx context.Context, arg LockEvictable
 	return i, err
 }
 
+const nPMNameClaimedInRepo = `-- name: NPMNameClaimedInRepo :one
+SELECT EXISTS (
+    SELECT 1 FROM packages
+    WHERE repo_id = $1
+      AND (normalized_name = $2
+           OR ($3::text <> ''
+               AND starts_with(normalized_name, $3::text)))
+)::bool AS exists
+`
+
+type NPMNameClaimedInRepoParams struct {
+	RepoID         uuid.UUID `json:"repo_id"`
+	NormalizedName string    `json:"normalized_name"`
+	ScopePrefix    string    `json:"scope_prefix"`
+}
+
+// starts_with rather than LIKE, so a name's characters need no escaping. An
+// empty scope_prefix asks for the exact name alone.
+func (q *Queries) NPMNameClaimedInRepo(ctx context.Context, arg NPMNameClaimedInRepoParams) (bool, error) {
+	row := q.db.QueryRow(ctx, nPMNameClaimedInRepo, arg.RepoID, arg.NormalizedName, arg.ScopePrefix)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const packageExistsInRepo = `-- name: PackageExistsInRepo :one
 SELECT EXISTS (
     SELECT 1 FROM packages

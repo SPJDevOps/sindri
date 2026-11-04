@@ -872,17 +872,17 @@ the claim that a third protocol is cheap.
 - [x] Integrity checked at write time: the tarball's `sha512` matches the `integrity` the
   client sent, and the packument's `dist.integrity` is computed by Sindri, never copied
   from the client
-- [ ] Proxy to registry.npmjs.org (preset `npm`), with the cached tarball keyed by its
+- [x] Proxy to registry.npmjs.org (preset `npm`), with the cached tarball keyed by its
   digest and the packument cached under the existing `ttl`
-- [ ] Virtual npm repositories, where the first member with the package supplies the whole
+- [x] Virtual npm repositories, where the first member with the package supplies the whole
   packument. ADR 24 rejects merging across members
-- [ ] Name claims for npm: a hosted package, **and a hosted scope**, is never served from a
+- [x] Name claims for npm: a hosted package, **and a hosted scope**, is never served from a
   proxy. A hosted `@acme/*` claims every name in that scope.
   `TestDependencyConfusion_HostedNpmScopeIsNeverServedFromProxy` joins the guard tests
 - [x] Auth: `npm login` and `_authToken`, through `auth.Authorize` like every other route
 - [x] `npm` in `repos:` short form, `testdata/config/sindri.yaml`, and `testdata/manifests/`,
   so both golden tests cover it
-- [ ] npm added to the anonymous-access test, the I2 placement tests, and the UI
+- [x] npm added to the anonymous-access test, the I2 placement tests, and the UI
 - [ ] Docs: a configuration reference page listing every field, the README "Not in v1"
   list updated, and an npm example in the quickstart, which its gate script runs
 

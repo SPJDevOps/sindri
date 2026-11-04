@@ -73,10 +73,15 @@ SELECT * FROM packages
 WHERE repo_id = $1 AND normalized_name = $2;
 
 -- name: ListPackagesByRepo :many
-SELECT * FROM packages
-WHERE repo_id = sqlc.arg('repo_id')
-  AND (sqlc.narg('after_name')::text IS NULL OR normalized_name > sqlc.narg('after_name'))
-ORDER BY normalized_name
+-- A hosted package row outlives its last version, because it is the name's
+-- claim. Such a name has nothing to show, so it is not listed. OCI is exempt:
+-- an image is a package and tags, and never has a versions row.
+SELECT p.* FROM packages p
+JOIN repositories r ON r.id = p.repo_id
+WHERE p.repo_id = sqlc.arg('repo_id')
+  AND (sqlc.narg('after_name')::text IS NULL OR p.normalized_name > sqlc.narg('after_name'))
+  AND (r.protocol = 'oci' OR EXISTS (SELECT 1 FROM versions v WHERE v.package_id = p.id))
+ORDER BY p.normalized_name
 LIMIT sqlc.arg('page_limit');
 
 -- name: GetOrCreateVersion :one

@@ -27,6 +27,10 @@ var (
 	// and hosted publishes are new.
 	namePattern = regexp.MustCompile(`^(?:@[a-z0-9_-][a-z0-9._-]*/[a-z0-9_-][a-z0-9._-]*|[a-z0-9-][a-z0-9._-]*)$`)
 	tagPattern  = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	// readNamePattern is what may be asked for through a proxy: the characters
+	// encodeURIComponent leaves alone, which is what npm has always required, in
+	// either case. No part may start with a dot.
+	readNamePattern = regexp.MustCompile(`^(?:@[A-Za-z0-9_~!'()*-][A-Za-z0-9._~!'()*-]*/)?[A-Za-z0-9_~!'()*-][A-Za-z0-9._~!'()*-]*$`)
 )
 
 // validateName applies npm's rules for a new package name. It is the write-time
@@ -48,6 +52,27 @@ func validateName(name string) error {
 		return errors.New("package name may not be a single hyphen")
 	}
 	return nil
+}
+
+// validReadName accepts a name a proxy may ask upstream for. Names from before
+// npm's rules, like JSONStream, exist and must install, so it allows uppercase
+// and old punctuation where validateName, the publish check, does not.
+//
+// It runs before any resolver or upstream call. The pattern is ASCII on purpose:
+// PackageClaimed lowers only ASCII, so a name spelled with a Kelvin sign would
+// read as unclaimed and could reach a proxy around a hosted claim on @Kit/*. It
+// also keeps slashes, escapes, and control characters out of the upstream URL
+// and the database, and a name of "-" could not be routed.
+func validReadName(name string) bool {
+	switch {
+	case len(name) > maxNameLength, !readNamePattern.MatchString(name):
+		return false
+	case name == "node_modules", name == "favicon.ico":
+		return false
+	case name == "-", strings.HasSuffix(name, "/-"):
+		return false
+	}
+	return true
 }
 
 // validVersion accepts a full semantic version. Comparing with the canonical

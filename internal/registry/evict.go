@@ -17,8 +17,9 @@ import (
 // Cache key prefixes. The proxy client writes remote_cache rows under these
 // keys and retention parses them back, so both live here, in one place.
 const (
-	cacheKeyOCIManifestPrefix = "oci:manifest:"
-	cacheKeyPyPIIndexPrefix   = "pypi:index:"
+	cacheKeyOCIManifestPrefix  = "oci:manifest:"
+	cacheKeyPyPIIndexPrefix    = "pypi:index:"
+	cacheKeyNPMPackumentPrefix = "npm:packument:"
 )
 
 // CacheKeyOCIManifest is the remote_cache key for an OCI tag or digest
@@ -30,6 +31,12 @@ func CacheKeyOCIManifest(image, reference string) string {
 // CacheKeyPyPIIndex is the remote_cache key for a project's simple index.
 func CacheKeyPyPIIndex(project string) string {
 	return cacheKeyPyPIIndexPrefix + project
+}
+
+// CacheKeyNPMPackument is the remote_cache key for a package's packument. The
+// name is kept exact, since npm names are not folded (ADR 24).
+func CacheKeyNPMPackument(name string) string {
+	return cacheKeyNPMPackumentPrefix + name
 }
 
 // EvictResult reports one eviction pass.
@@ -129,9 +136,9 @@ func (r *Registry) evictOne(ctx context.Context, repoID uuid.UUID, key string, s
 }
 
 // evictPlacement removes what a cache hit justified in its proxy repository:
-// the tag for an OCI tag reference, the cached files for a PyPI project. A
-// digest reference placed no tag; its manifest goes when nothing else reaches
-// it, which is the collector's call.
+// the tag for an OCI tag reference, the cached files for a PyPI project or an
+// npm package. A digest reference placed no tag; its manifest goes when nothing
+// else reaches it, which is the collector's call.
 func evictPlacement(ctx context.Context, q *db.Queries, repoID uuid.UUID, key string) error {
 	switch {
 	case strings.HasPrefix(key, cacheKeyOCIManifestPrefix):
@@ -148,27 +155,39 @@ func evictPlacement(ctx context.Context, q *db.Queries, repoID uuid.UUID, key st
 			return fmt.Errorf("deleting proxy tag %s:%s: %w", image, ref, err)
 		}
 	case strings.HasPrefix(key, cacheKeyPyPIIndexPrefix):
-		project := normalizePackageName(strings.TrimPrefix(key, cacheKeyPyPIIndexPrefix))
-		versions, err := q.ListProxyPackageVersions(ctx, db.ListProxyPackageVersionsParams{
-			RepoID: repoID, NormalizedName: project,
-		})
-		if err != nil {
-			return fmt.Errorf("listing cached versions of %s: %w", project, err)
+		project := NormalizeName(model.ProtocolPyPI, strings.TrimPrefix(key, cacheKeyPyPIIndexPrefix))
+		return evictCachedFiles(ctx, q, repoID, project)
+	case strings.HasPrefix(key, cacheKeyNPMPackumentPrefix):
+		name := NormalizeName(model.ProtocolNPM, strings.TrimPrefix(key, cacheKeyNPMPackumentPrefix))
+		return evictCachedFiles(ctx, q, repoID, name)
+	}
+	return nil
+}
+
+// evictCachedFiles removes one package's cached files from a proxy repository,
+// and the version and package rows that leaves empty. The query joins on the
+// repository type, so a hosted package's rows, and its name claim, are out of
+// reach.
+func evictCachedFiles(ctx context.Context, q *db.Queries, repoID uuid.UUID, normalized string) error {
+	versions, err := q.ListProxyPackageVersions(ctx, db.ListProxyPackageVersionsParams{
+		RepoID: repoID, NormalizedName: normalized,
+	})
+	if err != nil {
+		return fmt.Errorf("listing cached versions of %s: %w", normalized, err)
+	}
+	packages := map[uuid.UUID]bool{}
+	for _, v := range versions {
+		if _, err := q.DeleteFilesByVersion(ctx, v.VersionID); err != nil {
+			return fmt.Errorf("deleting cached files of %s: %w", normalized, err)
 		}
-		packages := map[uuid.UUID]bool{}
-		for _, v := range versions {
-			if _, err := q.DeleteFilesByVersion(ctx, v.VersionID); err != nil {
-				return fmt.Errorf("deleting cached files of %s: %w", project, err)
-			}
-			if _, err := q.DeleteVersionIfEmpty(ctx, v.VersionID); err != nil {
-				return fmt.Errorf("deleting an emptied version of %s: %w", project, err)
-			}
-			packages[v.PackageID] = true
+		if _, err := q.DeleteVersionIfEmpty(ctx, v.VersionID); err != nil {
+			return fmt.Errorf("deleting an emptied version of %s: %w", normalized, err)
 		}
-		for id := range packages {
-			if _, err := q.DeletePackageIfEmpty(ctx, id); err != nil {
-				return fmt.Errorf("deleting emptied package %s: %w", project, err)
-			}
+		packages[v.PackageID] = true
+	}
+	for id := range packages {
+		if _, err := q.DeletePackageIfEmpty(ctx, id); err != nil {
+			return fmt.Errorf("deleting emptied package %s: %w", normalized, err)
 		}
 	}
 	return nil

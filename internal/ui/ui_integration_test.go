@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -69,10 +70,23 @@ func newEnv(t *testing.T) *env {
 	}))
 	e := &env{t: t, cas: store, h: h, reg: reg, lc: lc, ev: ev, srv: root}
 
+	// The npm proxy's upstream fails the test on any request: the UI reads what
+	// is cached and never reaches out.
+	silentUpstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("the UI contacted the upstream: %s %s", r.Method, r.URL)
+	}))
+	t.Cleanup(silentUpstream.Close)
+
 	for _, repo := range []registry.CreateRepositoryParams{
 		{Name: "team-a", Type: model.RepoTypeHosted, Protocol: model.ProtocolOCI, Access: model.Access{Read: []string{"team:a"}}},
 		{Name: "team-b", Type: model.RepoTypeHosted, Protocol: model.ProtocolOCI, Access: model.Access{Read: []string{"team:b"}}},
 		{Name: "py", Type: model.RepoTypeHosted, Protocol: model.ProtocolPyPI, Access: model.Access{Read: []string{"team:a"}}},
+		{Name: "npm", Type: model.RepoTypeHosted, Protocol: model.ProtocolNPM, Access: model.Access{Read: []string{"team:a"}}},
+		{Name: "npm-other", Type: model.RepoTypeHosted, Protocol: model.ProtocolNPM, Access: model.Access{Read: []string{"team:a"}}},
+		{Name: "npmjs", Type: model.RepoTypeProxy, Protocol: model.ProtocolNPM, UpstreamURL: silentUpstream.URL, TTLSeconds: 60,
+			Access: model.Access{Read: []string{auth.Authenticated}}},
+		{Name: "npm-all", Type: model.RepoTypeVirtual, Protocol: model.ProtocolNPM, Members: []string{"npm", "npmjs"},
+			Access: model.Access{Read: []string{"team:a"}}},
 		{Name: "hub", Type: model.RepoTypeProxy, Protocol: model.ProtocolOCI, UpstreamURL: "https://registry-1.docker.io", TTLSeconds: 60,
 			Access: model.Access{Read: []string{auth.Authenticated}}},
 		{Name: "all", Type: model.RepoTypeVirtual, Protocol: model.ProtocolOCI, Members: []string{"team-a", "team-b", "hub"},
@@ -316,6 +330,197 @@ func TestUI_PyPIPackagePageGroupsFilesByVersion(t *testing.T) {
 	r := e.get("alice", "/ui/r/py/-/package?name=demo")
 	if r.status != http.StatusOK || !strings.Contains(r.body, "demo-1.0.tar.gz") || !strings.Contains(r.body, "demo-2.0.tar.gz") {
 		t.Fatalf("PyPI package page: %d\n%s", r.status, r.body)
+	}
+}
+
+// publishNPM places name@version in a hosted npm repository the way the adapter
+// does, moving tag.
+func (e *env) publishNPM(repo, name, version, tag string) model.Digest {
+	e.t.Helper()
+	if tag == "" {
+		tag = "latest"
+	}
+	body := "tarball of " + name + "@" + version
+	file, err := e.reg.Publish(e.t.Context(), registry.PublishParams{
+		Repo: repo, Package: name, Version: version,
+		Filename:  name[strings.LastIndex(name, "/")+1:] + "-" + version + ".tgz",
+		MediaType: "application/octet-stream",
+		Body:      strings.NewReader(body), Size: int64(len(body)),
+		ExclusiveVersion: true, DistTag: tag, Actor: "user:alice",
+		Provenance: model.Provenance{SourceType: model.ProvenanceNPMPublish},
+	})
+	if err != nil {
+		e.t.Fatalf("Publish %s@%s: %v", name, version, err)
+	}
+	return file.Digest
+}
+
+var artifactLink = regexp.MustCompile(`href="(/ui/r/[^"]*/-/artifact\?[^"]*)"`)
+
+func TestUI_NPMPackagePageShowsVersionsFilesDistTagsAndDeprecation(t *testing.T) {
+	e := newEnv(t)
+	d := e.publishNPM("npm", "@acme/ui", "1.0.0", "")
+	e.publishNPM("npm", "@acme/ui", "2.0.0-beta.1", "beta")
+	msg := "use 2.x, 1.0.0 leaks a handle"
+	if err := e.reg.SetDeprecations(t.Context(), "npm", "@acme/ui", map[string]*string{"1.0.0": &msg}); err != nil {
+		t.Fatalf("SetDeprecations: %v", err)
+	}
+
+	repo := e.get("alice", "/ui/r/npm")
+	link := regexp.MustCompile(`href="(/ui/r/npm/-/package\?[^"]*)"`).FindStringSubmatch(repo.body)
+	if repo.status != http.StatusOK || link == nil || !strings.Contains(repo.body, "@acme/ui") {
+		t.Fatalf("repository page lists no link to the scoped package: %d\n%s", repo.status, repo.body)
+	}
+	page := e.get("alice", link[1])
+	if page.status != http.StatusOK {
+		t.Fatalf("package page via its listed link: %d\n%s", page.status, page.body)
+	}
+	for _, want := range []string{
+		"@acme/ui", "Dist-tags", "beta", "2.0.0-beta.1", "latest", "1.0.0",
+		"ui-1.0.0.tgz", "ui-2.0.0-beta.1.tgz", "deprecated", msg,
+	} {
+		if !strings.Contains(page.body, want) {
+			t.Errorf("package page lacks %q\n%s", want, page.body)
+		}
+	}
+	if strings.Contains(page.body, "No tags") {
+		t.Error("package page falls through to the OCI tag listing")
+	}
+
+	var file string
+	for _, m := range artifactLink.FindAllStringSubmatch(page.body, -1) {
+		if strings.Contains(m[1], url.QueryEscape(d.String())) {
+			file = m[1]
+		}
+	}
+	if file == "" {
+		t.Fatalf("package page links no file artifact for %s\n%s", d, page.body)
+	}
+	art := e.get("alice", file)
+	if art.status != http.StatusOK || !strings.Contains(art.body, "npm-tarball") {
+		t.Fatalf("artifact page: %d\n%s", art.status, art.body)
+	}
+	back := regexp.MustCompile(`href="(/ui/r/npm/-/package\?[^"]*)"`).FindStringSubmatch(art.body)
+	if back == nil || e.get("alice", back[1]).status != http.StatusOK {
+		t.Fatalf("the artifact page's package crumb does not lead back: %v\n%s", back, art.body)
+	}
+}
+
+func TestUI_NPMProxyPageListsWhatIsCachedWithNoDistTags(t *testing.T) {
+	e := newEnv(t)
+	body := []byte("cached tarball")
+	info, err := e.cas.PutBytes(t.Context(), body)
+	if err != nil {
+		t.Fatalf("PutBytes: %v", err)
+	}
+	if _, err := e.reg.PlaceCachedFile(t.Context(), registry.PlaceCachedFileParams{
+		Repo: "npmjs", Package: "@acme/ui", Version: "1.0.0", Filename: "ui-1.0.0.tgz", Blob: info,
+	}); err != nil {
+		t.Fatalf("PlaceCachedFile: %v", err)
+	}
+
+	repo := e.get("bob", "/ui/r/npmjs")
+	link := regexp.MustCompile(`href="(/ui/r/npmjs/-/package\?[^"]*)"`).FindStringSubmatch(repo.body)
+	if repo.status != http.StatusOK || link == nil {
+		t.Fatalf("proxy repository page: %d\n%s", repo.status, repo.body)
+	}
+	page := e.get("bob", link[1])
+	if page.status != http.StatusOK || !strings.Contains(page.body, "@acme/ui") ||
+		!strings.Contains(page.body, "ui-1.0.0.tgz") || !strings.Contains(page.body, `class="pill upstream"`) {
+		t.Fatalf("proxy package page: %d\n%s", page.status, page.body)
+	}
+	if strings.Contains(page.body, "Dist-tags") {
+		t.Error("a proxy package page invents dist-tags")
+	}
+	file := artifactLink.FindStringSubmatch(page.body)
+	if file == nil {
+		t.Fatalf("no file link\n%s", page.body)
+	}
+	if art := e.get("bob", file[1]); art.status != http.StatusOK || !strings.Contains(art.body, "Fetched from an upstream") {
+		t.Fatalf("proxy artifact page: %d\n%s", art.status, art.body)
+	}
+}
+
+func TestUI_NPMVirtualAndUnreadableAndEmptiedPackagesAre404(t *testing.T) {
+	e := newEnv(t)
+	e.publishNPM("npm", "demo", "1.0.0", "")
+	e.publishNPM("npm", "gone", "1.0.0", "")
+	if err := e.reg.DeleteFile(t.Context(), "npm", "gone", "1.0.0", "gone-1.0.0.tgz", "alice"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+
+	tests := []struct {
+		name, user, path string
+		want             int
+	}{
+		{"HostedPackageForItsReader", "alice", "/ui/r/npm/-/package?name=demo", http.StatusOK},
+		{"HostedPackageForSomeoneWhoCannotReadTheRepository", "bob", "/ui/r/npm/-/package?name=demo", http.StatusNotFound},
+		{"VirtualRepositoryPackage", "alice", "/ui/r/npm-all/-/package?name=demo", http.StatusNotFound},
+		{"EmptiedPackage", "alice", "/ui/r/npm/-/package?name=gone", http.StatusNotFound},
+		{"UnknownPackage", "alice", "/ui/r/npm/-/package?name=nothing", http.StatusNotFound},
+		{"UnknownScopedPackage", "alice", "/ui/r/npm/-/package?name=%40acme%2Fnothing", http.StatusNotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if r := e.get(tc.user, tc.path); r.status != tc.want {
+				t.Fatalf("GET %s as %s = %d, want %d\n%s", tc.path, tc.user, r.status, tc.want, r.body)
+			}
+		})
+	}
+	if repo := e.get("alice", "/ui/r/npm"); strings.Contains(repo.body, "gone") || !strings.Contains(repo.body, "demo") {
+		t.Fatalf("an emptied npm package is listed, or a live one is not:\n%s", repo.body)
+	}
+}
+
+// The same bytes are physically present for every repository, so the artifact
+// page must check that this repository placed them (I2).
+func TestUI_NPMArtifactPageRequiresPlacementInTheRepository(t *testing.T) {
+	e := newEnv(t)
+	d := e.publishNPM("npm", "@acme/ui", "1.0.0", "")
+	e.publishNPM("npm-other", "@acme/other", "1.0.0", "")
+
+	for _, repo := range []string{"npm-other", "npmjs"} {
+		r := e.get("alice", "/ui/r/"+repo+"/-/artifact?digest="+d.String()+"&image=%40acme%2Fui")
+		if r.status != http.StatusNotFound {
+			t.Errorf("artifact page of a digest placed in npm, through %s: %d, want 404", repo, r.status)
+		}
+	}
+	if r := e.get("bob", "/ui/r/npm/-/artifact?digest="+d.String()); r.status != http.StatusNotFound {
+		t.Errorf("artifact page in an unreadable repository: %d, want 404", r.status)
+	}
+}
+
+// A deleted name stays claimed (SIN-49) but has nothing to show.
+func TestUI_EmptiedPackageIsNotShown(t *testing.T) {
+	e := newEnv(t)
+	for _, name := range []string{"demo", "other"} {
+		if _, err := e.reg.Publish(t.Context(), registry.PublishParams{
+			Repo: "py", Package: name, Version: "1.0", Filename: name + "-1.0.tar.gz",
+			Body: strings.NewReader("sdist " + name), Size: int64(len("sdist " + name)),
+		}); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+	if err := e.reg.DeleteFile(t.Context(), "py", "demo", "1.0", "demo-1.0.tar.gz", "alice"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+
+	repo := e.get("alice", "/ui/r/py")
+	if repo.status != http.StatusOK || strings.Contains(repo.body, "demo") || !strings.Contains(repo.body, "other") {
+		t.Fatalf("repository page: %d\n%s", repo.status, repo.body)
+	}
+	if page := e.get("alice", "/ui/r/py/-/package?name=demo"); page.status != http.StatusNotFound {
+		t.Fatalf("package page of an emptied name = %d, want 404", page.status)
+	}
+}
+
+// OCI images have tags and no versions rows; hiding emptied names must not hide
+// them.
+func TestUI_OCIImageWithoutVersionsIsListed(t *testing.T) {
+	e := newEnv(t)
+	e.push("team-a", "team/app", "1.0", "x")
+	if r := e.get("alice", "/ui/r/team-a"); r.status != http.StatusOK || !strings.Contains(r.body, "team/app") {
+		t.Fatalf("repository page: %d\n%s", r.status, r.body)
 	}
 }
 

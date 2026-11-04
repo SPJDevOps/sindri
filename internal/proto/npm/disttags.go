@@ -27,17 +27,23 @@ func (h *handler) handleDistTags(w http.ResponseWriter, r *http.Request, rt rout
 	}
 }
 
-// listDistTags answers with what readers see, including the latest fallback.
+// listDistTags answers with what readers see: for a hosted package the latest
+// fallback included, and for a proxied one the tags of the same document a
+// packument read gets.
 func (h *handler) listDistTags(w http.ResponseWriter, r *http.Request, rt route) {
-	if !h.authorizeHostedRead(w, r, rt) {
+	if _, ok := h.authorizeRead(w, r, rt); !ok {
 		return
 	}
-	pkg, err := h.reg.GetNPMPackage(r.Context(), rt.repo, rt.pkg)
+	resolved, err := h.res.GetNPMPackument(r.Context(), rt.repo, rt.pkg)
 	if err != nil {
 		mapRegistryError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, effectiveDistTags(pkg.Versions, pkg.DistTags))
+	if resolved.Upstream != nil {
+		writeJSON(w, http.StatusOK, resolved.Upstream.DistTags)
+		return
+	}
+	writeJSON(w, http.StatusOK, effectiveDistTags(resolved.Hosted.Versions, resolved.Hosted.DistTags))
 }
 
 // authorizeDistTagWrite also settles the names: a package name that could not

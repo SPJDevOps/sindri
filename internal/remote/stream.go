@@ -20,7 +20,8 @@ var errClosedEarly = errors.New("upstream body closed before EOF")
 // cachingBody streams an upstream response to its consumer while a
 // CacheWriter stages the same bytes. The consumer sees each byte as soon as
 // upstream sends it; the cache commits only after EOF, and only when the bytes
-// hash to the digest upstream promised.
+// hash to the digest upstream promised. The blob key is always sha256, and a
+// protocol that promises some other hash adds it as integrity.
 //
 // Verification is independent of caching. If staging fails the consumer still
 // gets its bytes, and the next request fetches again. If verification fails
@@ -35,8 +36,9 @@ type cachingBody struct {
 	idle        *time.Timer
 	idleTimeout time.Duration
 	digester    *model.Digester
-	expected    model.Digest // zero when upstream promised none
-	size        int64        // negative when upstream did not say
+	expected    model.Digest    // zero when upstream promised none
+	integrity   *integrityCheck // nil when upstream's document promises no other hash
+	size        int64           // negative when upstream did not say
 	cache       *registry.CacheWriter
 	place       func(context.Context, storage.BlobInfo) error
 	err         error // sticky: io.EOF after a clean finish
@@ -50,6 +52,9 @@ func (b *cachingBody) Read(p []byte) (int, error) {
 	if n > 0 {
 		b.idle.Reset(b.idleTimeout)
 		_, _ = b.digester.Write(p[:n])
+		if b.integrity != nil {
+			_, _ = b.integrity.hash.Write(p[:n])
+		}
 		if b.cache != nil {
 			if _, werr := b.cache.Write(p[:n]); werr != nil {
 				b.log.WarnContext(b.ctx, "proxy cache staging failed; serving uncached", slog.Any("error", werr))
@@ -81,6 +86,11 @@ func (b *cachingBody) finish() error {
 	if b.expected.Valid() && actual != b.expected {
 		b.abandon()
 		return fmt.Errorf("%w: upstream bytes hash to %s, want %s", ErrUpstreamUnavailable, actual, b.expected)
+	}
+	if b.integrity != nil && !b.integrity.matches() {
+		b.abandon()
+		b.log.WarnContext(b.ctx, "upstream bytes failed their integrity check", slog.String("algorithm", b.integrity.algorithm))
+		return fmt.Errorf("%w: upstream bytes fail their %s integrity", ErrUpstreamUnavailable, b.integrity.algorithm)
 	}
 	if b.cache == nil {
 		return io.EOF
