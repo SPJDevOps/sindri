@@ -905,6 +905,15 @@ make up && make build && ./scripts/npm-gate.sh
 # even when registry.npmjs.org has a package of that name
 ```
 
+**Gate run, 2026-11-04.** `make build && ./scripts/npm-gate.sh` printed `M9 npm gate passed`
+against the Compose stack, with node 22.23.4, npm 10.9.9, pnpm 10.34.9, yarn 1.22.22 and
+yarn 4.18.1. Hosted publish, install through the virtual repository, identical installed
+bytes across all four clients, a proxy-only package, and the shadow guard
+(`is-number` and the `@types` scope through a proxy-first virtual) all held. yarn 4 needs
+`npmMinimalAgeGate: 0` in `.yarnrc.yml`: its 4.18 default gate wants the packument's `time`
+map, which Sindri does not serve yet (SIN-60), and the setting turns off yarn's age
+safeguard. The gate asserts the default still fails (YN0016) so it notices when SIN-60 lands.
+
 ---
 
 ### M10 — Adoptable

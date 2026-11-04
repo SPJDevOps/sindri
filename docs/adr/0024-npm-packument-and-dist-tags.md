@@ -108,6 +108,12 @@ setting both read `time`, so neither works through a proxy. Fetching full docume
 fix that and make every cached packument several times larger; this is not done. It narrows
 "as upstream sent them" to "as upstream sent the abbreviated form".
 
+Hosted packuments have no `time` map either. Yarn 4.18 defaults `npmMinimalAgeGate` to 1440
+minutes and needs `time`, so with its defaults it refuses every hosted and proxied version
+("quarantined", YN0016). The documented workaround is `npmMinimalAgeGate: 0` in
+`.yarnrc.yml`, which turns off yarn's age safeguard for that project. SIN-60 tracks serving
+real publish times.
+
 **The packument is parsed with exact keys and its `name` must match the request.** Go's
 struct decoding is case-insensitive and would read a `DIST` that npm ignores. A version that
 cannot be served safely (a bad version string or filename, a malformed entry) is left out
@@ -378,6 +384,9 @@ filesystem: this run was on macOS, whose default filesystem folds case.
   and a hosted OCI-protocol repository do not.
 - A proxy cannot see `time` or the readme, so `npm install --before` and pnpm's release-age
   setting do not work through one.
+- Neither hosted nor proxied packuments carry `time`, so yarn 4.18's default age gate fails
+  on both. Installing needs `npmMinimalAgeGate: 0`, which also disables that safeguard.
+  SIN-60 tracks real publish times; the M9 gate asserts the failure so it notices the fix.
 - A proxy takes only tarballs on its own host under its base path, with no off-origin
   redirects. Registries that write `%2f` into a tarball URL, or redirect downloads to a CDN,
   get a 502 or are left out. Bearer credentials and private upstreams are SIN-53.
