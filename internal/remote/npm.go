@@ -257,12 +257,12 @@ func (c *Client) fetchAndCacheNPMPackument(ctx context.Context, repoName, name s
 
 	key := registry.CacheKeyNPMPackument(name)
 	if resp.StatusCode != http.StatusOK {
-		err := classify(resp.StatusCode)
+		err := c.refusal(ctx, repoName, resp.StatusCode, classify(resp.StatusCode))
 		if errors.Is(err, ErrUpstreamNotFound) {
 			if perr := c.reg.PutCacheEntry(ctx, repoName, key, registry.CacheMiss, ""); perr != nil {
 				return NPMPackument{}, perr
 			}
-		} else {
+		} else if !errors.Is(err, ErrUpstreamDenied) {
 			c.logPackumentFailure(ctx, repoName, name, "status", slog.Int("status", resp.StatusCode))
 		}
 		return NPMPackument{}, err
@@ -481,7 +481,7 @@ func (c *Client) FetchNPMTarball(ctx context.Context, repoName, name, filename s
 		_ = resp.Body.Close()
 		idle.Stop()
 		cancel()
-		return registry.PackageFile{}, nil, classify(resp.StatusCode)
+		return registry.PackageFile{}, nil, c.refusal(ctx, repoName, resp.StatusCode, classify(resp.StatusCode))
 	}
 
 	body := c.newCachingBody(streamCtx, resp, cancel, idle, model.Digest{}, func(ctx context.Context, info storage.BlobInfo) error {

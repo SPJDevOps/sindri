@@ -99,7 +99,7 @@ func (c *Client) fetchAndCachePyPIIndex(ctx context.Context, repoName, project s
 
 	key := registry.CacheKeyPyPIIndex(project)
 	if resp.StatusCode != http.StatusOK {
-		err := classify(resp.StatusCode)
+		err := c.refusal(ctx, repoName, resp.StatusCode, classify(resp.StatusCode))
 		if errors.Is(err, ErrUpstreamNotFound) {
 			if perr := c.reg.PutCacheEntry(ctx, repoName, key, registry.CacheMiss, ""); perr != nil {
 				return PyPIIndex{}, perr
@@ -211,7 +211,7 @@ func (c *Client) FetchPyPIFile(ctx context.Context, repoName, project, version, 
 		_ = resp.Body.Close()
 		idle.Stop()
 		cancel()
-		return registry.PackageFile{}, nil, classify(resp.StatusCode)
+		return registry.PackageFile{}, nil, c.refusal(ctx, repoName, resp.StatusCode, classify(resp.StatusCode))
 	}
 
 	body := c.newCachingBody(streamCtx, resp, cancel, idle, expectedDigest, func(ctx context.Context, info storage.BlobInfo) error {

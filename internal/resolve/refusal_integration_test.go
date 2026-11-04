@@ -3,6 +3,7 @@
 package resolve_test
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -105,6 +106,20 @@ func TestVirtual_RefusalFailsTheWalk(t *testing.T) {
 				bearerChallenge(w, r)
 			},
 		},
+		{
+			// A login that still gets a token but has lost access to the image
+			// must not fall through to a later member. Docker Hub answers this
+			// way for unknown names too, so the cost is documented in ADR 14.
+			name: "OCICredentialedTokenThenUnauthorized", protocol: model.ProtocolOCI, path: "/v2/both/library/alpine/manifests/latest",
+			credentials: "cred",
+			refuse: func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/token" {
+					_, _ = w.Write([]byte(`{"token":"tok","expires_in":300}`))
+					return
+				}
+				bearerChallenge(w, r)
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,7 +162,20 @@ func TestVirtual_HiddenNameMovesOn(t *testing.T) {
 		hidden      http.HandlerFunc
 	}{
 		{name: "HubStyleTokenThenUnauthorized", hidden: hub},
-		{name: "CredentialedHubStyle", credentials: "cred", hidden: hub},
+		{
+			name: "AnonymousForbiddenWithABearerToken",
+			hidden: func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/token" {
+					_, _ = w.Write([]byte(`{"token":"tok","expires_in":300}`))
+					return
+				}
+				if r.Header.Get("Authorization") == "" {
+					bearerChallenge(w, r)
+					return
+				}
+				w.WriteHeader(http.StatusForbidden)
+			},
+		},
 		{
 			name: "GhcrStyleAnonymousTokenForbidden",
 			hidden: func(w http.ResponseWriter, r *http.Request) {
@@ -251,4 +279,121 @@ func TestProxy_RefusalServesAStaleCopy(t *testing.T) {
 			t.Fatalf("stale manifest = %d %s, want the cached copy", rec.Code, rec.Body.String())
 		}
 	})
+
+	t.Run("OCICredentialedTokenThenUnauthorized", func(t *testing.T) {
+		stub := &ociStub{}
+		stub.set(newTestImage(t, []byte("layer"), nil))
+		var refuse atomic.Bool
+		e := newEnv(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/token":
+				_, _ = w.Write([]byte(`{"token":"tok","expires_in":300}`))
+			case refuse.Load() || r.Header.Get("Authorization") != "Bearer tok":
+				bearerChallenge(w, r)
+			default:
+				stub.ServeHTTP(w, r)
+			}
+		}, withCredentials(refusalCredentials))
+		e.createProxyAt(t, "hub", model.ProtocolOCI, e.upstream.URL, "cred")
+		const path = "/v2/hub/library/alpine/manifests/latest"
+		if rec := e.do(t, http.MethodGet, path, nil, ""); rec.Code != http.StatusOK {
+			t.Fatalf("warm manifest = %d %s", rec.Code, rec.Body.String())
+		}
+		if _, err := e.db.Pool().Exec(t.Context(), `UPDATE remote_cache SET fetched_at = fetched_at - interval '2 hours'`); err != nil {
+			t.Fatal(err)
+		}
+		refuse.Store(true)
+		if rec := e.do(t, http.MethodGet, path, nil, ""); rec.Code != http.StatusOK {
+			t.Fatalf("stale manifest = %d %s, want the cached copy", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// A token fetched with one proxy's login must not answer for a proxy on the same
+// upstream and image that has no login: that would read another tenant's image.
+func TestProxyOCI_ATokenIsNeverSharedAcrossCredentials(t *testing.T) {
+	stub := &ociStub{}
+	stub.set(newTestImage(t, []byte("layer"), nil))
+	e := newEnv(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			if _, _, ok := r.BasicAuth(); ok {
+				_, _ = w.Write([]byte(`{"token":"private","expires_in":300}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"token":"public","expires_in":300}`))
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer private" {
+			bearerChallenge(w, r)
+			return
+		}
+		stub.ServeHTTP(w, r)
+	}, withCredentials(refusalCredentials))
+	e.createProxyAt(t, "authed", model.ProtocolOCI, e.upstream.URL, "cred")
+	e.createProxyAt(t, "anon", model.ProtocolOCI, e.upstream.URL, "")
+
+	if rec := e.do(t, http.MethodGet, "/v2/authed/library/alpine/manifests/latest", nil, ""); rec.Code != http.StatusOK {
+		t.Fatalf("credentialed pull = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := e.do(t, http.MethodGet, "/v2/anon/library/alpine/manifests/latest", nil, ""); rec.Code == http.StatusOK {
+		t.Fatalf("the anonymous proxy was served with the credentialed proxy's token: %s", rec.Body.String())
+	}
+}
+
+// One warning per refusal of Sindri's credential, naming the repository and the
+// status and nothing from the request. A name an upstream merely hides is an
+// ordinary miss and logs nothing.
+func TestRefusal_IsLoggedOnceAndAHiddenNameIsNot(t *testing.T) {
+	cases := []struct {
+		name, path string
+		protocol   model.Protocol
+		handler    http.HandlerFunc
+		credential string
+		wantStatus int
+		wantWarns  int
+	}{
+		{
+			name: "NPMRefusal", path: "/npm/up/foo", protocol: model.ProtocolNPM, wantStatus: http.StatusBadGateway, wantWarns: 1,
+			handler: func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) },
+		},
+		{
+			name: "OCIBasicRefusal", path: "/v2/up/library/alpine/manifests/latest", protocol: model.ProtocolOCI, wantStatus: http.StatusBadGateway, wantWarns: 1,
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("WWW-Authenticate", `Basic realm="r"`)
+				w.WriteHeader(http.StatusUnauthorized)
+			},
+		},
+		{
+			name: "OCIHiddenName", path: "/v2/up/library/alpine/manifests/latest", protocol: model.ProtocolOCI, wantStatus: http.StatusNotFound, wantWarns: 0,
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/token" {
+					_, _ = w.Write([]byte(`{"token":"tok","expires_in":300}`))
+					return
+				}
+				bearerChallenge(w, r)
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &logBuffer{}
+			e := newEnv(t, tc.handler, func(o *remote.Options) { o.Logger = slog.New(slog.NewTextHandler(logs, nil)) })
+			e.createProxyAt(t, "up", tc.protocol, e.upstream.URL, tc.credential)
+			if rec := e.do(t, http.MethodGet, tc.path, nil, ""); rec.Code != tc.wantStatus {
+				t.Fatalf("GET %s = %d %s, want %d", tc.path, rec.Code, rec.Body.String(), tc.wantStatus)
+			}
+			got := logs.String()
+			if n := strings.Count(got, "upstream refused"); n != tc.wantWarns {
+				t.Fatalf("%d refusal warnings, want %d:\n%s", n, tc.wantWarns, got)
+			}
+			if tc.wantWarns > 0 {
+				if !strings.Contains(got, "repository=up") || !strings.Contains(got, "status=") || strings.Contains(got, e.upstream.URL) {
+					t.Fatalf("refusal log should carry repository and status, not the URL:\n%s", got)
+				}
+			}
+			if strings.Count(got, "level=WARN") != tc.wantWarns {
+				t.Fatalf("unexpected extra warnings:\n%s", got)
+			}
+		})
+	}
 }

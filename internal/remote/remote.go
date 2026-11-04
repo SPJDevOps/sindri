@@ -236,21 +236,8 @@ type upstreamRequest struct {
 
 // do sends an upstream request, applying credentials only where they belong
 // and completing one bearer challenge when the upstream issues it. The caller
-// closes the response body. A refusal is logged once, with the repository and
-// the status, never the URL or any header.
+// closes the response body.
 func (c *Client) do(ctx context.Context, ur upstreamRequest) (*http.Response, error) {
-	resp, err := c.roundTrip(ctx, ur)
-	switch {
-	case err != nil && (errors.Is(err, ErrUpstreamDenied) || errors.Is(err, ErrUpstreamHidden)):
-		c.log.WarnContext(ctx, "upstream refused the request", "repository", ur.repo, "reason", err.Error())
-	case err == nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden):
-		c.log.WarnContext(ctx, "upstream refused the request", "repository", ur.repo, "status", resp.StatusCode)
-	}
-	return resp, err
-}
-
-// roundTrip is do without the refusal log.
-func (c *Client) roundTrip(ctx context.Context, ur upstreamRequest) (*http.Response, error) {
 	send := func(bearer string) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, ur.method, ur.url, nil)
 		if err != nil {
@@ -282,6 +269,7 @@ func (c *Client) roundTrip(ctx context.Context, ur upstreamRequest) (*http.Respo
 	challenge := resp.Header.Get("WWW-Authenticate")
 	_ = resp.Body.Close()
 	if !strings.HasPrefix(strings.ToLower(challenge), "bearer ") {
+		c.logDenied(ctx, ur.repo, http.StatusUnauthorized)
 		return nil, deniedError("status 401")
 	}
 	token, err := c.fetchBearerToken(ctx, challenge, ur)
@@ -289,6 +277,21 @@ func (c *Client) roundTrip(ctx context.Context, ur upstreamRequest) (*http.Respo
 		return nil, err
 	}
 	return send(token)
+}
+
+// logDenied records a refusal of Sindri's credential: the repository and the
+// status, never the URL, headers or body. A hidden name is an ordinary miss and
+// is not logged.
+func (c *Client) logDenied(ctx context.Context, repo string, status int) {
+	c.log.WarnContext(ctx, "upstream refused the request", "repository", repo, "status", status)
+}
+
+// refusal logs err when it is a denial and returns it unchanged.
+func (c *Client) refusal(ctx context.Context, repo string, status int, err error) error {
+	if errors.Is(err, ErrUpstreamDenied) {
+		c.logDenied(ctx, repo, status)
+	}
+	return err
 }
 
 // deniedError is a refusal. It wraps ErrUpstreamUnavailable as well, so every

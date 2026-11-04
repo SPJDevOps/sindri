@@ -41,12 +41,18 @@ member.
 | Case | Result |
 |---|---|
 | npm or PyPI 401/403, with or without credentials | Denied |
-| OCI 401/403 where the request carried a Bearer token | Hidden |
+| OCI 401/403 where the request carried a Bearer token, no credentials configured | Hidden |
+| OCI 401/403 where the request carried a Bearer token, credentials configured | Denied |
 | OCI token endpoint 401/403, no credentials configured | Hidden |
 | OCI token endpoint 401/403, credentials configured | Denied |
 | OCI 401 with no bearer challenge, or 401/403 with Basic | Denied |
 
-A cached bearer token counts as a Bearer request. A request redirected off-origin has lost
+The credentialed Bearer row is a user decision of 2026-11-04: a login that still gets a
+token but has lost access to a private image must not fall through to a public member. The
+cost is that Docker Hub answers 401 for an unknown name even to a valid login, and the two
+cases cannot be told apart. In a virtual such as `[hosted, dockerhub-with-login, ghcr]`, an
+image that exists only on ghcr therefore gets a 502, unless the logged-in proxy is last or
+runs anonymously. A cached bearer token counts as a Bearer request. A request redirected off-origin has lost
 its Authorization header, so its 401 is Denied, not Hidden. The ghcr.io caveat: Sindri cannot
 tell an anonymous refusal for a name that does not exist from one for a private name, so a
 ghcr.io proxy without credentials reads both as a miss. The credentialed ghcr.io case was not
@@ -116,7 +122,9 @@ PyPI and OCI it is a refusal that fails the walk, as npm's refused redirect alre
 (ADR 24).)
 A bearer challenge's realm comes from the upstream and receives the credential
 only over https or on the upstream's own origin. Bearer tokens are cached per
-registry host and image, the scope a pull token covers. Nothing supplies secrets
+registry host, credentials reference and image, the scope a pull token covers. The
+reference is part of the key so that a token fetched with one login never answers for a
+proxy on the same upstream that has another login or none (SIN-55 review). Nothing supplies secrets
 yet, so the API rejects a `credentials_ref` until M7;
 [ADR 15](0015-upstream-credentials-source-deferred-to-m7.md) decides the source.
 
