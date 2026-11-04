@@ -391,10 +391,11 @@ func (r *Resolver) GetPyPIFile(ctx context.Context, repoName, project, filename 
 	}
 }
 
-// errNotListed means a proxy's index resolved and does not list the file, or
-// lists it only as a file upstream has dropped. It is a refusal by the member
-// that owns the project, not the member lacking it, so a walk must not ask a
-// later member for the same file (SIN-54, as for npm in ADR 24).
+// errNotListed means a proxy's index resolved and the member cannot supply the
+// file: the index does not list it, or lists it and upstream answers that the
+// file is absent. It is a refusal by the member that owns the project, not the
+// member lacking it, so a walk must not ask a later member for the same file
+// (SIN-54, as for npm in ADR 24). An outage or a refusal is not this error.
 var errNotListed = fmt.Errorf("%w: the index does not list the file", ErrNotFound)
 
 func (r *Resolver) getProxyPyPIFile(ctx context.Context, repoName, project, filename string) (registry.PackageFile, io.ReadCloser, error) {
@@ -434,7 +435,13 @@ func (r *Resolver) getProxyPyPIFile(ctx context.Context, repoName, project, file
 			}
 		}
 		version := versionFromFilename(filename)
-		return r.remote.FetchPyPIFile(ctx, repoName, project, version, filename, fileURL, expect, f.Size)
+		file, rc, err := r.remote.FetchPyPIFile(ctx, repoName, project, version, filename, fileURL, expect, f.Size)
+		if err != nil && absent(err) {
+			// The index listed it and the file is not there: this member has the
+			// project, so the walk must not ask another for the same filename.
+			return registry.PackageFile{}, nil, errNotListed
+		}
+		return file, rc, err
 	}
 	return registry.PackageFile{}, nil, errNotListed
 }

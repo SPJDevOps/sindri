@@ -675,6 +675,14 @@ type goneUpstream struct {
 	versions []string
 	status   int  // when non-zero, answers the document request
 	junk     bool // when set, the document is not parseable
+	// fileStatus, when non-zero, answers every file request (PyPI only).
+	fileStatus int
+}
+
+func (u *goneUpstream) answerFiles(status int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.fileStatus = status
 }
 
 func (u *goneUpstream) list(versions ...string) {
@@ -774,6 +782,10 @@ func goneProtocols() []goneProtocol {
 					}
 					for _, v := range u.versions {
 						if r.URL.Path == "/files/demo-"+v+"-py3-none-any.whl" {
+							if u.fileStatus != 0 {
+								w.WriteHeader(u.fileStatus)
+								return
+							}
 							_, _ = w.Write(goneBody(v))
 							return
 						}
@@ -983,17 +995,32 @@ func (e *goneEnv) secondMember(t *testing.T, name string, versions ...string) (*
 // supply it (SIN-54). A member that lacks the project still moves the walk on.
 func TestProxyPyPI_VirtualWalkStopsAtTheMemberThatDroppedTheFile(t *testing.T) {
 	pypi := goneProtocols()[1]
+	// How member A fails to supply 1.0.0, which B lists under the same name.
+	const (
+		dropped    = "index no longer lists the file"
+		project404 = "project answers 404"
+		file404    = "index lists it and the file URL answers 404"
+		file503    = "index lists it and the file URL answers 503"
+		file403    = "index lists it and the file URL answers 403"
+	)
 	cases := []struct {
-		name       string
-		nested     bool
-		aDropsFile bool // else A answers 404 for the whole project
-		want       int
-		bFiles     int32
+		name   string
+		mode   string
+		nested bool
+		want   int
+		bFiles int32
+		direct int // what a direct read of A answers
 	}{
-		{"a dropped the file", false, true, http.StatusNotFound, 0},
-		{"a dropped the file, inside a nested virtual", true, true, http.StatusNotFound, 0},
-		{"a lacks the project, b serves", false, false, http.StatusOK, 1},
-		{"a lacks the project, b serves, nested", true, false, http.StatusOK, 1},
+		{"dropped", dropped, false, http.StatusNotFound, 0, http.StatusNotFound},
+		{"dropped, nested", dropped, true, http.StatusNotFound, 0, http.StatusNotFound},
+		{"project 404 moves on to b", project404, false, http.StatusOK, 1, http.StatusNotFound},
+		{"project 404 moves on to b, nested", project404, true, http.StatusOK, 1, http.StatusNotFound},
+		{"file 404 is a's answer", file404, false, http.StatusNotFound, 0, http.StatusNotFound},
+		{"file 404 is a's answer, nested", file404, true, http.StatusNotFound, 0, http.StatusNotFound},
+		{"file outage fails the walk", file503, false, http.StatusBadGateway, 0, http.StatusBadGateway},
+		{"file outage fails the walk, nested", file503, true, http.StatusBadGateway, 0, http.StatusBadGateway},
+		{"file refusal fails the walk", file403, false, http.StatusBadGateway, 0, http.StatusBadGateway},
+		{"file refusal fails the walk, nested", file403, true, http.StatusBadGateway, 0, http.StatusBadGateway},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1001,11 +1028,16 @@ func TestProxyPyPI_VirtualWalkStopsAtTheMemberThatDroppedTheFile(t *testing.T) {
 			e.setTTL(t)
 			_, bFiles := e.secondMember(t, "b", "1.0.0")
 			e.age(t)
-			if tc.aDropsFile {
+			switch tc.mode {
+			case dropped:
 				e.up.list("2.0.0")
-			} else {
+			case project404:
 				e.up.answer(http.StatusNotFound)
-				// Nothing of A's may answer for the name, placed or not.
+			default:
+				e.up.answerFiles(map[string]int{file404: 404, file503: 503, file403: 403}[tc.mode])
+			}
+			if tc.mode != dropped {
+				// Nothing of A's may answer for the file from a placed copy.
 				if _, err := e.db.Pool().Exec(t.Context(), `DELETE FROM files WHERE blob_digest IN (SELECT digest FROM blobs)`); err != nil {
 					t.Fatal(err)
 				}
@@ -1022,6 +1054,9 @@ func TestProxyPyPI_VirtualWalkStopsAtTheMemberThatDroppedTheFile(t *testing.T) {
 			}
 			if got := bFiles.Load(); got != tc.bFiles {
 				t.Fatalf("%d file requests reached b, want %d", got, tc.bFiles)
+			}
+			if got := e.status(t, "up", pypi.filePath("1.0.0")); got != tc.direct {
+				t.Fatalf("direct read of a = %d, want %d", got, tc.direct)
 			}
 		})
 	}
