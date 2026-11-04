@@ -959,3 +959,70 @@ func TestProxy_LockfileOnlyReadNoticesARemoval(t *testing.T) {
 		})
 	}
 }
+
+// pypiMember starts a second upstream for a virtual's later member, and counts
+// the file requests that reach it.
+func (e *goneEnv) secondMember(t *testing.T, name string, versions ...string) (*goneUpstream, *atomic.Int32) {
+	t.Helper()
+	up := &goneUpstream{versions: versions}
+	var files atomic.Int32
+	inner := e.p.handler(up, func() string { return "" })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/files/") {
+			files.Add(1)
+		}
+		inner(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	e.createProxyAt(t, name, e.p.protocol, srv.URL+upstreamBase(e.p), "")
+	return up, &files
+}
+
+// A member that has the project owns the answer for its files: when its live
+// index no longer lists one, a later member listing the same filename must not
+// supply it (SIN-54). A member that lacks the project still moves the walk on.
+func TestProxyPyPI_VirtualWalkStopsAtTheMemberThatDroppedTheFile(t *testing.T) {
+	pypi := goneProtocols()[1]
+	cases := []struct {
+		name       string
+		nested     bool
+		aDropsFile bool // else A answers 404 for the whole project
+		want       int
+		bFiles     int32
+	}{
+		{"a dropped the file", false, true, http.StatusNotFound, 0},
+		{"a dropped the file, inside a nested virtual", true, true, http.StatusNotFound, 0},
+		{"a lacks the project, b serves", false, false, http.StatusOK, 1},
+		{"a lacks the project, b serves, nested", true, false, http.StatusOK, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newGoneEnv(t, pypi)
+			e.setTTL(t)
+			_, bFiles := e.secondMember(t, "b", "1.0.0")
+			e.age(t)
+			if tc.aDropsFile {
+				e.up.list("2.0.0")
+			} else {
+				e.up.answer(http.StatusNotFound)
+				// Nothing of A's may answer for the name, placed or not.
+				if _, err := e.db.Pool().Exec(t.Context(), `DELETE FROM files WHERE blob_digest IN (SELECT digest FROM blobs)`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			target := "walk"
+			if tc.nested {
+				e.createVirtualOf(t, "inner", pypi.protocol, "up")
+				e.createVirtualOf(t, target, pypi.protocol, "inner", "b")
+			} else {
+				e.createVirtualOf(t, target, pypi.protocol, "up", "b")
+			}
+			if got := e.status(t, target, pypi.filePath("1.0.0")); got != tc.want {
+				t.Fatalf("GET through the virtual = %d, want %d", got, tc.want)
+			}
+			if got := bFiles.Load(); got != tc.bFiles {
+				t.Fatalf("%d file requests reached b, want %d", got, tc.bFiles)
+			}
+		})
+	}
+}

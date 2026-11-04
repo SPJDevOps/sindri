@@ -196,7 +196,10 @@ and the version and package rows it empties, once it has been flagged longer tha
 `worker.retention.proxyStaleAfter`; the collector reclaims the bytes later. Hosted rows are
 never flagged. A document whose versions were dropped as unservable (`Dropped`) lists only
 the versions the parser kept, so a placed file of a dropped version is flagged, which is the
-safe direction.
+safe direction. PyPI walks the same way: a proxy member whose index resolves owns the
+answer for its project's files, so a file it no longer lists is a 404 and a later member
+listing the same filename is not asked. A member whose project answers 404 still moves the
+walk on.
 
 Rejected: keeping a placed file serving until retention collects it, as this ADR first
 did. It is the more available choice, but it serves a version upstream pulled for a reason,

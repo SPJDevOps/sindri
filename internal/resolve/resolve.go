@@ -361,6 +361,13 @@ func (r *Resolver) GetPyPIFile(ctx context.Context, repoName, project, filename 
 			case model.RepoTypeProxy:
 				f, reader, err := r.getProxyPyPIFile(ctx, m.Name, normalized, filename)
 				if err != nil {
+					// A proxy whose index resolves owns this answer. It counts as
+					// a hit with no reader rather than as ErrNotFound, because a
+					// walk over a nested virtual repository moves on when it sees
+					// ErrNotFound. A package-level miss still moves on.
+					if errors.Is(err, errNotListed) {
+						return true, nil
+					}
 					if absent(err) {
 						return false, nil
 					}
@@ -375,11 +382,20 @@ func (r *Resolver) GetPyPIFile(ctx context.Context, repoName, project, filename 
 		if err != nil {
 			return registry.PackageFile{}, nil, err
 		}
+		if rc == nil {
+			return registry.PackageFile{}, nil, ErrNotFound
+		}
 		return file, rc, nil
 	default:
 		return registry.PackageFile{}, nil, fmt.Errorf("unknown repository type %s", repo.Type)
 	}
 }
+
+// errNotListed means a proxy's index resolved and does not list the file, or
+// lists it only as a file upstream has dropped. It is a refusal by the member
+// that owns the project, not the member lacking it, so a walk must not ask a
+// later member for the same file (SIN-54, as for npm in ADR 24).
+var errNotListed = fmt.Errorf("%w: the index does not list the file", ErrNotFound)
 
 func (r *Resolver) getProxyPyPIFile(ctx context.Context, repoName, project, filename string) (registry.PackageFile, io.ReadCloser, error) {
 	// The index first, so a stale entry refreshes and a file upstream dropped
@@ -420,7 +436,7 @@ func (r *Resolver) getProxyPyPIFile(ctx context.Context, repoName, project, file
 		version := versionFromFilename(filename)
 		return r.remote.FetchPyPIFile(ctx, repoName, project, version, filename, fileURL, expect, f.Size)
 	}
-	return registry.PackageFile{}, nil, ErrNotFound
+	return registry.PackageFile{}, nil, errNotListed
 }
 
 func versionFromFilename(filename string) string {
