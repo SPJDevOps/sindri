@@ -265,16 +265,23 @@ matches `pypi`. The roadmap's `npmjs` changes.
 ### Checked against installers (SIN-51)
 
 `scripts/npm-tarball-differential.sh` installs each tarball shape the parser accepts from a
-local file with npm 10.9.9, pnpm 10.34.9 and yarn 1.22.22 (`--ignore-scripts`, temp
-directories, pinned clients) and compares the installed `package.json` with what
-`inspectManifest` read. Each tarball holds only `package.json` variants whose name, version
-and description differ, so a disagreement shows which one was read. The harness is
-`internal/proto/npm/tarball_differential_test.go`, behind the `differential` build tag.
-It ran 39 candidate shapes: 21 accepted and compared, 18 refused and so skipped. Of the 63
-client rows, 62 agree, none disagree, and one is a client error: yarn 1.22.22 refuses to
-extract a tarball with 7 stray zero bytes after the end marker ("Unexpected end of data").
-That is a tarball Sindri accepts but one client cannot install. No client read a
-different manifest, so it is not manifest confusion. It is left unmarked here.
+local file with the npm on PATH (10.9.9 in the recorded run) and pnpm 10.34.9 and yarn 1.22.22,
+which the script fetches at those exact versions. Installs use `--ignore-scripts` in temp
+directories. The installed `package.json` is compared with what `inspectManifest` read. The
+harness is `internal/proto/npm/tarball_differential_test.go`, behind the `differential`
+build tag. Each tarball holds a manifest, placeholder files, and, for most shapes, a
+second `package.json` variant (the decoy) in the place a misreading parser would take as
+the manifest, with a different name, version and description, so a disagreement shows which
+was read. The test fails if a shape's parser outcome differs from the expected one, if a
+client errors outside a named allowlist, or if no negative control shows a client
+installing the decoy.
+
+The recorded run had 59 candidate shapes (excluding controls): 40 accepted and compared, 19
+refused and so skipped. Of the 120 client rows, 119 agree, none disagree, and one is a
+client error: yarn 1.22.22 cannot extract a tarball with 7 stray zero bytes after the end
+marker ("Unexpected end of data"). Sindri accepts that tarball. yarn reads no manifest from it,
+so it is not manifest confusion; it is awaiting its own ticket. Every agree row installed the
+name, version and description the parser read, not the decoy's.
 
 | Shape | npm | pnpm | yarn |
 |---|---|---|---|
@@ -286,7 +293,7 @@ different manifest, so it is not manifest confusion. It is left unmarked here.
 | directories with and without a slash | agree | agree | agree |
 | manifest after other files | agree | agree | agree |
 | extra zero blocks | agree | agree | agree |
-| zero bytes short of a block | agree | agree | client error |
+| zero bytes short of a block | agree | agree | client error (awaiting ticket) |
 | manifest split over prefix and name | agree | agree | agree |
 | manifest named by a pax path over a short name | agree | agree | agree |
 | pax with every allowed key | agree | agree | agree |
@@ -295,16 +302,43 @@ different manifest, so it is not manifest confusion. It is left unmarked here.
 | pax path over a name ending in a slash | agree | agree | agree |
 | pax path over a name cut after a parent segment | agree | agree | agree |
 | pax path over a name cut inside a character | agree | agree | agree |
+| ustar prefix carrying a decoy | agree | agree | agree |
 | decoy manifest as a plain second file | agree | agree | agree |
 | decoy manifest one directory down | agree | agree | agree |
 | decoy manifest two directories down | agree | agree | agree |
 | decoy manifest under the NTFS short-name lookalike | agree | agree | agree |
+| pax path replacing PaxHeader | agree | agree | agree |
+| pax path replacing package/cut-short/ | agree | agree | agree |
+| pax path replacing package/cut-short. | agree | agree | agree |
+| pax path replacing package/cut-short | agree | agree | agree |
+| pax path replacing package/c: | agree | agree | agree |
+| pax path replacing package/foo:bar.js | agree | agree | agree |
+| pax path replacing package/nested/package.json | agree | agree | agree |
+| pax path replacing package/nested/c:/package.json | agree | agree | agree |
+| pax path replacing package/c:/nested/package.json | agree | agree | agree |
+| pax path replacing //server/share/package/nested/package.json | agree | agree | agree |
+| pax path replacing //?/c:/package/nested/package.json | agree | agree | agree |
+| pax path replacing ab:/package/nested/package.json | agree | agree | agree |
+| pax path replacing package/1:/package.json | agree | agree | agree |
+| pax path replacing package/package.jso | agree | agree | agree |
+| pax path replacing package/package.json.js | agree | agree | agree |
+| pax path replacing package/nested/PACKAG~1.JSO | agree | agree | agree |
+| pax path replacing package/PACKAG~1.JSON | agree | agree | agree |
+| pax path replacing package/README~1.JSO | agree | agree | agree |
 
-Where a row says agree, the client installed exactly the name, version and description the
-parser read (`diff-shape-NN@1.NN.0 READ-BY-SINDRI`), never the decoy's. Not tested: Windows
-name handling. Drive roots, 8.3 short names, trailing dots and spaces, UNC roots and
-backslashes cannot be exercised on this platform, so those refusals rest on reasoning and
-Unix reproductions only.
+Negative controls check that the comparison can see a disagreement. They are shapes the
+parser refuses, because an installer takes the decoy, sent to the clients anyway:
+
+| Negative control (refused by the parser, sent anyway) | npm | pnpm | yarn |
+|---|---|---|---|
+| second manifest | DISAGREE | DISAGREE | DISAGREE |
+| manifest under another top directory | DISAGREE | DISAGREE | DISAGREE |
+| manifest in upper case | DISAGREE | agree | DISAGREE |
+
+Not tested: Windows name handling. Drive roots, 8.3 short names, trailing dots and spaces,
+UNC roots and backslashes cannot be exercised on this platform, so those refusals rest on
+reasoning and Unix reproductions only. The "upper case" control also depends on the
+filesystem: this run was on macOS, whose default filesystem folds case.
 
 ## Consequences
 

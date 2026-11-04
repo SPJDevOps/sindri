@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,12 +52,24 @@ var differentialClients = []differentialClient{
 
 // shapeManifests holds what a shape's tarball says is its package.json, and the
 // decoy, the other document a hostile shape tries to get installed in its place.
-type shapeManifests struct{ real, decoy string }
+type shapeManifests struct {
+	real, decoy string
+	// decoyName is the name in decoy, which a client that installed the decoy may
+	// place the package under.
+	decoyName string
+}
 
 type differentialShape struct {
 	name string
 	// file is a committed tarball, used as it is.
 	file string
+	// refused is the outcome expected of the parser. A shape expected to be refused
+	// is not sent to the clients, unless it is a control.
+	refused bool
+	// control sends a shape the parser refuses to the clients anyway. At least one
+	// client must install the decoy, or the test cannot tell a disagreement from
+	// nothing.
+	control bool
 	// build returns the entries of a tarball.
 	build func(m shapeManifests) [][]byte
 }
@@ -91,7 +104,7 @@ func differentialShapes() []differentialShape {
 		return func(b []byte) { copy(b[off:], value) }
 	}
 
-	return []differentialShape{
+	shapes := []differentialShape{
 		// Accepted forms: what real tools write.
 		{name: "npm pack, pax path", file: "npm-pack-pax-path.tgz"},
 		{name: "npm pack, ustar prefix", file: "npm-pack-ustar-prefix.tgz"},
@@ -100,7 +113,7 @@ func differentialShapes() []differentialShape {
 			return [][]byte{
 				append(tarStreamEntry(manifestEntry, len(m.real), '0'), padded(m.real)...),
 				append(tarStreamEntry("PaxHeader", len(pax), 'x'), padded(pax)...),
-				append(tarStreamEntry("PaxHeader", 1, '0'), padded("x")...),
+				append(tarStreamEntry("PaxHeader", len(m.decoy), '0'), padded(m.decoy)...),
 				tarStreamEntry("package/dir", 0, '5'),
 			}
 		}},
@@ -114,7 +127,7 @@ func differentialShapes() []differentialShape {
 			return [][]byte{rawHeader("package", 0, '5', ustarMagic), rawHeader("package/lib/", 0, '5', ustarMagic), manifest(m)}
 		}},
 		{name: "manifest after other files", build: func(m shapeManifests) [][]byte {
-			return [][]byte{rawEntry("package/a.js", "x", '0'), rawHeader("package/lib/", 0, '5', ustarMagic), manifest(m)}
+			return [][]byte{rawEntry("package/a.js", m.decoy, '0'), rawHeader("package/lib/", 0, '5', ustarMagic), manifest(m)}
 		}},
 		{name: "extra zero blocks", build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), make([]byte, 8192)}
@@ -134,23 +147,26 @@ func differentialShapes() []differentialShape {
 			return [][]byte{
 				manifest(m),
 				paxEntry(paxRecords("path", "package/a.js", "mtime", "1.5", "atime", "1", "ctime", "1", "comment", "a=b")),
-				rawEntry("package/a.js", "x", '0'),
+				rawEntry("package/a.js", m.decoy, '0'),
 			}
 		}},
 		{name: "pax with no path", build: func(m shapeManifests) [][]byte {
 			return [][]byte{paxEntry(paxRecords("mtime", "1")), manifest(m)}
 		}},
 		{name: "pax size repeating the header's", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), paxEntry(paxRecords("path", overUstar, "mtime", "499162500", "size", "1")), rawEntry(overUstar[:100], "x", '0')}
+			return [][]byte{manifest(m), paxEntry(paxRecords("path", overUstar, "mtime", "499162500", "size", fmt.Sprint(len(m.decoy)))), rawEntry(overUstar[:100], m.decoy, '0')}
 		}},
 		{name: "pax path over a name ending in a slash", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/cut-short/", "x", '0')}
+			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/cut-short/", m.decoy, '0')}
 		}},
 		{name: "pax path over a name cut after a parent segment", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/cut/..", "x", '0')}
+			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/cut/..", m.decoy, '0')}
 		}},
 		{name: "pax path over a name cut inside a character", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/é.js")), rawEntry("package/\xc3", "x", '0')}
+			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/é.js")), rawEntry("package/\xc3", m.decoy, '0')}
+		}},
+		{name: "ustar prefix carrying a decoy", build: func(m shapeManifests) [][]byte {
+			return [][]byte{manifest(m), prefixedEntry("package/"+strings.Repeat("d", 90), strings.Repeat("f", 40)+".js", m.decoy)}
 		}},
 		{name: "decoy manifest as a plain second file", build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), decoy(m, "package/also-harmless.js")}
@@ -166,43 +182,43 @@ func differentialShapes() []differentialShape {
 		}},
 
 		// Shapes the parser should refuse. They are compared only if it accepts them.
-		{name: "refused: second manifest", build: func(m shapeManifests) [][]byte {
+		{name: "refused: second manifest", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), decoy(m, manifestEntry)}
 		}},
-		{name: "refused: decoy under another top directory", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy under another top directory", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), decoy(m, "other/package.json")}
 		}},
-		{name: "refused: decoy in upper case", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy in upper case", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), decoy(m, "package/PACKAGE.JSON")}
 		}},
-		{name: "refused: decoy under a backslash name", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy under a backslash name", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), decoy(m, `package\package.json`)}
 		}},
-		{name: "refused: decoy under a dot segment", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy under a dot segment", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), decoy(m, "package/./package.json")}
 		}},
-		{name: "refused: decoy under a doubled slash", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy under a doubled slash", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), decoy(m, "package//package.json")}
 		}},
-		{name: "refused: decoy under a trailing dot", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy under a trailing dot", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), decoy(m, "package/package.json.")}
 		}},
-		{name: "refused: decoy named by a pax path", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy named by a pax path", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), paxEntry(paxRecords("path", manifestEntry)), rawEntry("package/harmless.js", m.decoy, '0')}
 		}},
-		{name: "refused: decoy named by a pax path with a dot segment", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy named by a pax path with a dot segment", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), paxEntry(paxRecords("path", "./package/package.json")), rawEntry("package/harmless.js", m.decoy, '0')}
 		}},
-		{name: "refused: decoy after a type N path", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy after a type N path", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), rawEntry("x", manifestEntry+"\x00", 'N'), rawEntry("package/harmless.js", m.decoy, '0')}
 		}},
-		{name: "refused: decoy after a GNU long name", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy after a GNU long name", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), rawEntry("././@LongLink", manifestEntry+"\x00", 'L'), rawEntry("package/harmless.js", m.decoy, '0')}
 		}},
-		{name: "refused: decoy behind a GNU magic header", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy behind a GNU magic header", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), append(rawHeader(manifestEntry, len(m.decoy), '0', "ustar  \x00"), padded(m.decoy)...)}
 		}},
-		{name: "refused: decoy behind a signed checksum", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy behind a signed checksum", refused: true, build: func(m shapeManifests) [][]byte {
 			h := rawHeader(manifestEntry, len(m.decoy), '0', ustarMagic)
 			h[500] = 0xff
 			copy(h[148:], "        ")
@@ -213,22 +229,54 @@ func differentialShapes() []differentialShape {
 			copy(h[148:], fmt.Sprintf("%06o\x00 ", sum))
 			return [][]byte{manifest(m), append(h, padded(m.decoy)...)}
 		}},
-		{name: "refused: decoy behind a linkname", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy behind a linkname", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), append(patchedHeader(manifestEntry, len(m.decoy), '0', field(157, "x")), padded(m.decoy)...)}
 		}},
-		{name: "refused: symlink to the manifest", build: func(m shapeManifests) [][]byte {
+		{name: "refused: symlink to the manifest", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), patchedHeader("package/l.json", 0, '2', field(157, "package.json"))}
 		}},
-		{name: "refused: decoy under a drive-letter name", build: func(m shapeManifests) [][]byte {
+		{name: "refused: decoy under a drive-letter name", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), decoy(m, "package/c:/package.json")}
 		}},
-		{name: "refused: base-256 size", build: func(m shapeManifests) [][]byte {
+		{name: "refused: base-256 size", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), patchedHeader("package/z.js", 0, '0', field(124, "\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"))}
 		}},
-		{name: "refused: one zero block before more data", build: func(m shapeManifests) [][]byte {
+		{name: "refused: one zero block before more data", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), make([]byte, 512), decoy(m, manifestEntry)}
 		}},
+		{name: "refused: pax path over the manifest's own name", refused: true, build: func(m shapeManifests) [][]byte {
+			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/a.js")), decoy(m, manifestEntry)}
+		}},
 	}
+
+	// Names a pax path replaces that only look like the manifest, which is the
+	// riskiest class the parser accepts. Each carries the decoy.
+	for _, name := range []string{
+		"PaxHeader", "package/cut-short/", "package/cut-short.", "package/cut-short ", "package/c:",
+		"package/foo:bar.js", "package/nested/package.json", "package/nested/c:/package.json",
+		"package/c:/nested/package.json", "//server/share/package/nested/package.json",
+		"//?/c:/package/nested/package.json", "ab:/package/nested/package.json", "package/1:/package.json",
+		"package/package.jso", "package/package.json.js", "package/nested/PACKAG~1.JSO",
+		"package/PACKAG~1.JSON", "package/README~1.JSO",
+	} {
+		shapes = append(shapes, differentialShape{name: "pax path replacing " + name, build: func(m shapeManifests) [][]byte {
+			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/a.js")), rawEntry(name, m.decoy, '0')}
+		}})
+	}
+
+	// Controls: shapes the parser refuses because an installer would read the decoy.
+	// If no client installs it, the comparison could not have shown a disagreement.
+	return append(shapes,
+		differentialShape{name: "control: second manifest", refused: true, control: true, build: func(m shapeManifests) [][]byte {
+			return [][]byte{manifest(m), decoy(m, manifestEntry)}
+		}},
+		differentialShape{name: "control: manifest under another top directory", refused: true, control: true, build: func(m shapeManifests) [][]byte {
+			return [][]byte{manifest(m), decoy(m, "other/package.json")}
+		}},
+		differentialShape{name: "control: manifest in upper case", refused: true, control: true, build: func(m shapeManifests) [][]byte {
+			return [][]byte{manifest(m), decoy(m, "package/PACKAGE.JSON")}
+		}},
+	)
 }
 
 type fieldsRead struct {
@@ -239,6 +287,13 @@ type fieldsRead struct {
 
 func (f fieldsRead) String() string {
 	return fmt.Sprintf("%s@%s %s", f.Name, f.Version, f.Description)
+}
+
+// allowedClientErrors names the client errors that do not fail the test, keyed by
+// shape and client. A client error is otherwise a failure: it means nothing was
+// compared.
+var allowedClientErrors = map[string]string{
+	"zero bytes short of a block|yarn": "awaiting ticket",
 }
 
 type differentialRow struct {
@@ -269,8 +324,9 @@ func TestDifferential_TarballParserAgreesWithInstallers(t *testing.T) {
 			t.Run(shape.name, func(t *testing.T) {
 				t.Parallel()
 				m := shapeManifests{
-					real:  fmt.Sprintf(`{"name":"diff-shape-%02d","version":"1.%d.0","description":"READ-BY-SINDRI"}`, i, i),
-					decoy: fmt.Sprintf(`{"name":"decoy-shape-%02d","version":"9.9.%d","description":"INSTALLED-VARIANT"}`, i, i),
+					real:      fmt.Sprintf(`{"name":"diff-shape-%02d","version":"1.%d.0","description":"READ-BY-SINDRI"}`, i, i),
+					decoy:     fmt.Sprintf(`{"name":"decoy-shape-%02d","version":"9.9.%d","description":"INSTALLED-VARIANT"}`, i, i),
+					decoyName: fmt.Sprintf("decoy-shape-%02d", i),
 				}
 				var data []byte
 				if shape.file != "" {
@@ -283,12 +339,29 @@ func TestDifferential_TarballParserAgreesWithInstallers(t *testing.T) {
 				}
 
 				read, err := inspectManifest(bytes.NewReader(data))
+				switch {
+				case err != nil && !errors.Is(err, errTarballRefused):
+					t.Fatalf("inspectManifest failed for a reason other than a refusal: %v", err)
+				case err != nil && !shape.refused:
+					t.Errorf("inspectManifest refused a shape expected to be accepted: %v", err)
+				case err == nil && shape.refused:
+					t.Errorf("inspectManifest accepted a shape expected to be refused: %s", read)
+				}
 				if err != nil {
 					refused[i] = err.Error()
-					return
+					if !shape.control {
+						return
+					}
 				}
+
+				// A control is compared with the first manifest, which is what the
+				// parser would have kept had it not refused.
 				var sindri fieldsRead
-				if err := json.Unmarshal(read, &sindri); err != nil {
+				source := read
+				if err != nil {
+					source = json.RawMessage(m.real)
+				}
+				if err := json.Unmarshal(source, &sindri); err != nil {
 					t.Fatalf("parser result is not JSON: %v", err)
 				}
 
@@ -302,7 +375,7 @@ func TestDifferential_TarballParserAgreesWithInstallers(t *testing.T) {
 				}
 
 				for _, c := range differentialClients {
-					row := runClient(t, c, paths[c.name], shapeDir, tarballPath, sindri)
+					row := runClient(t, c, paths[c.name], shapeDir, tarballPath, sindri, shape.name, m.decoyName)
 					row.shape = shape.name
 					rows[i] = append(rows[i], row)
 				}
@@ -311,53 +384,77 @@ func TestDifferential_TarballParserAgreesWithInstallers(t *testing.T) {
 	})
 
 	var (
-		out                                   strings.Builder
-		compared, agreed, disagreed, failures int
-		skipped                               int
+		out, controlOut                                strings.Builder
+		compared, skipped, agreed, disagreed, failures int
+		controlDisagreed                               int
+		skippedNames                                   []string
 	)
+	header := "SHAPE\tCLIENT\tRESULT\tSINDRI READ\tCLIENT INSTALLED\n"
 	tw := tabwriter.NewWriter(&out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SHAPE\tCLIENT\tRESULT\tSINDRI READ\tCLIENT INSTALLED")
-	for i := range shapes {
+	ctw := tabwriter.NewWriter(&controlOut, 0, 0, 2, ' ', 0)
+	fmt.Fprint(tw, header)
+	fmt.Fprint(ctw, header)
+	for i, shape := range shapes {
+		if shape.control {
+			for _, row := range rows[i] {
+				fmt.Fprintf(ctw, "%s\t%s\t%s\t%s\t%s\n", row.shape, row.client, row.verdict, row.sindri, row.installed)
+				if row.verdict == "DISAGREE" {
+					controlDisagreed++
+				}
+			}
+			continue
+		}
 		if refused[i] != "" {
 			skipped++
+			skippedNames = append(skippedNames, shape.name+": "+refused[i])
 			continue
 		}
 		compared++
 		for _, row := range rows[i] {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", row.shape, row.client, row.verdict, row.sindri, row.installed)
-			switch row.verdict {
-			case "agree":
+			switch {
+			case row.verdict == "agree":
 				agreed++
-			case "DISAGREE":
+			case row.verdict == "DISAGREE":
 				disagreed++
+				t.Errorf("%s: %s installed a different package.json from the one the parser read", row.shape, row.client)
 			default:
 				failures++
+				if !strings.HasPrefix(row.verdict, "client error (allowed") {
+					t.Errorf("%s: %s: %s", row.shape, row.client, row.installed)
+				}
 			}
 		}
 	}
 	_ = tw.Flush()
+	_ = ctw.Flush()
 
 	fmt.Println(out.String())
-	fmt.Printf("Shapes: %d candidates, %d compared, %d refused by the parser and so skipped.\n", len(shapes), compared, skipped)
+	fmt.Printf("Shapes: %d candidates (excluding controls), %d compared, %d refused by the parser and so skipped.\n", compared+skipped, compared, skipped)
 	fmt.Printf("Rows: %d agree, %d DISAGREE, %d client errors (the client refused or failed to install).\n", agreed, disagreed, failures)
 	fmt.Println("Refused shapes:")
-	for i, shape := range shapes {
-		if refused[i] != "" {
-			fmt.Printf("  %s: %s\n", shape.name, refused[i])
-		}
+	for _, line := range skippedNames {
+		fmt.Printf("  %s\n", line)
 	}
+	fmt.Println()
+	fmt.Println("Negative controls: shapes the parser refuses, sent to the clients anyway. Not counted above.")
+	fmt.Println(controlOut.String())
 	fmt.Println("Not tested: Windows name handling (drive roots, 8.3 short names, trailing dots and spaces,")
 	fmt.Println("UNC and device roots, backslashes) cannot be exercised here; the parser's refusals for them")
 	fmt.Println("rest on reasoning and on Unix reproductions only.")
 
-	if disagreed > 0 {
-		t.Errorf("%d client(s) installed a different package.json from the one the parser read", disagreed)
+	if compared == 0 {
+		t.Error("no shape was compared")
+	}
+	if controlDisagreed == 0 {
+		t.Error("no negative control showed a client installing the decoy, so the comparison could not have caught a disagreement")
 	}
 }
 
 // runClient installs the tarball with one client in a fresh project and reports
-// what landed in node_modules.
-func runClient(t *testing.T, c differentialClient, bin, shapeDir, tarballPath string, sindri fieldsRead) differentialRow {
+// what landed in node_modules. A package the client placed under the decoy's name
+// is a disagreement, not a missing install.
+func runClient(t *testing.T, c differentialClient, bin, shapeDir, tarballPath string, sindri fieldsRead, shapeName, decoyName string) differentialRow {
 	t.Helper()
 	row := differentialRow{client: c.name, sindri: sindri.String()}
 
@@ -378,28 +475,40 @@ func runClient(t *testing.T, c differentialClient, bin, shapeDir, tarballPath st
 		t.Fatal(err)
 	}
 
+	clientError := func(detail string) differentialRow {
+		row.verdict = "client error"
+		if reason, ok := allowedClientErrors[shapeName+"|"+c.name]; ok {
+			row.verdict = "client error (allowed: " + reason + ")"
+		}
+		row.installed = oneLine(detail)
+		return row
+	}
+
 	ctx, cancel := context.WithTimeout(t.Context(), installTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, c.args(filepath.Join(shapeDir, c.name))...) //nolint:gosec // G204: a client path chosen by the script that runs this test
 	cmd.Dir = project
 	if output, err := cmd.CombinedOutput(); err != nil {
-		row.verdict = "client error"
-		row.installed = oneLine(fmt.Sprintf("%v: %s", err, output))
-		return row
+		return clientError(fmt.Sprintf("%v: %s", err, output))
 	}
 
-	installedPath := filepath.Join(project, "node_modules", filepath.FromSlash(sindri.Name), "package.json")
-	raw, err := os.ReadFile(installedPath)
-	if err != nil {
-		row.verdict = "client error"
-		row.installed = "installed no package.json: " + err.Error()
-		return row
+	read := func(name string) (fieldsRead, error) {
+		var f fieldsRead
+		raw, err := os.ReadFile(filepath.Join(project, "node_modules", filepath.FromSlash(name), "package.json"))
+		if err != nil {
+			return f, err
+		}
+		return f, json.Unmarshal(raw, &f)
 	}
-	var installed fieldsRead
-	if err := json.Unmarshal(raw, &installed); err != nil {
-		row.verdict = "client error"
-		row.installed = "installed package.json is not JSON"
-		return row
+	installed, err := read(sindri.Name)
+	if errors.Is(err, os.ErrNotExist) && decoyName != "" {
+		if decoy, derr := read(decoyName); derr == nil {
+			row.verdict, row.installed = "DISAGREE", decoy.String()
+			return row
+		}
+	}
+	if err != nil {
+		return clientError("installed no package.json: " + err.Error())
 	}
 	row.installed = installed.String()
 	row.verdict = "agree"
