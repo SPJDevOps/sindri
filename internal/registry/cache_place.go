@@ -129,6 +129,27 @@ func (r *Registry) PlaceCachedFile(ctx context.Context, p PlaceCachedFileParams)
 	}, nil
 }
 
+// SyncProxyFiles records what a refresh of one package's upstream document
+// showed (SIN-54). A cached file of the package that listed does not name is
+// flagged as gone upstream, which stops it being served and starts the clock
+// retention counts from; one it does name is unflagged. Call it only with an
+// answer from upstream: a 200 document with the filenames it lists, or a 404
+// with none. An outage, a refusal and an unparsable document say nothing.
+//
+// normalized is the package name as NormalizeName spells it for the
+// repository's protocol. Only proxy repositories are touched.
+func (r *Registry) SyncProxyFiles(ctx context.Context, repo, normalized string, listed []string) error {
+	if listed == nil {
+		listed = []string{}
+	}
+	if _, err := r.q.SyncProxyFiles(ctx, db.SyncProxyFilesParams{
+		RepoName: repo, NormalizedName: normalized, Listed: listed,
+	}); err != nil {
+		return fmt.Errorf("recording the files %s lists for %s: %w", repo, normalized, err)
+	}
+	return nil
+}
+
 // StoreMetadataBlob commits a small metadata document (upstream index JSON)
 // and records a blobs row. It does not place the digest into a repository;
 // remote_cache holds the reference.

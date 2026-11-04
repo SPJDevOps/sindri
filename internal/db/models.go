@@ -48,12 +48,13 @@ type Evidence struct {
 }
 
 type File struct {
-	ID         uuid.UUID `json:"id"`
-	VersionID  uuid.UUID `json:"version_id"`
-	BlobDigest string    `json:"blob_digest"`
-	Filename   string    `json:"filename"`
-	MediaType  string    `json:"media_type"`
-	Metadata   []byte    `json:"metadata"`
+	ID             uuid.UUID          `json:"id"`
+	VersionID      uuid.UUID          `json:"version_id"`
+	BlobDigest     string             `json:"blob_digest"`
+	Filename       string             `json:"filename"`
+	MediaType      string             `json:"media_type"`
+	Metadata       []byte             `json:"metadata"`
+	UpstreamGoneAt pgtype.Timestamptz `json:"upstream_gone_at"`
 }
 
 type Job struct {

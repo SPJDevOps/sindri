@@ -97,6 +97,16 @@ func (p NPMPackument) versionWithFilename(filename string) (NPMVersion, error) {
 	}
 }
 
+// Filenames are the tarball filenames the document lists, as versionWithFilename
+// matches them.
+func (p NPMPackument) Filenames() []string {
+	names := make([]string, 0, len(p.Versions))
+	for _, v := range p.Versions {
+		names = append(names, v.Filename)
+	}
+	return names
+}
+
 // parseNPMPackument reads an upstream document for name. A document that is not
 // an object, or that describes another package, is an upstream failure.
 func parseNPMPackument(name string, body []byte) (NPMPackument, error) {
@@ -259,6 +269,10 @@ func (c *Client) fetchAndCacheNPMPackument(ctx context.Context, repoName, name s
 	if resp.StatusCode != http.StatusOK {
 		err := c.refusal(ctx, repoName, resp.StatusCode, classify(resp.StatusCode))
 		if errors.Is(err, ErrUpstreamNotFound) {
+			// Upstream answered that the package is gone: so are its files.
+			if serr := c.reg.SyncProxyFiles(ctx, repoName, registry.NormalizeName(model.ProtocolNPM, name), nil); serr != nil {
+				return NPMPackument{}, serr
+			}
 			if perr := c.reg.PutCacheEntry(ctx, repoName, key, registry.CacheMiss, ""); perr != nil {
 				return NPMPackument{}, perr
 			}
@@ -289,6 +303,11 @@ func (c *Client) fetchAndCacheNPMPackument(ctx context.Context, repoName, name s
 	}
 	digest, err := c.reg.StoreMetadataBlob(ctx, body)
 	if err != nil {
+		return NPMPackument{}, err
+	}
+	// Before the entry is stored: if this fails the entry stays stale, so the
+	// next read refreshes and records it again.
+	if err := c.reg.SyncProxyFiles(ctx, repoName, registry.NormalizeName(model.ProtocolNPM, name), doc.Filenames()); err != nil {
 		return NPMPackument{}, err
 	}
 	if err := c.reg.PutCacheEntry(ctx, repoName, key, registry.CacheHit, digest.String()); err != nil {
@@ -420,11 +439,14 @@ func comparableHost(u *url.URL) string {
 	}
 }
 
-// FetchNPMTarball returns a tarball from a proxy repository. A placed copy is
-// served through the placement check without contacting upstream. Otherwise the
-// file is found in the packument, and streams back while it is staged; it is
-// placed only once it matches what the packument promised, and a mismatch fails
-// the final read.
+// FetchNPMTarball returns a tarball from a proxy repository. The package
+// document is fetched first, so a stale entry refreshes and a file upstream has
+// dropped stops serving (SIN-54): a 404 or a cached miss is a 404 here. Only an
+// unavailable upstream falls back to a placed copy, which is served through the
+// placement check without contacting upstream for the file. Otherwise the file
+// is found in the packument, and streams back while it is staged; it is placed
+// only once it matches what the packument promised, and a mismatch fails the
+// final read.
 //
 // The stream's Size is -1 even when upstream declared a length. Its hash is only
 // known after the last byte is written, so a declared length would frame the
@@ -432,15 +454,16 @@ func comparableHost(u *url.URL) string {
 // out chunked, and the abort lands before the terminating chunk. upstream's own
 // Content-Length is still enforced, by cachingBody.
 func (c *Client) FetchNPMTarball(ctx context.Context, repoName, name, filename string) (registry.PackageFile, io.ReadCloser, error) {
-	if file, rc, err := c.reg.GetNPMTarball(ctx, repoName, name, filename); err == nil {
-		return file, rc, nil
-	} else if !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrNotPlaced) {
-		return registry.PackageFile{}, nil, err
+	doc, docErr := c.FetchNPMPackument(ctx, repoName, name)
+	if docErr == nil || errors.Is(docErr, ErrUpstreamUnavailable) {
+		if file, rc, err := c.reg.GetNPMTarball(ctx, repoName, name, filename); err == nil {
+			return file, rc, nil
+		} else if !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrNotPlaced) {
+			return registry.PackageFile{}, nil, err
+		}
 	}
-
-	doc, err := c.FetchNPMPackument(ctx, repoName, name)
-	if err != nil {
-		return registry.PackageFile{}, nil, err
+	if docErr != nil {
+		return registry.PackageFile{}, nil, docErr
 	}
 	version, err := doc.versionWithFilename(filename)
 	if err != nil {

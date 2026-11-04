@@ -34,6 +34,15 @@ type PyPIIndex struct {
 	Body     []byte // original upstream JSON, stored on cache hit
 }
 
+// Filenames are the filenames the index lists.
+func (i PyPIIndex) Filenames() []string {
+	names := make([]string, 0, len(i.Files))
+	for _, f := range i.Files {
+		names = append(names, f.Filename)
+	}
+	return names
+}
+
 // FetchPyPIIndex returns the project index for a proxy repository, using the
 // remote_cache for freshness and negative caching.
 func (c *Client) FetchPyPIIndex(ctx context.Context, repoName, project string) (PyPIIndex, error) {
@@ -101,6 +110,10 @@ func (c *Client) fetchAndCachePyPIIndex(ctx context.Context, repoName, project s
 	if resp.StatusCode != http.StatusOK {
 		err := c.refusal(ctx, repoName, resp.StatusCode, classify(resp.StatusCode))
 		if errors.Is(err, ErrUpstreamNotFound) {
+			// Upstream answered that the project is gone: so are its files.
+			if serr := c.reg.SyncProxyFiles(ctx, repoName, registry.NormalizeName(model.ProtocolPyPI, project), nil); serr != nil {
+				return PyPIIndex{}, serr
+			}
 			if perr := c.reg.PutCacheEntry(ctx, repoName, key, registry.CacheMiss, ""); perr != nil {
 				return PyPIIndex{}, perr
 			}
@@ -118,6 +131,11 @@ func (c *Client) fetchAndCachePyPIIndex(ctx context.Context, repoName, project s
 	}
 	digest, err := c.reg.StoreMetadataBlob(ctx, body)
 	if err != nil {
+		return PyPIIndex{}, err
+	}
+	// Before the entry is stored: if this fails the entry stays stale, so the
+	// next read refreshes and records it again.
+	if err := c.reg.SyncProxyFiles(ctx, repoName, registry.NormalizeName(model.ProtocolPyPI, project), idx.Filenames()); err != nil {
 		return PyPIIndex{}, err
 	}
 	if err := c.reg.PutCacheEntry(ctx, repoName, key, registry.CacheHit, digest.String()); err != nil {
@@ -179,7 +197,9 @@ func parsePyPIIndex(body []byte) (PyPIIndex, error) {
 // is the index's claim; a negative value defers to upstream's Content-Length,
 // and the returned Size is -1 when neither says.
 func (c *Client) FetchPyPIFile(ctx context.Context, repoName, project, version, filename, fileURL string, expectedDigest model.Digest, size int64) (registry.PackageFile, io.ReadCloser, error) {
-	// Local placement wins when present.
+	// A placed copy is the caller's to serve first: GetPyPIFile fetches the
+	// index before this, so a file upstream dropped is already flagged and
+	// invisible to this read.
 	if file, rc, err := c.reg.GetFileByFilename(ctx, repoName, project, filename); err == nil {
 		return file, rc, nil
 	} else if !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrNotPlaced) {

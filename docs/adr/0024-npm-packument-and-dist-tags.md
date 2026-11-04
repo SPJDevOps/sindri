@@ -147,11 +147,9 @@ lacks, is a 404 when it is not already placed, and a later member is not asked, 
 from outside a nested virtual. Otherwise a second proxy could supply a tarball for a
 version the first member's document never offered.
 
-That check is of the package, not of the version: `FetchNPMTarball` serves a placed copy
-before it looks at the packument's listing. So after upstream removes one version and keeps
-the package, an exact-URL install of that version keeps getting the placed copy, through a
-virtual as well as directly. Retention does not evict it while its cache entry stays alive
-(SIN-54).
+`FetchNPMTarball` fetches the packument before it looks for a placed copy, so the check is
+of the file as well as the package: a version upstream has dropped is flagged by the refresh
+and answers 404, directly and through a virtual (SIN-54, below).
 
 **An upstream 5xx, or a document that fails to parse, fails the walk with a 502.** A 404 or a
 negative cache entry is a miss and the walk moves on. A 401/403 is a refusal and fails it
@@ -182,11 +180,29 @@ repository and package name, never the URL, headers or body. The cost is that ev
 cached or not, loads and parses the whole document, and there is no request coalescing, so
 concurrent cold reads of one package each fetch it.
 
-**A placed tarball outlives its package's 404.** If upstream answers 404 for a package after
-a hit, a direct proxy read still serves a placed tarball by exact filename, while a virtual
-walk sees the miss and moves on. The virtual is right, since the tarball follows its
-packument. The direct read is an availability choice. Retention evicts placements only for
-a cache hit, so those files are never evicted. Tracked as SIN-54, with PyPI.
+**A file upstream has removed stops serving at once.** Every refresh that gets an answer
+from upstream tells the registry which files the package still lists: a 200 document names
+the tarball filenames it lists, and a 404 names none. A placed file the answer does not list
+gets `files.upstream_gone_at`, and a file it lists has the flag cleared, so a file upstream
+lists again serves again from the next refresh. A flagged file is invisible to the
+adapter-facing reads (the tarball and file reads, the file listing) and to the placement
+check, so neither a direct read nor a virtual walk can reach it, and that holds for a
+version pulled as malicious as much as for any other. `FetchNPMTarball` and the PyPI file
+read fetch the document before they serve a placed copy, so a stale entry refreshes on a
+lockfile-only install that never reads the packument. Only an answer sets the flag: a 5xx, a
+401/403 (`ErrUpstreamDenied` is an outage here) or a document that does not parse says
+nothing about the files, and the placed copy still serves. Retention removes a flagged row,
+and the version and package rows it empties, once it has been flagged longer than
+`worker.retention.proxyStaleAfter`; the collector reclaims the bytes later. Hosted rows are
+never flagged. A document whose versions were dropped as unservable (`Dropped`) lists only
+the versions the parser kept, so a placed file of a dropped version is flagged, which is the
+safe direction.
+
+Rejected: keeping a placed file serving until retention collects it, as this ADR first
+did. It is the more available choice, but it serves a version upstream pulled for a reason,
+including malware, for as long as the cache entry is renewed, and a virtual and a direct
+read disagreed about one file. The accepted cost is that a pinned install breaks after a
+left-pad style unpublish, until upstream lists the file again.
 
 **A hosted package row survives the deletion of its last file.** The claim is the `packages`
 row, so deleting a file removes the version when emptied and keeps the package, hidden from

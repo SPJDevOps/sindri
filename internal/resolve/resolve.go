@@ -382,18 +382,20 @@ func (r *Resolver) GetPyPIFile(ctx context.Context, repoName, project, filename 
 }
 
 func (r *Resolver) getProxyPyPIFile(ctx context.Context, repoName, project, filename string) (registry.PackageFile, io.ReadCloser, error) {
+	// The index first, so a stale entry refreshes and a file upstream dropped
+	// is flagged before the placed copy is looked up (SIN-54). Only an
+	// unavailable upstream lets a placed copy serve without it.
+	idx, idxErr := r.remote.FetchPyPIIndex(ctx, repoName, project)
+	if idxErr != nil && absent(idxErr) {
+		return registry.PackageFile{}, nil, ErrNotFound
+	}
 	if file, rc, err := r.reg.GetFileByFilename(ctx, repoName, project, filename); err == nil {
 		return file, rc, nil
 	} else if !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrNotPlaced) {
 		return registry.PackageFile{}, nil, err
 	}
-
-	idx, err := r.remote.FetchPyPIIndex(ctx, repoName, project)
-	if err != nil {
-		if absent(err) {
-			return registry.PackageFile{}, nil, ErrNotFound
-		}
-		return registry.PackageFile{}, nil, err
+	if idxErr != nil {
+		return registry.PackageFile{}, nil, idxErr
 	}
 	remoteCfg, err := r.reg.GetRemote(ctx, repoName)
 	if err != nil {

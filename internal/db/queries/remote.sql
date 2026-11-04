@@ -141,3 +141,46 @@ WHERE t.repo_id = r.id
   AND r.type = 'proxy'
   AND p.normalized_name = sqlc.arg('normalized_name')
   AND t.name = sqlc.arg('tag_name');
+
+-- name: SyncProxyFiles :execrows
+-- Records what a refresh of one package's upstream document showed (SIN-54).
+-- A cached file the document no longer lists is flagged, keeping the time it
+-- was first seen missing; one it lists is unflagged. Rows already in the right
+-- state are not rewritten. The join on repository type keeps hosted rows, and
+-- their name claims, out of reach.
+UPDATE files f
+SET upstream_gone_at = CASE
+        WHEN f.filename = ANY(sqlc.arg('listed')::text[]) THEN NULL
+        ELSE COALESCE(f.upstream_gone_at, now())
+    END
+FROM versions v, packages p, repositories r
+WHERE f.version_id = v.id
+  AND v.package_id = p.id
+  AND p.repo_id = r.id
+  AND r.name = sqlc.arg('repo_name')
+  AND r.type = 'proxy'
+  AND p.normalized_name = sqlc.arg('normalized_name')
+  AND ((f.filename = ANY(sqlc.arg('listed')::text[]) AND f.upstream_gone_at IS NOT NULL)
+    OR (NOT f.filename = ANY(sqlc.arg('listed')::text[]) AND f.upstream_gone_at IS NULL));
+
+-- name: DeleteGoneProxyFiles :many
+-- Removes one page of cached files flagged longer than the stale allowance ago,
+-- and returns where each was, so the emptied versions and packages can follow.
+-- The flag is re-checked in the DELETE, so a refresh that listed the file again
+-- first wins.
+WITH gone AS (
+    DELETE FROM files f
+    WHERE f.id IN (
+            SELECT g.id FROM files g
+            JOIN versions gv ON gv.id = g.version_id
+            JOIN packages gp ON gp.id = gv.package_id
+            JOIN repositories gr ON gr.id = gp.repo_id AND gr.type = 'proxy'
+            WHERE g.upstream_gone_at < now() - (sqlc.arg('stale_seconds')::bigint * interval '1 second')
+            ORDER BY g.upstream_gone_at, g.id
+            LIMIT sqlc.arg('page_limit'))
+      AND f.upstream_gone_at < now() - (sqlc.arg('stale_seconds')::bigint * interval '1 second')
+    RETURNING f.version_id
+)
+SELECT gone.version_id, v.package_id
+FROM gone
+JOIN versions v ON v.id = gone.version_id;

@@ -21,6 +21,7 @@ SELECT EXISTS (
     JOIN repositories r ON r.id = p.repo_id
     WHERE r.name = $1
       AND f.blob_digest = $2
+      AND f.upstream_gone_at IS NULL
     UNION ALL
     SELECT 1
     FROM tags t
@@ -277,7 +278,7 @@ func (q *Queries) GetBlob(ctx context.Context, digest string) (Blob, error) {
 }
 
 const getFile = `-- name: GetFile :one
-SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata FROM files f
+SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata, f.upstream_gone_at FROM files f
 JOIN versions v ON v.id = f.version_id
 JOIN packages p ON p.id = v.package_id
 JOIN repositories r ON r.id = p.repo_id
@@ -309,12 +310,13 @@ func (q *Queries) GetFile(ctx context.Context, arg GetFileParams) (File, error) 
 		&i.Filename,
 		&i.MediaType,
 		&i.Metadata,
+		&i.UpstreamGoneAt,
 	)
 	return i, err
 }
 
 const getFileByFilename = `-- name: GetFileByFilename :one
-SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata, v.version, b.size AS blob_size FROM files f
+SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata, f.upstream_gone_at, v.version, b.size AS blob_size FROM files f
 JOIN versions v ON v.id = f.version_id
 JOIN packages p ON p.id = v.package_id
 JOIN repositories r ON r.id = p.repo_id
@@ -322,6 +324,7 @@ JOIN blobs b ON b.digest = f.blob_digest
 WHERE r.name = $1
   AND p.normalized_name = $2
   AND f.filename = $3
+  AND f.upstream_gone_at IS NULL
 ORDER BY v.version, f.id
 LIMIT 1
 `
@@ -333,14 +336,15 @@ type GetFileByFilenameParams struct {
 }
 
 type GetFileByFilenameRow struct {
-	ID         uuid.UUID `json:"id"`
-	VersionID  uuid.UUID `json:"version_id"`
-	BlobDigest string    `json:"blob_digest"`
-	Filename   string    `json:"filename"`
-	MediaType  string    `json:"media_type"`
-	Metadata   []byte    `json:"metadata"`
-	Version    string    `json:"version"`
-	BlobSize   int64     `json:"blob_size"`
+	ID             uuid.UUID          `json:"id"`
+	VersionID      uuid.UUID          `json:"version_id"`
+	BlobDigest     string             `json:"blob_digest"`
+	Filename       string             `json:"filename"`
+	MediaType      string             `json:"media_type"`
+	Metadata       []byte             `json:"metadata"`
+	UpstreamGoneAt pgtype.Timestamptz `json:"upstream_gone_at"`
+	Version        string             `json:"version"`
+	BlobSize       int64              `json:"blob_size"`
 }
 
 func (q *Queries) GetFileByFilename(ctx context.Context, arg GetFileByFilenameParams) (GetFileByFilenameRow, error) {
@@ -353,6 +357,7 @@ func (q *Queries) GetFileByFilename(ctx context.Context, arg GetFileByFilenamePa
 		&i.Filename,
 		&i.MediaType,
 		&i.Metadata,
+		&i.UpstreamGoneAt,
 		&i.Version,
 		&i.BlobSize,
 	)
@@ -548,9 +553,10 @@ INSERT INTO files (version_id, blob_digest, filename, media_type, metadata)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (version_id, filename) DO UPDATE
 SET media_type = EXCLUDED.media_type,
-    metadata = EXCLUDED.metadata
+    metadata = EXCLUDED.metadata,
+    upstream_gone_at = NULL
 WHERE files.blob_digest = EXCLUDED.blob_digest
-RETURNING id, version_id, blob_digest, filename, media_type, metadata
+RETURNING id, version_id, blob_digest, filename, media_type, metadata, upstream_gone_at
 `
 
 type InsertFileImmutableParams struct {
@@ -581,6 +587,7 @@ func (q *Queries) InsertFileImmutable(ctx context.Context, arg InsertFileImmutab
 		&i.Filename,
 		&i.MediaType,
 		&i.Metadata,
+		&i.UpstreamGoneAt,
 	)
 	return i, err
 }
@@ -670,6 +677,7 @@ JOIN repositories r ON r.id = p.repo_id
 JOIN blobs b ON b.digest = f.blob_digest
 WHERE r.name = $1
   AND p.normalized_name = $2
+  AND f.upstream_gone_at IS NULL
 ORDER BY v.version, f.filename
 `
 
@@ -979,7 +987,7 @@ ON CONFLICT (version_id, filename) DO UPDATE
 SET blob_digest = EXCLUDED.blob_digest,
     media_type = EXCLUDED.media_type,
     metadata = EXCLUDED.metadata
-RETURNING id, version_id, blob_digest, filename, media_type, metadata
+RETURNING id, version_id, blob_digest, filename, media_type, metadata, upstream_gone_at
 `
 
 type UpsertFileParams struct {
@@ -1006,6 +1014,7 @@ func (q *Queries) UpsertFile(ctx context.Context, arg UpsertFileParams) (File, e
 		&i.Filename,
 		&i.MediaType,
 		&i.Metadata,
+		&i.UpstreamGoneAt,
 	)
 	return i, err
 }
