@@ -420,6 +420,8 @@ func (a *api) writeRegistryError(w http.ResponseWriter, r *http.Request, err err
 		a.writeError(w, r, http.StatusNotFound, "NOT_FOUND", "resource not found")
 	case errors.Is(err, registry.ErrAlreadyExists):
 		a.writeError(w, r, http.StatusConflict, "ALREADY_EXISTS", "resource already exists")
+	case errors.Is(err, registry.ErrFileExists), errors.Is(err, registry.ErrVersionExists):
+		a.writeError(w, r, http.StatusConflict, "FILE_EXISTS", err.Error())
 	case errors.Is(err, registry.ErrHasHistory):
 		a.writeError(w, r, http.StatusConflict, "HAS_HISTORY", err.Error())
 	case errors.Is(err, registry.ErrConfigManaged):

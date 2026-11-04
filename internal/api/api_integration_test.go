@@ -285,3 +285,56 @@ func TestPublish_InvalidProvenanceHeaderIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// A published version or filename is immutable (SIN-52), but only for the
+// protocols whose clients resolve by it. A hosted OCI-protocol repository keeps
+// the v1.0 behaviour: its API files can be deleted and put again.
+func TestAPI_RepublishAfterDelete(t *testing.T) {
+	cases := []struct {
+		name     string
+		protocol string
+		want     int
+	}{
+		{name: "PyPIFilenameIsRefusedWith409", protocol: "pypi", want: http.StatusConflict},
+		{name: "OCIProtocolFileCanBePublishedAgain", protocol: "oci", want: http.StatusCreated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			database := testsupport.MigratedDB(t)
+			blobs := memstore.New()
+			reg := registry.New(database, cas.New(blobs, cas.WithReserver(db.NewBlobReserver(database, "memory"))), "memory")
+			srv, err := server.New(server.Options{
+				Address:  "127.0.0.1:0",
+				Database: database,
+				Blobs:    blobs,
+				API: api.Handler(api.Options{
+					Registry:  reg,
+					Auth:      auth.NewStaticBearer(testToken),
+					RequestID: server.RequestIDFromContext,
+				}),
+				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			})
+			if err != nil {
+				t.Fatalf("server.New: %v", err)
+			}
+			client := srv.Handler()
+			createRepo(t, client, "team-a", tc.protocol)
+			const path = "/api/v1/repositories/team-a/packages/demo/versions/1.0.0/files/demo-1.0.0.tar.gz"
+
+			if res := mustDo(t, client, http.MethodPut, path, []byte("first"), "text/plain"); res.StatusCode != http.StatusCreated {
+				t.Fatalf("first PUT = %d %s, want 201", res.StatusCode, res.Body)
+			}
+			if res := mustDo(t, client, http.MethodDelete, path, nil, ""); res.StatusCode != http.StatusNoContent {
+				t.Fatalf("DELETE = %d %s, want 204", res.StatusCode, res.Body)
+			}
+
+			res := mustDo(t, client, http.MethodPut, path, []byte("second"), "text/plain")
+			if res.StatusCode != tc.want {
+				t.Fatalf("second PUT = %d %s, want %d", res.StatusCode, res.Body, tc.want)
+			}
+			if tc.want == http.StatusConflict && !strings.Contains(res.Body, `"code":"FILE_EXISTS"`) {
+				t.Fatalf("conflict body = %s, want code FILE_EXISTS", res.Body)
+			}
+		})
+	}
+}

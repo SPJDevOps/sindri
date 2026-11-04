@@ -272,7 +272,8 @@ matches `pypi`. The roadmap's `npmjs` changes.
   same 409 as a live version, and it applies to identical bytes as well: this is a
   behaviour change, because republishing a deleted version used to succeed. Versions
   deleted before migration 00009 are not remembered and can still be published again.
-  A proxy repository retires nothing.
+  Only hosted npm and PyPI repositories retire anything: a proxy
+  and a hosted OCI-protocol repository do not.
 - A proxy cannot see `time` or the readme, so `npm install --before` and pnpm's release-age
   setting do not work through one.
 - A proxy takes only tarballs on its own host under its base path, with no off-origin

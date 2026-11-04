@@ -362,10 +362,11 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		}
 	}
 
-	// A deleted filename stays taken, whichever version held it (SIN-52). npm
-	// is checked by version above. This runs after the placement so the insert
-	// has waited for a delete in flight on the same file.
-	if !npm {
+	// A deleted PyPI filename stays taken, whichever version held it (SIN-52).
+	// npm is checked by version above; OCI-protocol repositories keep their
+	// v1.0 behaviour. This runs after the placement so the insert has waited
+	// for a delete in flight on the same file.
+	if model.Protocol(repo.Protocol) == model.ProtocolPyPI {
 		retired, err := q.IsFilenameRetired(ctx, db.IsFilenameRetiredParams{PackageID: pkg.ID, Filename: p.Filename})
 		if err != nil {
 			return model.File{}, fmt.Errorf("checking retired files of %s: %w", p.Package, err)
@@ -563,10 +564,12 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 		}
 	}
 
-	// A hosted repository's published names are immutable, so a deleted file
-	// keeps its version and filename taken (SIN-52). A proxy only mirrors
-	// upstream, and has to be able to place the file again.
-	if repoRow.Type == string(model.RepoTypeHosted) {
+	// A hosted npm or PyPI repository's published names are immutable, so a
+	// deleted file keeps its version and filename taken (SIN-52). A proxy only
+	// mirrors upstream, and an OCI-protocol repository keeps its v1.0 behaviour;
+	// both must be able to place the file again.
+	if repoRow.Type == string(model.RepoTypeHosted) &&
+		(model.Protocol(repoRow.Protocol) == model.ProtocolNPM || model.Protocol(repoRow.Protocol) == model.ProtocolPyPI) {
 		if err := q.InsertRetiredFile(ctx, db.InsertRetiredFileParams{
 			PackageID: pkgRow.ID,
 			Version:   version,

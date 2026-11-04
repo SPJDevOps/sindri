@@ -68,8 +68,10 @@ and a resolver that had already seen the filename could be served new bytes unde
 it. This is a behaviour change: re-uploading a deleted filename was accepted, and
 is now refused even with identical bytes, because "same bytes" cannot be told
 apart from "same name, new build" once the original is gone. A new version is the
-way forward. The rule covers every publish into a hosted repository, including the
-management API's non-immutable one. Proxy repositories record nothing, so a
+way forward. The rule covers every publish into a hosted PyPI repository, including the
+management API's non-immutable one, which answers 409 `FILE_EXISTS`. It does not
+apply to hosted OCI-protocol repositories, whose API files can still be deleted
+and put again. Proxy repositories record nothing, so a
 cached file can be placed again. Files deleted before the migration are not
 remembered.
 
