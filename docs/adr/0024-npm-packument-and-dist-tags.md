@@ -269,10 +269,15 @@ local file with the npm on PATH (10.9.9 in the recorded run) and pnpm 10.34.9 an
 which the script fetches at those exact versions. Installs use `--ignore-scripts` in temp
 directories. The installed `package.json` is compared with what `inspectManifest` read. The
 harness is `internal/proto/npm/tarball_differential_test.go`, behind the `differential`
-build tag. Each tarball holds a manifest, placeholder files, and, for most shapes, a
-second `package.json` variant (the decoy) in the place a misreading parser would take as
-the manifest, with a different name, version and description, so a disagreement shows which
-was read. The test fails if a shape's parser outcome differs from the expected one, if a
+build tag. Each tarball holds the real manifest and placeholder files. Shapes a client could misread
+also hold a decoy, a second `package.json` with a different name, version and description,
+where the misreading would land: a whole `package/package.json` entry inside the body of an
+entry that could be misframed (the slash-ended, `..`-cut and split-character names, the pax
+size, tar-stream's `PaxHeader`), or a name that a reader ignoring the ustar prefix or a pax
+path would take as the manifest. The shapes of real tools' forms (npm pack, no owner, NUL
+typeflag, directories, zero blocks, pax keys, pax with no path) have no decoy: there is
+nothing in them for a reader to land on. Where a decoy is installed, a disagreement shows
+which document was read. The test fails if a shape's parser outcome differs from the expected one, if a
 client errors outside a named allowlist, or if no negative control shows a client
 installing the decoy.
 
@@ -302,7 +307,7 @@ name, version and description the parser read, not the decoy's.
 | pax path over a name ending in a slash | agree | agree | agree |
 | pax path over a name cut after a parent segment | agree | agree | agree |
 | pax path over a name cut inside a character | agree | agree | agree |
-| ustar prefix carrying a decoy | agree | agree | agree |
+| ustar prefix naming a nested package.json | agree | agree | agree |
 | decoy manifest as a plain second file | agree | agree | agree |
 | decoy manifest one directory down | agree | agree | agree |
 | decoy manifest two directories down | agree | agree | agree |

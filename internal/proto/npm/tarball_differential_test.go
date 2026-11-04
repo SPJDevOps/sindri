@@ -100,6 +100,10 @@ func differentialShapes() []differentialShape {
 	overUstar := "package/" + strings.Repeat("d/", 150) + "f.js"
 	manifest := func(m shapeManifests) []byte { return rawEntry(manifestEntry, m.real, '0') }
 	decoy := func(m shapeManifests, name string) []byte { return rawEntry(name, m.decoy, '0') }
+	// decoyEntry is a whole package/package.json tar entry holding the decoy. Placed
+	// in the body of another entry, the parser skips it, but a client that misframes
+	// that entry lands on it and installs the decoy.
+	decoyEntry := func(m shapeManifests) string { return string(rawEntry(manifestEntry, m.decoy, '0')) }
 	field := func(off int, value string) func([]byte) {
 		return func(b []byte) { copy(b[off:], value) }
 	}
@@ -113,7 +117,9 @@ func differentialShapes() []differentialShape {
 			return [][]byte{
 				append(tarStreamEntry(manifestEntry, len(m.real), '0'), padded(m.real)...),
 				append(tarStreamEntry("PaxHeader", len(pax), 'x'), padded(pax)...),
-				append(tarStreamEntry("PaxHeader", len(m.decoy), '0'), padded(m.decoy)...),
+				// Built to catch a reader that takes an entry named PaxHeader for
+				// metadata and skips only its header, so it lands on the body.
+				append(tarStreamEntry("PaxHeader", len(decoyEntry(m)), '0'), decoyEntry(m)...),
 				tarStreamEntry("package/dir", 0, '5'),
 			}
 		}},
@@ -127,7 +133,7 @@ func differentialShapes() []differentialShape {
 			return [][]byte{rawHeader("package", 0, '5', ustarMagic), rawHeader("package/lib/", 0, '5', ustarMagic), manifest(m)}
 		}},
 		{name: "manifest after other files", build: func(m shapeManifests) [][]byte {
-			return [][]byte{rawEntry("package/a.js", m.decoy, '0'), rawHeader("package/lib/", 0, '5', ustarMagic), manifest(m)}
+			return [][]byte{rawEntry("package/a.js", "x", '0'), rawHeader("package/lib/", 0, '5', ustarMagic), manifest(m)}
 		}},
 		{name: "extra zero blocks", build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), make([]byte, 8192)}
@@ -147,26 +153,39 @@ func differentialShapes() []differentialShape {
 			return [][]byte{
 				manifest(m),
 				paxEntry(paxRecords("path", "package/a.js", "mtime", "1.5", "atime", "1", "ctime", "1", "comment", "a=b")),
-				rawEntry("package/a.js", m.decoy, '0'),
+				rawEntry("package/a.js", "x", '0'),
 			}
 		}},
 		{name: "pax with no path", build: func(m shapeManifests) [][]byte {
 			return [][]byte{paxEntry(paxRecords("mtime", "1")), manifest(m)}
 		}},
 		{name: "pax size repeating the header's", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), paxEntry(paxRecords("path", overUstar, "mtime", "499162500", "size", fmt.Sprint(len(m.decoy)))), rawEntry(overUstar[:100], m.decoy, '0')}
+			return [][]byte{manifest(m), paxEntry(paxRecords("path", overUstar, "mtime", "499162500", "size", fmt.Sprint(len(decoyEntry(m))))),
+				// Built to catch a reader that ignores the pax size, or reads the entry as
+				// empty, so it lands on the body.
+				rawEntry(overUstar[:100], decoyEntry(m), '0')}
 		}},
 		{name: "pax path over a name ending in a slash", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/cut-short/", m.decoy, '0')}
+			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/a.js")),
+				// Built to catch a reader that takes the slash for a directory with no body.
+				rawEntry("package/cut-short/", decoyEntry(m), '0')}
 		}},
 		{name: "pax path over a name cut after a parent segment", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/a.js")), rawEntry("package/cut/..", m.decoy, '0')}
+			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/a.js")),
+				// Built to catch a reader that ignores the pax path, sees a directory at
+				// package, and so skips no body.
+				rawEntry("package/cut/..", decoyEntry(m), '0')}
 		}},
 		{name: "pax path over a name cut inside a character", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/é.js")), rawEntry("package/\xc3", m.decoy, '0')}
+			return [][]byte{manifest(m), paxEntry(paxRecords("path", "package/é.js")),
+				// Built to catch a reader that drops an entry for its invalid name without
+				// skipping its body.
+				rawEntry("package/\xc3", decoyEntry(m), '0')}
 		}},
-		{name: "ustar prefix carrying a decoy", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), prefixedEntry("package/"+strings.Repeat("d", 90), strings.Repeat("f", 40)+".js", m.decoy)}
+		{name: "ustar prefix naming a nested package.json", build: func(m shapeManifests) [][]byte {
+			// Built to catch a reader that ignores the prefix, which sees package.json
+			// at the archive root.
+			return [][]byte{manifest(m), prefixedEntry("package/a", "package.json", m.decoy)}
 		}},
 		{name: "decoy manifest as a plain second file", build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), decoy(m, "package/also-harmless.js")}
