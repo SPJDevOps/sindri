@@ -123,10 +123,10 @@ under the upstream's base path on a segment boundary. Dot segments and encoded s
 are refused in decoded or encoded form, to any depth of encoding, rather than cleaned. A
 redirect that leaves the first request's origin is refused, and credentials stop at any such
 redirect for every protocol: net/http alone kept `Authorization` for the same hostname on
-another port. A redirect to the same origin, issued by the upstream itself, is not checked
-against the base path. The server chose it, and a packument author cannot cause one without
-an open redirect on that host. If one exists, a credentialed request can reach another path
-on that host, which matters on a shared host such as a multi-tenant registry.
+another port. A redirect to the same origin is followed, because registries move tarballs on
+their own host, but credentials stop at any hop outside the base path or with an unsafe path.
+So an open redirect on a shared host cannot carry them to another tenant's path, and a
+tarball that really needs them there fails rather than authenticates.
 
 **A version with neither `integrity` nor `shasum` is listed, and its tarball is a 502.**
 Sindri will not cache bytes it cannot check. The same answer covers a tarball URL off the
@@ -162,18 +162,18 @@ rows, and `claimOwner` is what keeps them out. Names through a virtual use `vali
 ASCII only, and a hosted member compares exactly while the claim compares in lowercase. So
 `JSONStream` against a hosted `jsonstream` is claimed and then a 404.
 
-**A 401 or 403 from a proxy member is a miss that moves the walk on.** This is released
-behaviour shared with PyPI and OCI (`absent` in `resolve.go`), and changing it alters all
-three. The risk is real. With members `[private-proxy, public-proxy]`, a broken credential
+**A 401 or 403 from a proxy member is, for now, a miss that moves the walk on.** This is
+behaviour shared with PyPI and OCI (`absent` in `resolve.go`). SIN-55 decided on 2026-11-04
+that a refusal will fail the walk on all three protocols, before v1.1.0: the broken thing is
+Sindri's own upstream credential, not the package's presence. This paragraph describes the
+code until that lands. The risk it closes is real. With members `[private-proxy, public-proxy]`, a broken credential
 on the first makes a private name resolve from the public proxy for as long as the
 credential stays broken. A denial is never negatively cached, so this is not bounded by the
 negative TTL: every read asks the private upstream again, is refused again, and falls to the
 public one. A stale private document stops answering too, because a denial returns before
 the stale fallback, which only an unavailable upstream reaches. A claim by a hosted member
-still holds, so it affects only names that live upstream on a private registry. Not changed
-here; SIN-55 decides whether a refusal should fail the walk. An npm-only change would be
-small, since npm resolves through its own closures, but it would leave PyPI and OCI
-different.
+still holds, so it affects only names that live upstream on a private registry. Docker Hub's
+denial handling is why a refusal counts as a miss today, so SIN-55 has to check it first.
 
 **An npm packument is bounded at 128 MiB, and each read parses all of it.** PyPI pages and
 OCI manifests keep 32 MiB; a packument lists every version and real ones are large
@@ -297,11 +297,10 @@ matches `pypi`. The roadmap's `npmjs` changes.
   abort cannot be told from a finished download.
 - **Cleaning a `dist.tarball` path.** Normalizing dot segments and encodings is the
   behaviour a hostile author depends on. Refusing the spellings leaves nothing to agree on.
-- **Checking a same-origin redirect against the base path.** The upstream chose it, and
-  pinning it would break registries that move tarballs on their own host.
-- **Failing the walk on a 401/403.** Correct for a private upstream, but it changes PyPI and
-  OCI, which have shipped. Left to SIN-55. Until then a denial is never negatively cached,
-  so a broken credential lets the public proxy answer for as long as it stays broken.
+- **Refusing a same-origin redirect outside the base path.** It would break registries that
+  move tarballs on their own host. Stopping the credentials closes the same risk.
+- **Failing the walk on a refusal for npm only.** Smaller, since npm resolves through its own
+  closures, but it would leave the protocols different. SIN-55 chose all three.
 - **Merging packuments per version.** A hostile `99.0.0` can appear under a name it should
   never reach. ADR 14 already rejected merging, and I5 forbids it.
 - **Declaring scopes in config.** It closes the first-publish gap at the cost of a field

@@ -289,6 +289,10 @@ func (r *Registry) ListMembers(ctx context.Context, virtualName string) ([]model
 // on the package row, which DeleteFile keeps on a hosted repository, so only
 // deleting the repository releases a claim. On an npm repository any name in a
 // scope claims the whole scope, and names compare in ASCII lowercase (ADR 24).
+//
+// Ask this of hosted members only. It does not check the repository's type, and
+// a proxy's cached package rows look like hosted ones, so asking a proxy would
+// treat what it happens to have cached as a claim.
 func (r *Registry) PackageClaimed(ctx context.Context, repoName, normalizedName string) (bool, error) {
 	repo, err := r.q.GetRepositoryByName(ctx, repoName)
 	if err != nil {
