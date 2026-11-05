@@ -335,7 +335,8 @@ matches `pypi`. The roadmap's `npmjs` changes.
 `scripts/npm-tarball-differential.sh` installs each tarball shape the parser accepts from a
 local file with the npm on PATH (10.9.9 in the recorded run) and pnpm 10.34.9 and yarn 1.22.22,
 which the script fetches at those exact versions. Installs use `--ignore-scripts` in temp
-directories. The installed `package.json` is compared with what `inspectManifest` read. The
+directories. The whole installed `package.json` is compared, key by key and by exact key, with the
+sanitized manifest `inspectManifest` returned, not only its name, version and description. The
 harness is `internal/proto/npm/tarball_differential_test.go`, behind the `differential`
 build tag. Each tarball holds the real manifest and placeholder files. Shapes a client could misread
 also hold a decoy, a second `package.json` with a different name, version and description,
@@ -349,17 +350,19 @@ which document was read. The test fails if a shape's parser outcome differs from
 client errors outside a named allowlist, or if no negative control shows a client
 installing the decoy.
 
-The recorded run had 59 candidate shapes (excluding controls): 40 accepted and compared, 19
-refused and so skipped. Of the 120 client rows, 119 agree, none disagree, and one is a
-client error: yarn 1.22.22 cannot extract a tarball with 7 stray zero bytes after the end
-marker ("Unexpected end of data"), while npm and pnpm install it. yarn reads no manifest from
-it, so it was not manifest confusion, but a package that installs with two clients and fails
-with a third is one a publisher cannot reproduce. SIN-59 decided to refuse it at publish: after
-the end marker the parser accepts only whole 512-byte blocks of zeros, and a partial block is
-a refusal. The shape moved to the refused list, and the allowlist of tolerated client errors
-is empty. This applies to hosted publishes only: `publish.go` is the one caller of the
-parser, and a proxied tarball is stored as the upstream sent it and never passes through it.
-Every agree row installed the
+The recorded run had 64 candidate shapes (excluding controls): 44 accepted and compared, 20
+refused and so skipped. Of the 132 client rows, all agree and none is a client error. One shape,
+7 stray zero bytes after the end marker, was accepted in the earlier run: yarn 1.22.22 cannot
+extract such a tarball ("Unexpected end of data") while npm and pnpm install it. yarn reads no
+manifest from it, so it was not manifest confusion, but a package that installs with two clients
+and fails with a third is one a publisher cannot reproduce. SIN-59 decided to refuse it at
+publish: after the end marker the parser accepts only whole 512-byte blocks of zeros. The shape
+is now on the refused list, and the allowlist of tolerated client errors is empty. This applies
+to hosted publishes only: `publish.go` is the one caller of the parser, and a proxied tarball is
+stored as the upstream sent it and never passes through it. Five JSON-level shapes (a repeated
+`name`, a repeated `version` and `description`, `NAME` before and after `name`, and `Version`
+and `Description` beside the lower-case keys) show that all three clients and Sindri keep the
+last value of a repeated key and treat a key that differs in case as a different key. Every agree row installed the
 name, version and description the parser read, not the decoy's.
 
 | Shape | npm | pnpm | yarn |
@@ -372,6 +375,11 @@ name, version and description the parser read, not the decoy's.
 | directories with and without a slash | agree | agree | agree |
 | manifest after other files | agree | agree | agree |
 | extra zero blocks | agree | agree | agree |
+| duplicate name key, last wins | agree | agree | agree |
+| duplicate version and description keys | agree | agree | agree |
+| NAME key before name | agree | agree | agree |
+| NAME key after name | agree | agree | agree |
+| Version and Description keys beside the lower-case ones | agree | agree | agree |
 | manifest split over prefix and name | agree | agree | agree |
 | manifest named by a pax path over a short name | agree | agree | agree |
 | pax with every allowed key | agree | agree | agree |
