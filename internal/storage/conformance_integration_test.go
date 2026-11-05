@@ -22,11 +22,6 @@ import (
 // invisible until a backend swap breaks a production registry.
 func TestBlobStore_Conformance(t *testing.T) {
 	minio := testsupport.StartMinIO(t)
-	if skew, err := minio.ClockSkew(t.Context()); err != nil {
-		t.Logf("MinIO clock skew: unmeasured: %v", err)
-	} else {
-		t.Logf("MinIO clock skew (MinIO minus host): %s", skew)
-	}
 
 	openFS := func(t *testing.T, root string) storage.BlobStore {
 		s, err := fsstore.New(root)
@@ -63,18 +58,7 @@ func TestBlobStore_Conformance(t *testing.T) {
 			newStore: func(t *testing.T) storage.BlobStore { return openS3(t, prefixFor(t)) },
 			reopen: func(t *testing.T) (storage.BlobStore, func() storage.BlobStore) {
 				prefix := prefixFor(t)
-				// A purge that finds no orphan is a flake we have not explained
-				// (SIN-67): keep what MinIO listed and its clock on failure.
-				t.Cleanup(func() {
-					if t.Failed() {
-						minio.LogUploads(t)
-					}
-				})
 				return openS3(t, prefix), func() storage.BlobStore {
-					// Before the purge runs, whatever the outcome: a listing taken
-					// only after a failure cannot tell an upload that was never
-					// listed from one the purge already removed.
-					minio.LogUploads(t)
 					return openS3(t, prefix)
 				}
 			},

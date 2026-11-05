@@ -11,10 +11,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math/rand"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -596,40 +594,12 @@ func testPurgeAfterReopen(t *testing.T, reopen ReopenFunc) {
 	}
 
 	second := again()
-	// A listing of in-flight uploads on an object store may lag the Append that
-	// opened one, so give the first purge a short, bounded chance to see it. Each
-	// attempt is recorded and reported if none does, so a stuck orphan is never
-	// hidden by the retry.
-	const (
-		purgeAttempts = 10
-		purgeBackoff  = 250 * time.Millisecond
-	)
-	var (
-		n        int
-		attempts []string
-	)
-	for i := range purgeAttempts {
-		before := time.Now()
-		n, err = second.PurgeUploads(ctx, before.Add(purgeMargin))
-		if err != nil {
-			t.Fatalf("PurgeUploads after a restart: %v", err)
-		}
-		attempts = append(attempts, fmt.Sprintf("attempt %d at %s removed %d (cutoff %s)",
-			i+1, before.UTC().Format(time.RFC3339Nano), n, before.Add(purgeMargin).UTC().Format(time.RFC3339Nano)))
-		if n >= 1 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("PurgeUploads after a restart: %v", ctx.Err())
-		case <-time.After(purgeBackoff):
-		}
+	n, err := second.PurgeUploads(ctx, time.Now().Add(purgeMargin))
+	if err != nil {
+		t.Fatalf("PurgeUploads after a restart: %v", err)
 	}
 	if n < 1 {
-		t.Fatalf("PurgeUploads after a restart removed %d uploads, want the orphan:\n%s", n, strings.Join(attempts, "\n"))
-	}
-	if len(attempts) > 1 {
-		t.Logf("the orphan was not removed by the first purge; it took %d attempts:\n%s", len(attempts), strings.Join(attempts, "\n"))
+		t.Fatalf("PurgeUploads after a restart removed %d uploads, want the orphan", n)
 	}
 	n, err = second.PurgeUploads(ctx, time.Now().Add(purgeMargin))
 	if err != nil {

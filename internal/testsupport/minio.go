@@ -67,8 +67,11 @@ func StartMinIO(t *testing.T) MinIO {
 			// The health endpoint answers on the throwaway instance, so waiting
 			// on it alone hands the test a server that is about to be killed:
 			// in-flight requests fail with 499 ClientDisconnected or a broken
-			// pipe, and uploads created in the window can vanish (SIN-67). The
-			// setup script's last line is printed after the throwaway stops.
+			// pipe (SIN-67). Waiting for the setup script's last line, which is
+			// printed after the throwaway stops, is proved to end those. A
+			// multipart upload that a listing no longer showed coincided with
+			// the stop; why a stop loses one was not established. This depends
+			// on the pinned image's entrypoint: recheck it on any repin (ADR 11).
 			testcontainers.WithWaitStrategy(
 				wait.ForAll(
 					wait.ForLog("MinIO setup finished!"),
@@ -96,7 +99,6 @@ func StartMinIO(t *testing.T) MinIO {
 		container: container,
 	}
 	createBucket(t, m)
-	m.traceServer(t, container.GetContainerID())
 
 	return m
 }

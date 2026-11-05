@@ -58,6 +58,11 @@ upstream.
 - The compose volume moved from `/data` to `/bitnami/minio/data`. A developer
   with an existing `sindri-dev_minio-data` volume gets an empty bucket once and
   `minio-init` recreates it.
+- `StartMinIO` waits for the entrypoint's "MinIO setup finished!" log line as well
+  as the health endpoint, because this image's entrypoint runs a throwaway MinIO
+  for about five seconds, stops it, and then starts the real one (SIN-67). A repin
+  must recheck that wait: it depends on the pinned entrypoint, and
+  `TestStartMinIO_ReturnsOnlyOnceTheRealServerIsRunning` fails if the line goes away.
 
 ## Rejected
 
