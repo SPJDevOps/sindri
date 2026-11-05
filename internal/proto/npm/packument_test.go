@@ -8,6 +8,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/spj/sindri/internal/registry"
+	"github.com/spj/sindri/internal/remote"
 )
 
 func TestTarballURL(t *testing.T) {
@@ -197,4 +198,50 @@ func TestPackument_VersionWithNoTimeIsLeftOut(t *testing.T) {
 			t.Fatalf("time = %v, want none", got)
 		}
 	})
+}
+
+func TestRewriteUpstream_DropsAttachmentsAndResolved(t *testing.T) {
+	t.Parallel()
+	up := remote.NPMPackument{
+		Name: "foo",
+		Fields: map[string]json.RawMessage{
+			"name":         json.RawMessage(`"foo"`),
+			"_attachments": json.RawMessage(`{"foo-1.0.0.tgz":{"data":"AAAA"}}`),
+			"_rev":         json.RawMessage(`"3-abc"`),
+		},
+		DistTags: map[string]string{"latest": "1.0.0"},
+		Versions: map[string]remote.NPMVersion{"1.0.0": {
+			Fields: map[string]json.RawMessage{
+				"version":   json.RawMessage(`"1.0.0"`),
+				"_resolved": json.RawMessage(`"https://registry.example/foo/-/foo-1.0.0.tgz"`),
+				"_id":       json.RawMessage(`"foo@1.0.0"`),
+			},
+			Dist:     map[string]json.RawMessage{"shasum": json.RawMessage(`"y"`)},
+			Filename: "foo-1.0.0.tgz",
+		}},
+	}
+	h := &handler{publicURL: "https://s.example"}
+	doc, err := h.rewriteUpstream("r", up)
+	if err != nil {
+		t.Fatalf("rewriteUpstream: %v", err)
+	}
+	if _, ok := doc["_attachments"]; ok {
+		t.Error("top-level _attachments survived: it can carry upstream's tarball bytes")
+	}
+	if _, ok := doc["_rev"]; !ok {
+		t.Error("an unrelated underscore field was dropped; only _attachments goes")
+	}
+	var versions map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(doc["versions"], &versions); err != nil {
+		t.Fatalf("decoding versions: %v", err)
+	}
+	if _, ok := versions["1.0.0"]["_resolved"]; ok {
+		t.Error("_resolved survived: it names upstream's tarball URL, behind Sindri's auth")
+	}
+	if _, ok := versions["1.0.0"]["_id"]; !ok {
+		t.Error("an unrelated underscore field of a version was dropped; only _resolved goes")
+	}
+	if up.Fields["_attachments"] == nil || up.Versions["1.0.0"].Fields["_resolved"] == nil {
+		t.Error("rewriteUpstream changed its input")
+	}
 }

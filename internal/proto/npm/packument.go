@@ -117,7 +117,11 @@ func publishTimes(versions []registry.NPMVersion) map[string]string {
 // rewriteUpstream is upstream's document with each dist.tarball pointing at the
 // repository the client asked for, so installs stay behind auth.Authorize and
 // placement (ADR 24). Everything else goes through as raw JSON, which is what
-// keeps dist.signatures and any field Sindri has never heard of intact.
+// keeps dist.signatures and any field Sindri has never heard of intact, with two
+// exceptions. The top-level _attachments (a publish payload: it can carry
+// tarball bytes as base64) and each version's _resolved (the URL of upstream's
+// tarball) are write-side or install-side fields that a reader has no use for,
+// and _resolved would point a client past Sindri to upstream.
 func (h *handler) rewriteUpstream(repo string, up remote.NPMPackument) (map[string]json.RawMessage, error) {
 	versions := make(map[string]map[string]json.RawMessage, len(up.Versions))
 	for version, v := range up.Versions {
@@ -126,12 +130,14 @@ func (h *handler) rewriteUpstream(repo string, up remote.NPMPackument) (map[stri
 			return nil, err
 		}
 		entry := maps.Clone(v.Fields)
+		delete(entry, "_resolved")
 		if err := setJSON(entry, "dist", dist); err != nil {
 			return nil, err
 		}
 		versions[version] = entry
 	}
 	doc := maps.Clone(up.Fields)
+	delete(doc, "_attachments")
 	if err := setJSON(doc, "versions", versions); err != nil {
 		return nil, err
 	}
