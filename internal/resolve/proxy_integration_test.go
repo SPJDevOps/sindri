@@ -673,8 +673,9 @@ func TestDependencyConfusion_OCIHostedImageIsNeverServedFromProxy(t *testing.T) 
 type goneUpstream struct {
 	mu       sync.Mutex
 	versions []string
-	status   int  // when non-zero, answers the document request
-	junk     bool // when set, the document is not parseable
+	status   int    // when non-zero, answers the document request
+	junk     bool   // when set, the document is not parseable
+	doc      string // when non-empty, the document request answers this JSON verbatim
 	// fileStatus, when non-zero, answers every file request (PyPI only).
 	fileStatus int
 }
@@ -688,7 +689,7 @@ func (u *goneUpstream) answerFiles(status int) {
 func (u *goneUpstream) list(versions ...string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.versions, u.status, u.junk = versions, 0, false
+	u.versions, u.status, u.junk, u.doc = versions, 0, false, ""
 }
 
 func (u *goneUpstream) answer(status int) {
@@ -701,6 +702,13 @@ func (u *goneUpstream) garble() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.status, u.junk = 0, true
+}
+
+// serveDoc makes the document request answer 200 with body, whatever it says.
+func (u *goneUpstream) serveDoc(body string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.status, u.junk, u.doc = 0, false, body
 }
 
 // goneProtocol describes one protocol's way of listing and fetching "demo".
@@ -734,6 +742,8 @@ func goneProtocols() []goneProtocol {
 							w.WriteHeader(u.status)
 						case u.junk:
 							_, _ = w.Write([]byte("not json"))
+						case u.doc != "":
+							_, _ = w.Write([]byte(u.doc))
 						default:
 							versions := map[string]any{}
 							for _, v := range u.versions {
@@ -769,6 +779,8 @@ func goneProtocols() []goneProtocol {
 							w.WriteHeader(u.status)
 						case u.junk:
 							_, _ = w.Write([]byte("not json"))
+						case u.doc != "":
+							_, _ = w.Write([]byte(u.doc))
 						default:
 							var files []map[string]any
 							for _, v := range u.versions {
@@ -927,14 +939,24 @@ func TestProxy_OutageOrRefusalFlagsNothing(t *testing.T) {
 	cases := []struct {
 		name string
 		do   func(u *goneUpstream)
+		only string // when set, the one protocol the case applies to
 	}{
-		{"server error", func(u *goneUpstream) { u.answer(http.StatusServiceUnavailable) }},
-		{"refused credential", func(u *goneUpstream) { u.answer(http.StatusForbidden) }},
-		{"unauthenticated", func(u *goneUpstream) { u.answer(http.StatusUnauthorized) }},
-		{"unparsable document", func(u *goneUpstream) { u.garble() }},
+		{"server error", func(u *goneUpstream) { u.answer(http.StatusServiceUnavailable) }, ""},
+		{"refused credential", func(u *goneUpstream) { u.answer(http.StatusForbidden) }, ""},
+		{"unauthenticated", func(u *goneUpstream) { u.answer(http.StatusUnauthorized) }, ""},
+		{"unparsable document", func(u *goneUpstream) { u.garble() }, ""},
+		// A 200 that is not this project's document says nothing about its files.
+		{"empty object", func(u *goneUpstream) { u.serveDoc(`{}`) }, ""},
+		{"error message object", func(u *goneUpstream) { u.serveDoc(`{"message":"slow down"}`) }, ""},
+		{"another project's document", func(u *goneUpstream) { u.serveDoc(`{"name":"other","files":[]}`) }, ""},
+		// npm accepts a packument that lists no versions: it is a real answer.
+		{"name without files", func(u *goneUpstream) { u.serveDoc(`{"name":"demo"}`) }, "pypi"},
 	}
 	for _, p := range goneProtocols() {
 		for _, tc := range cases {
+			if tc.only != "" && tc.only != p.name {
+				continue
+			}
 			t.Run(p.name+"/"+tc.name, func(t *testing.T) {
 				e := newGoneEnv(t, p)
 				e.setTTL(t)
@@ -950,6 +972,29 @@ func TestProxy_OutageOrRefusalFlagsNothing(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A document that is refused leaves the cached one serving: the project's
+// listing is still the last good answer.
+func TestProxy_RefusedDocumentKeepsServingTheStaleOne(t *testing.T) {
+	for _, p := range goneProtocols() {
+		t.Run(p.name, func(t *testing.T) {
+			e := newGoneEnv(t, p)
+			e.setTTL(t)
+			e.up.serveDoc(`{"message":"slow down"}`)
+			e.age(t)
+			rec := e.do(t, http.MethodGet, p.prefix+"up/"+p.docPath, nil, "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET document = %d, want the stale one (200)", rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), "1.0.0") || !strings.Contains(rec.Body.String(), "2.0.0") {
+				t.Fatalf("document = %s, want the stale listing of both versions", rec.Body.String())
+			}
+			if e.flagged(t) != 0 {
+				t.Fatalf("%d files flagged", e.flagged(t))
+			}
+		})
 	}
 }
 

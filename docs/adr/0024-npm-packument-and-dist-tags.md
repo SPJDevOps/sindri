@@ -202,7 +202,10 @@ and the version and package rows it empties, once it has been flagged longer tha
 `worker.retention.proxyStaleAfter`; the collector reclaims the bytes later. Hosted rows are
 never flagged. A document whose versions were dropped as unservable (`Dropped`) lists only
 the versions the parser kept, so a placed file of a dropped version is flagged, which is the
-safe direction. PyPI walks the same way: a proxy member whose index resolves owns the
+safe direction. A PyPI 200 is believed only if it is this project's index: a document with no
+`files` list, or whose `name` normalizes to another project, is refused as unavailable and
+flags nothing, as a packument with the wrong `name` is for npm. A missing `name` alone is
+accepted, and `files: []` is a real answer that upstream lists nothing. PyPI walks the same way: a proxy member whose index resolves owns the
 answer for its project's files, so a file it no longer lists is a 404 and a later member
 listing the same filename is not asked. A member whose project answers 404 still moves the
 walk on.
@@ -211,7 +214,11 @@ Rejected: keeping a placed file serving until retention collects it, as this ADR
 did. It is the more available choice, but it serves a version upstream pulled for a reason,
 including malware, for as long as the cache entry is renewed, and a virtual and a direct
 read disagreed about one file. The accepted cost is that a pinned install breaks after a
-left-pad style unpublish, until upstream lists the file again.
+left-pad style unpublish, until upstream lists the file again. A second cost: a placed file
+read past its TTL now waits on upstream before it serves, because the refresh decides whether
+the file is still listed. With an upstream that accepts connections and never answers, each
+such read can wait the whole upstream timeout (30 seconds by default) before the placed copy
+serves, and nothing backs off between reads. A backoff has its own ticket.
 
 **A hosted package row survives the deletion of its last file.** The claim is the `packages`
 row, so deleting a file removes the version when emptied and keeps the package, hidden from

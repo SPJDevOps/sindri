@@ -126,6 +126,9 @@ func (c *Client) fetchAndCachePyPIIndex(ctx context.Context, repoName, project s
 	}
 
 	idx, err := parsePyPIIndex(body)
+	if err == nil {
+		err = checkPyPIIndex(body, project)
+	}
 	if err != nil {
 		return PyPIIndex{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, err)
 	}
@@ -143,6 +146,29 @@ func (c *Client) fetchAndCachePyPIIndex(ctx context.Context, repoName, project s
 	}
 	idx.Body = body
 	return idx, nil
+}
+
+// checkPyPIIndex refuses a 200 that is not this project's index, before it can
+// say anything about which files exist. PEP 691 requires "files" and "name" in
+// a project detail. "files" must be present, though an empty list is a real
+// answer that upstream lists nothing. "name" is compared only when present, so
+// a mirror that leaves it out is still served; a name that normalizes to
+// another project is refused (SIN-54).
+func checkPyPIIndex(body []byte, project string) error {
+	var raw struct {
+		Name  *string         `json:"name"`
+		Files json.RawMessage `json:"files"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return fmt.Errorf("decoding simple JSON: %w", err)
+	}
+	if len(raw.Files) == 0 || string(raw.Files) == "null" {
+		return errors.New("simple JSON has no files list")
+	}
+	if raw.Name != nil && registry.NormalizeName(model.ProtocolPyPI, *raw.Name) != registry.NormalizeName(model.ProtocolPyPI, project) {
+		return fmt.Errorf("simple JSON is for project %q, not %q", *raw.Name, project)
+	}
+	return nil
 }
 
 func parsePyPIIndex(body []byte) (PyPIIndex, error) {
