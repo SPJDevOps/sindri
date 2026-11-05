@@ -8,7 +8,7 @@
 # golden test TestManifests_ShortAndLongFormsAreIdentical and the integration
 # test TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState both fail
 # if the two ever drift.
-listen:   ${SINDRI_LISTEN:-:8080}
+listen:   ${SINDRI_LISTEN:-127.0.0.1:8080}
 storage:  ${SINDRI_DATA_DIR:-/tmp/sindri-m7-data}
 database: ${SINDRI_DATABASE:-postgres://sindri:sindri@127.0.0.1:55432/sindri?sslmode=disable}
 auth:     ${SINDRI_TOKEN:-sindri-dev-token}

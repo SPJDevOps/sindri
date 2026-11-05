@@ -40,9 +40,9 @@ func TestParse_DesugarsEverySection(t *testing.T) {
 	}{
 		{
 			name:  "ListenScalar",
-			input: "listen: :9999",
-			want:  func(c *config.Config) bool { return c.Listen.Address == ":9999" },
-			desc:  "listen.address = :9999",
+			input: "listen: 127.0.0.1:9999",
+			want:  func(c *config.Config) bool { return c.Listen.Address == "127.0.0.1:9999" },
+			desc:  "listen.address = 127.0.0.1:9999",
 		},
 		{
 			name:  "StoragePath",
@@ -96,7 +96,7 @@ func TestParse_DesugarsEverySection(t *testing.T) {
 		},
 		{
 			name:  "WorkerAbsent",
-			input: "listen: :8080",
+			input: "listen: 127.0.0.1:8080",
 			want:  func(c *config.Config) bool { return c.Worker.Enabled },
 			desc:  "a running worker",
 		},
@@ -133,11 +133,52 @@ func TestParse_Defaults(t *testing.T) {
 	if diff := cmp.Diff(config.Default(), *cfg); diff != "" {
 		t.Fatalf("an empty file is not the default configuration (-want +got):\n%s", diff)
 	}
-	if cfg.Listen.Address != ":8080" {
-		t.Fatalf("default listen = %q, want :8080", cfg.Listen.Address)
+	if cfg.Listen.Address != "127.0.0.1:8080" {
+		t.Fatalf("default listen = %q, want 127.0.0.1:8080", cfg.Listen.Address)
 	}
 	if !strings.Contains(cfg.Database.URL, "55432") {
 		t.Fatalf("the default database URL does not match the Compose stack: %q", cfg.Database.URL)
+	}
+}
+
+func TestValidate_RejectsDevTokenOnPublicListener(t *testing.T) {
+	tests := []struct {
+		name    string
+		listen  string
+		wantErr bool
+	}{
+		{name: "wildcard-port", listen: ":8080", wantErr: true},
+		{name: "all-interfaces", listen: "0.0.0.0:8080", wantErr: true},
+		{name: "loopback-ipv4", listen: "127.0.0.1:8080", wantErr: false},
+		{name: "loopback-ipv6", listen: "[::1]:8080", wantErr: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Listen.Address = tc.listen
+			cfg.Auth.StaticToken = config.DevStaticToken
+			err := cfg.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("Validate accepted the dev bootstrap token on a public listener: %q", tc.listen)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("Validate rejected the loopback dev bootstrap token on %q: %v", tc.listen, err)
+			}
+		})
+	}
+}
+
+func TestParse_AllowsBarePortWithCustomToken(t *testing.T) {
+	cfg, err := config.Parse([]byte("listen: :8080\nauth: my-token\n"), "sindri.yaml")
+	if err != nil {
+		t.Fatalf("Parse accepted a bare port with the dev token: %v", err)
+	}
+	if cfg.Listen.Address != ":8080" {
+		t.Fatalf("listen address = %q, want :8080", cfg.Listen.Address)
+	}
+	if cfg.Auth.StaticToken != "my-token" {
+		t.Fatalf("auth.static_token = %q, want my-token", cfg.Auth.StaticToken)
 	}
 }
 
@@ -249,14 +290,14 @@ func TestParse_ExpandsEnvironmentReferences(t *testing.T) {
 	t.Setenv("SINDRI_BUCKET", "prod-blobs")
 
 	cfg, err := config.Parse([]byte(strings.Join([]string{
-		"listen: ${SINDRI_LISTEN:-:8080}",
+		"listen: ${SINDRI_LISTEN:-127.0.0.1:8080}",
 		"storage: s3://${SINDRI_BUCKET}/${SINDRI_PREFIX:-registry}",
 	}, "\n")), "sindri.yaml")
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if cfg.Listen.Address != ":8080" {
+	if cfg.Listen.Address != "127.0.0.1:8080" {
 		t.Fatalf("unset variable did not fall back to its default: %q", cfg.Listen.Address)
 	}
 	if cfg.Storage.Bucket != "prod-blobs" || cfg.Storage.Prefix != "registry" {
@@ -324,7 +365,7 @@ func TestLoadOrDefault(t *testing.T) {
 
 	t.Run("PicksUpSindriYAMLFromTheWorkingDirectory", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, config.DefaultPath), []byte("listen: :7777\n"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, config.DefaultPath), []byte("listen: 127.0.0.1:7777\n"), 0o600); err != nil {
 			t.Fatalf("writing the configuration: %v", err)
 		}
 		chdir(t, dir)
@@ -336,8 +377,8 @@ func TestLoadOrDefault(t *testing.T) {
 		if path != config.DefaultPath {
 			t.Fatalf("path = %q, want %q", path, config.DefaultPath)
 		}
-		if cfg.Listen.Address != ":7777" {
-			t.Fatalf("listen = %q, want :7777", cfg.Listen.Address)
+		if cfg.Listen.Address != "127.0.0.1:7777" {
+			t.Fatalf("listen = %q, want 127.0.0.1:7777", cfg.Listen.Address)
 		}
 	})
 }
@@ -371,7 +412,7 @@ func TestDatabase_RedactedHidesThePassword(t *testing.T) {
 }
 
 func TestDuration_RoundTrips(t *testing.T) {
-	cfg, err := config.Parse([]byte("listen:\n  address: :8080\n  shutdownTimeout: 45s\n"), "sindri.yaml")
+	cfg, err := config.Parse([]byte("listen:\n  address: 127.0.0.1:8080\n  shutdownTimeout: 45s\n"), "sindri.yaml")
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

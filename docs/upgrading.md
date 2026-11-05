@@ -16,6 +16,14 @@ does not change between releases.
 
 ## Upgrading
 
+### Default listen security change
+
+Sindri now defaults to a loopback-only listener (`127.0.0.1:8080`) for local development.
+If you run with the built-in development bootstrap token, the server refuses to start on a
+public address such as `:8080`, `0.0.0.0:8080`, or `[::]:8080`. This is a safety check,
+not a change in how a configured production listener works: operators who want a network
+listener must set their own static token or use a stronger identity-provider setup.
+
 1. Back up Postgres. Migrations are written to be safe, but a backup is what
    makes any mistake recoverable.
 2. Replace the binary, or change the image tag:
