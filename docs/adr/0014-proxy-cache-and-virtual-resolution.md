@@ -88,21 +88,38 @@ What an operator can do about a known-bad digest today, traced in the code:
   `repository_blobs` and `tags`, and no route reaches them.
 - **The blunt option is deleting the proxy repository** (`DELETE /api/v1/repositories/{name}`,
   `Registry.DeleteRepository`). It unlinks every placement in it, so nothing in that
-  repository serves, good images included; they are fetched again on the next pull. A
-  config-managed repository is refused: remove it from the configuration and apply with
-  `--prune`.
+  repository serves, good images included. A config-managed repository is refused: remove it
+  from the configuration and apply with `--prune`.
+- **Removal holds only while upstream no longer serves the digest, or the repository stays
+  gone.** With no placement, a pull by digest or by tag goes upstream again and places the
+  image again (`remote.Client.FetchOCIManifest`, `internal/remote/oci.go`: the local read
+  comes first, and a miss falls through to the upstream fetch and cache). This holds as
+  much after a collection has removed the bytes as before it. If upstream
+  still serves the image, an operator who wants it gone has to keep the repository deleted or
+  stop using that upstream.
 - **The bytes go only when a collection runs** (`sindri gc`, or `POST /api/v1/gc`; both need
   an administrator). Deleting the repository stops serving but leaves the bytes, because
   `DeleteRepository` never calls `cas.Delete` (ADR 19). `sindri gc --dry-run` lists what
   would go. A digest that a tag in another repository still reaches is kept, since
-  reachability is by digest.
-- **Waiting is the other path.** Retention evicts a tag after its cache entry is stale for
-  `worker.retention.proxyStaleAfter` (seven days by default). That removes the tag only; the
-  digest still serves until a collection reclaims it, and only once the blob is older than
-  `worker.gc.grace` (24 hours by default).
+  reachability is by digest. A blob is collected only when it has not been seen within
+  `worker.gc.grace` (24 hours by default), which is measured from `blobs.last_seen_at`, not
+  from when the blob was first stored.
+- **Waiting is the other path, and it can be long or never.** Retention evicts a tag once its
+  cache entry is older than the repository's TTL plus `worker.retention.proxyStaleAfter`
+  (seven days by default): `fetched_at < now() - (ttl_seconds + stale)`
+  (`ListEvictableCacheEntries`, `internal/db/queries/remote.sql`). The `dockerhub` and
+  `ghcr` presets set a one-hour TTL, so the wait there is about seven days and an hour. A
+  repository declared with `ttl_seconds` of zero, which the API accepts and the table
+  defaults to, means "fresh forever", and its hits are never evicted. Eviction removes the
+  tag only; the digest still serves until a collection reclaims it. A digest pulled with no
+  tag has no tag to remove: its cache row is deleted (`evictPlacement` in
+  `internal/registry/evict.go` skips digest references) and nothing else changes, so it was
+  never reached by a tag and is collectable once outside the grace period.
 
 A follow-up (SIN-73) should add an administrator route that evicts one digest from one proxy
-repository, so a known-bad image need not cost the whole repository.
+repository, so a known-bad image need not cost the whole repository. It has the same limit
+as removal: unless it also makes the repository refuse that digest afterwards, the next pull
+fetches the image from upstream again.
 
 **Mutable names go through the TTL; immutable ones do not.** An OCI digest
 reference, once placed, is served locally forever. An OCI tag and a PyPI
