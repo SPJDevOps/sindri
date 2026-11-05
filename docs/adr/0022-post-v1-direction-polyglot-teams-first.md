@@ -1,6 +1,7 @@
 # 22. After v1, serve polyglot app teams first
 
-- **Status:** Accepted
+- **Status:** Accepted; the Helm chart's place and the announcement's timing are amended by
+  [ADR 25](0025-what-the-announcement-requires.md)
 - **Date:** 2026-10-13
 - **Relates to:** [pitch.md](../../pitch.md) sections 1, 6, and 7,
   [ADR 6](0006-oci-and-pypi-first.md), roadmap "After v1"
