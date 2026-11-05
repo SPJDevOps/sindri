@@ -352,8 +352,14 @@ installing the decoy.
 The recorded run had 59 candidate shapes (excluding controls): 40 accepted and compared, 19
 refused and so skipped. Of the 120 client rows, 119 agree, none disagree, and one is a
 client error: yarn 1.22.22 cannot extract a tarball with 7 stray zero bytes after the end
-marker ("Unexpected end of data"). Sindri accepts that tarball. yarn reads no manifest from it,
-so it is not manifest confusion; it is tracked as SIN-59. Every agree row installed the
+marker ("Unexpected end of data"), while npm and pnpm install it. yarn reads no manifest from
+it, so it was not manifest confusion, but a package that installs with two clients and fails
+with a third is one a publisher cannot reproduce. SIN-59 decided to refuse it at publish: after
+the end marker the parser accepts only whole 512-byte blocks of zeros, and a partial block is
+a refusal. The shape moved to the refused list, and the allowlist of tolerated client errors
+is empty. This applies to hosted publishes only: `publish.go` is the one caller of the
+parser, and a proxied tarball is stored as the upstream sent it and never passes through it.
+Every agree row installed the
 name, version and description the parser read, not the decoy's.
 
 | Shape | npm | pnpm | yarn |
@@ -366,7 +372,6 @@ name, version and description the parser read, not the decoy's.
 | directories with and without a slash | agree | agree | agree |
 | manifest after other files | agree | agree | agree |
 | extra zero blocks | agree | agree | agree |
-| zero bytes short of a block | agree | agree | client error (SIN-59) |
 | manifest split over prefix and name | agree | agree | agree |
 | manifest named by a pax path over a short name | agree | agree | agree |
 | pax with every allowed key | agree | agree | agree |

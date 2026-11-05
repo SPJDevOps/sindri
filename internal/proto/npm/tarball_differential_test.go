@@ -138,9 +138,6 @@ func differentialShapes() []differentialShape {
 		{name: "extra zero blocks", build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), make([]byte, 8192)}
 		}},
-		{name: "zero bytes short of a block", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), make([]byte, 1024+7)}
-		}},
 
 		// Accepted forms where a second parser could read a different manifest.
 		{name: "manifest split over prefix and name", build: func(m shapeManifests) [][]byte {
@@ -260,6 +257,9 @@ func differentialShapes() []differentialShape {
 		{name: "refused: base-256 size", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), patchedHeader("package/z.js", 0, '0', field(124, "\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"))}
 		}},
+		{name: "refused: zero bytes short of a block", refused: true, build: func(m shapeManifests) [][]byte {
+			return [][]byte{manifest(m), make([]byte, 1024+7)}
+		}},
 		{name: "refused: one zero block before more data", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), make([]byte, 512), decoy(m, manifestEntry)}
 		}},
@@ -311,9 +311,7 @@ func (f fieldsRead) String() string {
 // allowedClientErrors names the client errors that do not fail the test, keyed by
 // shape and client. A client error is otherwise a failure: it means nothing was
 // compared.
-var allowedClientErrors = map[string]string{
-	"zero bytes short of a block|yarn": "SIN-59",
-}
+var allowedClientErrors = map[string]string{}
 
 type differentialRow struct {
 	shape, client, verdict, sindri, installed string
