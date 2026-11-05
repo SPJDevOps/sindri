@@ -814,9 +814,25 @@ platform teams and security-first buyers come later.
 [ADR 23](docs/adr/0023-scanning-as-a-queue-job-and-the-open-core-line.md) records how
 scanning works and where the open-core line sits.
 
-The order is v1.0.1, then M9 npm, M10 adoptable, M11 scan to evidence. npm comes before the
-docs site because without npm this audience cannot drop Verdaccio, and docs would sell
-something they cannot fully use yet. Nothing is announced publicly until M10.
+The order is v1.0.1, M9 npm, v1.1.1 hardening, M10 adoptable, M11a scan and gate, the public
+announcement, then M11b. npm comes before the docs site because without npm this audience
+cannot drop Verdaccio, and docs would sell something they cannot fully use yet.
+
+**The announcement** follows v1.3.0 (M11a), and [ADR 25](docs/adr/0025-what-the-announcement-requires.md)
+records why. It requires OCI, PyPI, and npm, with other formats promised for later; the docs;
+Compose and Helm deployment guides; and this claim: with scanning enabled, every hosted
+publish is scanned, and promotion is refused above a severity.
+
+| Sprint (Mon–Sun) | Milestone | Tickets | Release |
+|---|---|---|---|
+| 5, Nov 9–15 | v1.1.1 | SIN-57, 59, 60, 61, 62, 63, 64, 66, 67 | v1.1.1 |
+| 6, Nov 16–22 | M10 docs site | SIN-22, 23, 29 | |
+| 7, Nov 23–29 | M10 migration | SIN-24, 25, 26, 53 | |
+| 8, Nov 30–Dec 6 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
+| 9, Dec 7–13 | M11a scan | SIN-30, 31, 32, 36 | |
+| 10, Dec 14–20 | M11a gate | SIN-34, 38, 39, 72 | v1.3.0, then announce |
+
+Not scheduled: SIN-56, 58, and 65 from the hardening epic.
 
 ---
 
@@ -922,10 +938,43 @@ published, with binaries and `ghcr.io/spjdevops/sindri:1.1.0` for amd64 and arm6
 
 ---
 
+### v1.1.1 — Hardening
+
+**Goal.** Close what an adopter or a security reader would hit first, before M10 invites
+anyone in, and ship it as a patch release.
+
+**Scope.**
+- [ ] yarn 4 installs on its default settings, because packuments carry real publish times
+  (SIN-60). This amends ADR 24
+- [ ] A NUL in an OCI provenance annotation is a 400, not a 500 (SIN-63)
+- [ ] The delete-and-publish race on hosted files is closed, with tests that force the
+  interleaving (SIN-64)
+- [ ] The npm tarball differential check compares the whole sanitized manifest, and the
+  gate's clients are pinned (SIN-66)
+- [ ] An upstream outage does not stall every read past its TTL, and a fresh placed read does
+  not parse the document (SIN-61)
+- [ ] The S3 `PurgeUploads` flake is explained and the test is stable (SIN-67)
+- [ ] `internal/resolve` tests share one Postgres container (SIN-57)
+- [ ] Decided and recorded: stray zero bytes after a tarball's end marker (SIN-59, in ADR 24),
+  and whether an OCI proxy stops serving a digest upstream removed (SIN-62, in ADR 14)
+
+**Out of scope.** SIN-56, SIN-58, and SIN-65 stay unscheduled. SIN-53 runs with the migration
+guides in M10, once they show what a real private upstream needs.
+
+**Gate.**
+```bash
+make ci && make test-integration
+make up && make build && ./scripts/npm-gate.sh   # yarn 4 passes on default settings
+git tag v1.1.1 && git push origin v1.1.1         # the release workflow is green
+```
+
+---
+
 ### M10 — Adoptable
 
 **Goal.** A team that has never heard of Sindri can find the docs, migrate from what they
-run today, and operate it in production without reading the source.
+run today, and deploy and operate it in production, on Compose or Kubernetes, without
+reading the source.
 
 **Scope.**
 - [ ] A docs site built from `docs/` and published to GitHub Pages on every release. The
@@ -936,30 +985,39 @@ run today, and operate it in production without reading the source.
 - [ ] Migration guides from **Verdaccio, devpi, and Harbor**. The method: put a Sindri
   proxy in front of the old registry, switch clients over, and let the cache fill, then
   publish new versions to hosted. No import tool yet; build one if users ask for it
-- [ ] An operations guide: TLS behind a reverse proxy, Postgres backup and restore, the
-  blob store, metrics and suggested alerts, and sizing
+- [ ] A deployment and operations guide: Docker Compose and Helm deployments, TLS behind a
+  reverse proxy, Postgres backup and restore, the blob store, metrics and suggested alerts,
+  and sizing
+- [ ] A Helm chart, chosen by ADR for its location and publishing, running **one replica**:
+  upload sessions live in process memory, so a chunked push would break across replicas
+  (SIN-71). Moved here from Later by [ADR 25](docs/adr/0025-what-the-announcement-requires.md)
+- [ ] Private npm upstreams, if the Verdaccio guide needs them: Bearer credentials and a real
+  private registry tried end to end (SIN-53)
 - [ ] A README rewritten for the polyglot team: what it replaces, a two-minute start, and
   links into the docs site
 - [ ] Every page's commands run in CI or in a gate script, as the quickstart's already do
 
 **Out of scope.** A GitHub wiki: docs live in the repository so they are versioned and
-reviewed with the code. Video, a website beyond the docs site, and the announcement itself.
+reviewed with the code. Video, a website beyond the docs site, and the announcement itself,
+which waits for M11a. Split API and worker modes, the admission webhook, and several replicas.
 
 **Gate.**
 ```bash
 make ci && make docs            # the site builds with no broken links
 go test ./internal/config/ -run TestReference_   # the reference matches the structs
 ./scripts/m8-quickstart-gate.sh # still green
+./scripts/helm-gate.sh          # the chart installs, serves, and upgrades in kind
 # a person who has not used Sindri follows one migration guide end to end
 ```
 
 ---
 
-### M11 — Scan to evidence
+### M11a — Scan on publish and severity gate
 
-**Goal.** Publishing an image, a wheel, or an npm tarball produces an SBOM and a
-vulnerability scan with no pipeline changes, a gate can refuse promotion on severity, and
-a new CVE in something already approved for prod is flagged.
+**Goal.** With scanning enabled, publishing an image, a wheel, or an npm tarball produces an
+SBOM and a vulnerability scan with no pipeline changes, and a gate can refuse promotion on
+severity. This is what the announcement claims. M11 was split in two by
+[ADR 25](docs/adr/0025-what-the-announcement-requires.md); M11b follows it.
 
 **Scope.**
 - [ ] A `scanning:` section in the one configuration loader, off by default, with the path
@@ -967,27 +1025,24 @@ a new CVE in something already approved for prod is flagged.
 - [ ] A `scan` job kind on the queue table. A hosted publish enqueues it, and the worker runs
   Trivy and attaches a CycloneDX `sbom` and a `scan` result as evidence on the subject.
   Nothing new bypasses `cas`: evidence documents are written through the existing path
-- [ ] A daily re-scan of every subject currently approved for any stage. A newly found
-  vulnerability appears in the API, the UI, and a metric
 - [ ] A second gate rule kind, `{"scan": {"max_severity": "high"}}`, with short-form sugar
   and both golden tests covering it. The decoder still rejects unknown rules
-- [ ] The UI shows each artifact's vulnerabilities by severity
 - [ ] A release image variant that includes Trivy; the default image and the binary stay
   dependency-free
-- [ ] The OCI referrers API, so evidence attached by cosign or Trivy through standard OCI
-  tooling is discoverable, which also clears the 20 skipped conformance specs
+- [ ] A docs page on enabling scanning that states its limits: off by default, hosted
+  publishes only, and what each protocol's scan covers (SIN-72)
 - [ ] `pitch.md`'s open-core table updated to the line ADR 23 draws
 
-**Out of scope.** Per-CVE waivers, licence policy, org-wide rules, and compliance
-reports: the paid policy layer. Signature verification. Scanners other than Trivy.
-Notifications beyond the API, UI, and metric.
+**Out of scope.** Everything in M11b. Per-CVE waivers, licence policy, org-wide rules, and
+compliance reports: the paid policy layer. Signature verification. Scanners other than
+Trivy.
 
 **Watch out for.** A scan result is a claim about a point in time. The ledger and the
-decision endpoint must keep telling the truth about what was approved and when, and the
-re-scan must never rewrite history; it adds evidence. And "scanning a wheel" is not the
-same as scanning an image: a wheel or an npm tarball declares dependency ranges, not
-pinned versions, so a scan mostly reports on the package's own name and version.
-Decide what each protocol's scan covers in the milestone's ADR before writing the job.
+decision endpoint must keep telling the truth about what was approved and when. And
+"scanning a wheel" is not the same as scanning an image: a wheel or an npm tarball declares
+dependency ranges, not pinned versions, so a scan mostly reports on the package's own name
+and version. Decide what each protocol's scan covers in the milestone's ADR before writing
+the job, and word the announcement to match.
 
 **Gate.**
 ```bash
@@ -995,8 +1050,33 @@ make ci && make test-integration
 make up && make build && ./scripts/m11-scan-gate.sh
 # push an image with a known-vulnerable package: an sbom and a scan appear as evidence;
 # promotion to a stage gated on max_severity high is refused with the CVE named;
-# the same for a wheel and an npm tarball; a re-scan with a newer database flags an
-# approved artifact without changing the ledger
+# the same for a wheel and an npm tarball
+```
+
+---
+
+### M11b — Re-scan, vulnerability UI, and referrers
+
+**Goal.** A new CVE in something already approved for prod is flagged, each artifact's
+vulnerabilities show in the UI, and evidence attached through standard OCI tooling is
+discoverable. Released as v1.4.0, after the announcement.
+
+**Scope.**
+- [ ] A daily re-scan of every subject currently approved for any stage. A newly found
+  vulnerability appears in the API, the UI, and a metric (SIN-33)
+- [ ] The UI shows each artifact's vulnerabilities by severity (SIN-35)
+- [ ] The OCI referrers API, so evidence attached by cosign or Trivy through standard OCI
+  tooling is discoverable, which also clears the 20 skipped conformance specs (SIN-37)
+
+**Out of scope.** Notifications beyond the API, UI, and metric.
+
+**Watch out for.** The re-scan must never rewrite history; it adds evidence.
+
+**Gate.**
+```bash
+make ci && make test-integration
+make up && make build && ./scripts/m11-scan-gate.sh
+# a re-scan with a newer database flags an approved artifact without changing the ledger
 ./scripts/oci-conformance.sh   # referrers specs no longer skipped
 ```
 
@@ -1006,9 +1086,10 @@ make up && make build && ./scripts/m11-scan-gate.sh
 
 Kept here so the work continues rather than restarts. Roughly in order:
 
-- **Kubernetes.** A Helm chart for Sindri, the split `--api-only` and `--worker-only`
+- **Kubernetes.** Several replicas (SIN-71), the split `--api-only` and `--worker-only`
   modes (the queue table is the prerequisite), and the admission webhook calling the
-  decision endpoint. That webhook is the clearest demonstration of the whole thesis.
+  decision endpoint. That webhook is the clearest demonstration of the whole thesis. The
+  Helm chart itself moved to M10.
 - **More protocols.** Each is a new adapter on the shared core, plus a small additive
   migration for its protocol and subject kind, as npm needed (ADR 24). Order by what the
   first adopters ask for.
