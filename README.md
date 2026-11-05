@@ -76,7 +76,9 @@ Deliberately deferred, so nothing is silently missing. The reasons are in
 ## Quickstart
 
 With nothing but Docker, [docs/quickstart.md](docs/quickstart.md) runs Sindri, Postgres,
-and a development identity provider from one Compose file:
+and a development identity provider from one Compose file. The commands below need only
+Docker; the quickstart document also publishes an npm package, a step that needs Node.js
+and is skipped without it:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/SPJDevOps/sindri/main/deploy/quickstart/compose.yaml

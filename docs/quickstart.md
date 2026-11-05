@@ -1,8 +1,9 @@
 # Quickstart
 
 A registry with a web UI on one machine, in about two minutes, with nothing
-installed but Docker. You push an image, publish and install an npm package,
-sign in, and look at them.
+installed but Docker for the image steps. You push an image, sign in, and look at
+it. The npm steps also publish and install a package, and those need Node.js and
+npm on your machine; without them the script skips the npm steps and says so.
 
 This setup is for trying Sindri out. Its identity provider signs in anyone who
 opens a browser on this machine, as an administrator. For a real deployment,
@@ -147,17 +148,22 @@ docker tag alpine:3.20 localhost:8080/demo/app:1.0
 docker push localhost:8080/demo/app:1.0
 
 # Publish an npm package to the hosted repository `js`, then install it from
-# another directory. The token is keyed to the repository's own path.
-mkdir js-demo js-app
-cat > js-demo/package.json <<'EOF'
+# another directory. This needs npm; without it, these steps are skipped.
+# The token is keyed to the repository's own path.
+if command -v npm >/dev/null 2>&1; then
+  mkdir js-demo js-app
+  cat > js-demo/package.json <<'EOF'
 { "name": "@demo/hello", "version": "1.0.0", "main": "index.js", "license": "MIT" }
 EOF
-echo "module.exports = 'hello from sindri';" > js-demo/index.js
-for dir in js-demo js-app; do
-  printf 'registry=http://localhost:8080/npm/js/\n//localhost:8080/npm/js/:_authToken=%s\n' "$SINDRI_TOKEN" > "$dir/.npmrc"
-done
-(cd js-demo && npm publish --access public)
-(cd js-app && npm install @demo/hello)
+  echo "module.exports = 'hello from sindri';" > js-demo/index.js
+  for dir in js-demo js-app; do
+    printf 'registry=http://localhost:8080/npm/js/\n//localhost:8080/npm/js/:_authToken=%s\n' "$SINDRI_TOKEN" > "$dir/.npmrc"
+  done
+  (cd js-demo && npm publish --access public)
+  (cd js-app && npm install @demo/hello)
+else
+  echo "npm is not installed: skipping the npm steps"
+fi
 
 open http://localhost:8080/ui/
 ```
@@ -165,7 +171,7 @@ open http://localhost:8080/ui/
 
 `SINDRI_TOKEN` is the bootstrap administrator credential: `docker login` uses
 it as the password, and the `.npmrc` files carry it as npm's auth token. The
-npm commands need Node.js and npm on your machine, which is the one thing
+npm steps run only if `npm` is on your `PATH`, so Node.js and npm are the one thing
 here that is not Docker. On Linux, use `xdg-open` instead of `open`, or paste the
 URL into a browser.
 

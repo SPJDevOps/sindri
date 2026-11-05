@@ -219,13 +219,16 @@ a prefix, such as `hosted/org/internal-py`.
 |---|---|---|
 | `preset` | A preset name, as above. | none |
 | `url` | The upstream's URL. Needed when there is no preset. | the preset's |
-| `ttl` | How long a cached answer is fresh. | the preset's, `1h` for every preset |
-| `negativeTtl` | How long "not found" is remembered. | the preset's, `5m` for every preset |
+| `ttl` | How long a cached answer is fresh. `0` never expires, so the cache is never refreshed and Sindri never notices upstream removing a file. Always set it for an explicit `url`. | the preset's, `1h` for every preset; `0` for an explicit `url` |
+| `negativeTtl` | How long "not found" is remembered. `0` means it is not cached. | the preset's, `5m` for every preset; `0` for an explicit `url` |
 | `credentials` | A key of the top-level `credentials:` map. | none |
 
 Precedence, lowest first: the preset, then `defaults.proxy`, then what the repository
-writes. A mapping with an explicit `url` and no `ttl` or `negativeTtl` gets no value
-from the loader.
+writes. A mapping with an explicit `url` and no `ttl` or `negativeTtl` leaves both at
+`0`. An unset `ttl` of `0` never expires: a cached hit is always fresh and never
+revalidated, so that proxy never refreshes its cache, and since SIN-54 never notices
+upstream removing a file, because a refresh is what flags it. An unset `negativeTtl` of
+`0` means "not found" is not cached. Always set `ttl` for an explicit `url`.
 
 The presets expand to these URLs: `pypi` is `https://pypi.org/simple`, `dockerhub` is
 `https://registry-1.docker.io`, `ghcr` is `https://ghcr.io`, and `npm` is
@@ -270,8 +273,8 @@ organisation repository. A namespaced repository's full name is `namespace/name`
 | `spec.type` | `hosted`, `proxy`, or `virtual`. Required. |
 | `spec.protocol` | `oci`, `pypi`, or `npm`. Required. |
 | `spec.upstream.url` | Proxy only. The upstream URL. |
-| `spec.upstream.ttl` | Proxy only. Fresh time. |
-| `spec.upstream.negativeTtl` | Proxy only. How long "not found" is remembered. |
+| `spec.upstream.ttl` | Proxy only. Fresh time. Unset is `0`, which never expires and never refreshes the cache, so always set it. |
+| `spec.upstream.negativeTtl` | Proxy only. How long "not found" is remembered. Unset is `0`: not cached. |
 | `spec.upstream.credentials` | Proxy only. A key of the server's `credentials:` map. |
 | `spec.members[].ref` | Virtual only. `<type>/<name>`, for example `hosted/internal-js`; `org/<name>` or `<team>/<name>` reaches across a namespace. |
 | `spec.access.read` | Groups that may read, or `authenticated`. |
