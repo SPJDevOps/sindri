@@ -101,7 +101,7 @@ What an operator can do about a known-bad digest today, traced in the code:
   digest still serves until a collection reclaims it, and only once the blob is older than
   `worker.gc.grace` (24 hours by default).
 
-A follow-up should add an administrator route that evicts one digest from one proxy
+A follow-up (SIN-73) should add an administrator route that evicts one digest from one proxy
 repository, so a known-bad image need not cost the whole repository.
 
 **Mutable names go through the TTL; immutable ones do not.** An OCI digest
