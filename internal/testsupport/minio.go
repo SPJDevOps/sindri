@@ -34,6 +34,8 @@ type MinIO struct {
 	Bucket   string
 	Username string
 	Password string
+
+	container testcontainers.Container
 }
 
 // StartMinIO starts MinIO, creates a bucket, and stops the container when the
@@ -60,8 +62,18 @@ func StartMinIO(t *testing.T) MinIO {
 				"MINIO_ROOT_USER":     user,
 				"MINIO_ROOT_PASSWORD": password,
 			}),
+			// The Bitnami entrypoint starts a throwaway MinIO to configure it,
+			// then stops it and starts the real one about five seconds later.
+			// The health endpoint answers on the throwaway instance, so waiting
+			// on it alone hands the test a server that is about to be killed:
+			// in-flight requests fail with 499 ClientDisconnected or a broken
+			// pipe, and uploads created in the window can vanish (SIN-67). The
+			// setup script's last line is printed after the throwaway stops.
 			testcontainers.WithWaitStrategy(
-				wait.ForHTTP("/minio/health/live").WithPort(minioPort),
+				wait.ForAll(
+					wait.ForLog("MinIO setup finished!"),
+					wait.ForHTTP("/minio/health/live").WithPort(minioPort),
+				),
 			),
 		)
 	})
@@ -80,8 +92,11 @@ func StartMinIO(t *testing.T) MinIO {
 		Bucket:   bucket,
 		Username: user,
 		Password: password,
+
+		container: container,
 	}
 	createBucket(t, m)
+	m.traceServer(t, container.GetContainerID())
 
 	return m
 }

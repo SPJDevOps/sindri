@@ -4,7 +4,11 @@ package testsupport
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -83,4 +87,37 @@ func (m MinIO) LogUploads(t *testing.T) {
 		}
 		t.Logf("  key %s initiated %s", aws.ToString(u.Key), initiated)
 	}
+}
+
+// traceServer, when SINDRI_MINIO_TRACE_DIR is set, records MinIO's own view of
+// every request (mc admin trace, run inside the container) to a file in that
+// directory, and its container log on failure. It is off by default.
+func (m MinIO) traceServer(t *testing.T, containerID string) {
+	t.Helper()
+	dir := os.Getenv("SINDRI_MINIO_TRACE_DIR")
+	if dir == "" {
+		return
+	}
+	out, err := os.Create(filepath.Join(dir, fmt.Sprintf("trace-%s.log", containerID[:12])))
+	if err != nil {
+		t.Logf("trace file: %v", err)
+		return
+	}
+	script := fmt.Sprintf("mc alias set l http://localhost:9000 %s %s >/dev/null && exec mc admin trace l --verbose --all", m.Username, m.Password)
+	cmd := exec.Command("docker", "exec", containerID, "sh", "-c", script)
+	cmd.Stdout = out
+	cmd.Stderr = out
+	if err := cmd.Start(); err != nil {
+		t.Logf("starting trace: %v", err)
+		return
+	}
+	t.Cleanup(func() {
+		if t.Failed() {
+			logs, _ := exec.Command("docker", "logs", containerID).CombinedOutput()
+			_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("container-%s.log", containerID[:12])), logs, 0o600)
+			t.Logf("MinIO trace kept: %s", out.Name())
+		}
+		_ = cmd.Process.Kill()
+		_ = out.Close()
+	})
 }
