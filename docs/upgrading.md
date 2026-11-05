@@ -110,6 +110,13 @@ Read these before upgrading a server that other people depend on.
   read on every request and an entry's age counts from when it was fetched, so an old
   entry is stale at once and the next read refreshes it. This is from reading the code,
   not a run of an upgraded instance.
+  That remedy covers config-managed repositories only. The API cannot change the `ttl` of
+  a repository it created (it can create and delete, not update), so the way out for an
+  API-created proxy is to delete it and create it again with a non-zero `ttl`, which
+  needs an admin and is refused for a repository that has promotion events. Raising `ttl`
+  from 0 also makes the repository's old entries, and the cached files they justified,
+  evictable once they are older than `ttl` plus the stale allowance
+  (`worker.retention.proxyStaleAfter`), where at `ttl: 0` nothing was ever evicted.
   See [ADR 24](adr/0024-npm-packument-and-dist-tags.md).
 - **A proxy backs off for 30 seconds after its upstream stops answering.** Since 1.1.0 a
   placed npm or PyPI file read past the `ttl` contacts upstream before it serves, so a
