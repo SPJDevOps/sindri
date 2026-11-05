@@ -558,6 +558,15 @@ func (f *evictFixture) raceDeleteAndPublish(repo, pkg, normalized, version, file
 		publishErr = publish()
 	}()
 	f.waitBlockedOr(2, published)
+	// The publish must still be waiting on the delete. If it already finished,
+	// nothing held it back and the test would pass without the lock it guards.
+	select {
+	case <-published:
+		release()
+		wg.Wait()
+		f.t.Fatalf("the publish finished (err %v) while the delete was uncommitted: nothing held it back", publishErr)
+	default:
+	}
 
 	release()
 	wg.Wait()
