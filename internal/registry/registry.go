@@ -292,7 +292,9 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	}
 	// Package first, then versions and files: the order DeleteFile and the npm
 	// dist-tag paths take, so none of them can wait on each other in a cycle.
-	// Holding it also queues this publish behind a delete in flight, so the
+	// GetOrCreatePackage's upsert already row-locks an existing package; this
+	// lock makes the order explicit and also covers a package just created.
+	// Holding it queues this publish behind a delete in flight, so the
 	// tombstone checks below see that delete's committed work (SIN-64).
 	if retiresNames(repo) {
 		if _, err := q.LockPackage(ctx, pkg.ID); err != nil {
@@ -568,9 +570,12 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 	// dist-tag paths use (SIN-64). A concurrent publish then waits here and
 	// finds this delete's tombstone committed. Re-resolving is unnecessary: the
 	// delete below reports a file another delete already removed as not found.
+	// Only a repository that keeps tombstones takes the lock here. An npm proxy
+	// keeps its earlier order, file then package, which is the order
+	// evictGoneFiles takes; moving it first would pair the two the other way.
 	npm := model.Protocol(repoRow.Protocol) == model.ProtocolNPM
 	retires := retiresNames(repoRow)
-	if npm || retires {
+	if retires {
 		if _, err := q.LockPackage(ctx, pkgRow.ID); err != nil {
 			return fmt.Errorf("locking package %s: %w", pkg, err)
 		}
@@ -593,6 +598,11 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 	// with it before the row goes. The history outlives the version (ADR 24).
 	var strandedTags []string
 	if npm {
+		if !retires {
+			if _, err := q.LockPackage(ctx, pkgRow.ID); err != nil {
+				return fmt.Errorf("locking package %s: %w", pkg, err)
+			}
+		}
 		strandedTags, err = q.ListDistTagsForVersion(ctx, versionID)
 		if err != nil {
 			return fmt.Errorf("listing dist-tags of version %s: %w", version, err)
