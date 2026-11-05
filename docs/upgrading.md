@@ -60,7 +60,16 @@ Read these before upgrading a server that other people depend on.
   upstream no longer lists a cached file, reads answer 404 straight away,
   directly and through a virtual repository, lockfile installs included. The
   file serves again if upstream lists it again. Its row is removed after
-  `worker.retention.proxyStaleAfter`, 7 days by default.
+  `worker.retention.proxyStaleAfter`, 7 days by default. A placed file read past its
+  cache TTL now waits for the upstream's answer before it serves, so an upstream that
+  accepts connections and never answers can hold each such read for the upstream timeout,
+  30 seconds by default.
+  This covers npm and PyPI. On OCI, a digest manifest and its layer blobs keep serving
+  from placement after upstream drops them, so an image pulled upstream as malicious keeps
+  serving by digest until its tag is evicted and the collector reclaims it. A whole-package
+  404 moves a virtual repository's walk on, so with `[private-proxy, npm]` a package removed
+  from the private upstream can resolve from the public proxy; only a hosted claim protects
+  a private name.
 - **A malformed provenance header is a 400.** A provenance header with invalid
   UTF-8 or a NUL byte is rejected.
 - **npm is new.** An npm repository needs `publicUrl`, and a configuration that
@@ -73,6 +82,12 @@ Every migration stays backward compatible for one release, so the previous
 binary runs against the newer schema. To roll back one release, start the
 previous binary or image. It finds no migrations to apply, leaves the newer
 schema in place, and serves. A rollback does not need a database restore.
+
+Rolling back from 1.1 to 1.0.x needs the configuration file changed first. The 1.0.x
+binary does not know `publicUrl` or `protocol: npm`, so it refuses to start on a file that
+has either. Remove `publicUrl` and the npm repositories before starting it. While rolled
+back, files an upstream dropped serve again and deleted names are no longer enforced as
+taken.
 
 Rolling back further than one release is not supported without restoring the
 backup taken before the upgrade.

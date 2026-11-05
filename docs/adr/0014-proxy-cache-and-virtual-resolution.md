@@ -58,6 +58,20 @@ tell an anonymous refusal for a name that does not exist from one for a private 
 ghcr.io proxy without credentials reads both as a miss. The credentialed ghcr.io case was not
 verified live (no credential was available).
 
+Verified live on 2026-11-05 against Docker Hub and ghcr.io, at the head of the M9 gate branch
+(`m9-gate-v1.1.0`), through a real `sindri serve` with anonymous `dockerhub` and `ghcr`
+preset proxies and the virtual repositories `[dockerhub, ghcr]` and `[ghcr, dockerhub]`.
+Manifest GETs with the bootstrap token gave the same result in both orders: `library/alpine`
+answered 200, an unknown name (`no-such-org-zz/no-such-image-zz`) answered 404, and
+`dexidp/dex:v2.46.1`, which exists only on ghcr, answered 200. Only the credentialed ghcr.io
+case remains unverified.
+
+**A dropped upstream file is not enforced on OCI (SIN-54).** The 404-at-once rule for files
+upstream drops covers npm and PyPI. An OCI manifest or layer fetched by digest keeps serving
+from placement after upstream removes it, since the caller names the hash and the bytes
+cannot change. An image pulled upstream as malicious therefore keeps serving by digest until
+its tag is evicted and the collector reclaims it.
+
 **Mutable names go through the TTL; immutable ones do not.** An OCI digest
 reference, once placed, is served locally forever. An OCI tag and a PyPI
 project index are mutable upstream, so they are served locally only while

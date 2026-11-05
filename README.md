@@ -318,7 +318,11 @@ Worth knowing before you point real work at it:
   so is publishing a version you deleted, even with identical bytes. Bump the version.
 - **Files upstream drops disappear.** Once npmjs stops listing a file, a proxy answers 404
   for it at once, in a lockfile install too. It serves again if npmjs relists it, and the
-  row is removed after `worker.retention.proxyStaleAfter`.
+  row is removed after `worker.retention.proxyStaleAfter`. OCI is outside this: a digest
+  manifest and its layer blobs keep serving from placement after upstream drops them. A
+  whole-package 404 moves a virtual repository's walk on, so with `[private-proxy, npm]` a
+  package removed from the private upstream can resolve from the public proxy; only a hosted
+  claim protects a private name.
 - **An upstream that refuses Sindri's credential is a 502**, not a 404, and fails a
   virtual repository's walk; a cached copy still serves. See
   [upgrading](docs/upgrading.md).
