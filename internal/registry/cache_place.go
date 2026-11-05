@@ -193,3 +193,15 @@ func (r *Registry) ReadBlobBytes(ctx context.Context, digest model.Digest) ([]by
 	}
 	return body, nil
 }
+
+// ProxyFileGone reports whether a refresh flagged a cached file of the package as
+// gone upstream (SIN-54). A flagged file is invisible to every read, so this is
+// how a caller tells a file upstream dropped from one never fetched. normalized
+// is the package name as NormalizeName spells it for the repository's protocol.
+func (r *Registry) ProxyFileGone(ctx context.Context, repo, normalized, filename string) (bool, error) {
+	gone, err := r.q.ProxyFileGone(ctx, db.ProxyFileGoneParams{Name: repo, NormalizedName: normalized, Filename: filename})
+	if err != nil {
+		return false, fmt.Errorf("checking whether %s/%s/%s is gone upstream: %w", repo, normalized, filename, err)
+	}
+	return gone, nil
+}

@@ -698,6 +698,17 @@ func (u *goneUpstream) answer(status int) {
 	u.status = status
 }
 
+// dropConnections makes the document request end without any response, which
+// the client sees as a failed connection: the upstream not answering at all.
+func (u *goneUpstream) dropConnections() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.status = dropConnection
+}
+
+// dropConnection is a status value no server sends, meaning "cut the connection".
+const dropConnection = -1
+
 func (u *goneUpstream) garble() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -738,6 +749,8 @@ func goneProtocols() []goneProtocol {
 					defer u.mu.Unlock()
 					if r.URL.Path == "/demo" {
 						switch {
+						case u.status == dropConnection:
+							panic(http.ErrAbortHandler)
 						case u.status != 0:
 							w.WriteHeader(u.status)
 						case u.junk:
@@ -775,6 +788,8 @@ func goneProtocols() []goneProtocol {
 					defer u.mu.Unlock()
 					if r.URL.Path == "/simple/demo/" {
 						switch {
+						case u.status == dropConnection:
+							panic(http.ErrAbortHandler)
 						case u.status != 0:
 							w.WriteHeader(u.status)
 						case u.junk:
@@ -817,11 +832,11 @@ type goneEnv struct {
 
 // newGoneEnv serves demo 1.0.0 and 2.0.0 through proxy "up" and virtual "all",
 // reads both files so they are placed, and returns with the cache still fresh.
-func newGoneEnv(t *testing.T, p goneProtocol) *goneEnv {
+func newGoneEnv(t *testing.T, p goneProtocol, opts ...envOption) *goneEnv {
 	t.Helper()
 	up := &goneUpstream{versions: []string{"1.0.0", "2.0.0"}}
 	var env *testEnv
-	env = newEnv(t, p.handler(up, func() string { return env.upstream.URL }))
+	env = newEnv(t, p.handler(up, func() string { return env.upstream.URL }), opts...)
 	env.createProxyAt(t, "up", p.protocol, env.upstream.URL+upstreamBase(p), "")
 	env.createVirtualOf(t, "all", p.protocol, "up")
 	e := &goneEnv{testEnv: env, p: p, up: up}

@@ -116,7 +116,7 @@ func inspectManifest(r io.Reader) (json.RawMessage, error) {
 //     holding a few known keys, and no links
 //   - names with one spelling: no dot, dot-dot, or empty segment, no backslash, and
 //     no segment with a colon or ending in a dot or a space
-//   - two zero blocks at the end, then only zero bytes
+//   - two zero blocks at the end, then only whole zero blocks
 func scanManifest(r io.Reader, maxUnpacked int64) (json.RawMessage, error) {
 	// A bufio.Reader is an io.ByteReader, so gzip reads no further than its
 	// member and what follows can be checked.
@@ -265,16 +265,22 @@ func readEndOfArchive(in io.Reader, block []byte) error {
 	if !isZero(block) {
 		return refuse("tarball has one zero block where its end-of-archive marker needs two")
 	}
+	// Whole blocks only: yarn 1 cannot extract a tarball that ends in a partial
+	// block, while npm and pnpm install it (SIN-59).
 	for {
-		n, err := in.Read(block)
-		if !isZero(block[:n]) {
-			return refuse("tarball has data after the end of its archive")
-		}
-		if errors.Is(err, io.EOF) {
+		n, err := io.ReadFull(in, block)
+		switch {
+		case errors.Is(err, io.EOF):
 			return nil
-		}
-		if err != nil {
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			if !isZero(block[:n]) {
+				return refuse("tarball has data after the end of its archive")
+			}
+			return refuse("tarball has a partial block after its end-of-archive marker")
+		case err != nil:
 			return streamError(err)
+		case !isZero(block):
+			return refuse("tarball has data after the end of its archive")
 		}
 	}
 }

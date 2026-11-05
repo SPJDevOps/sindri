@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"time"
 
 	"golang.org/x/mod/semver"
 
@@ -24,7 +25,13 @@ type packument struct {
 	Name     string                    `json:"name"`
 	DistTags map[string]string         `json:"dist-tags"`
 	Versions map[string]map[string]any `json:"versions"`
+	// Time maps each version to when it was published, plus created and
+	// modified. It holds only real times and is absent when there are none.
+	Time map[string]string `json:"time,omitempty"`
 }
+
+// npmTimeFormat is how npm writes a time: UTC with milliseconds.
+const npmTimeFormat = "2006-01-02T15:04:05.000Z"
 
 type packumentDist struct {
 	Tarball   string `json:"tarball"`
@@ -73,13 +80,48 @@ func (h *handler) derivePackument(repo string, pkg registry.NPMPackage) (packume
 		}
 		doc.Versions[v.Version] = entry
 	}
+	doc.Time = publishTimes(pkg.Versions)
 	return doc, nil
+}
+
+// publishTimes is the time map of a hosted package. A version with no recorded
+// time is left out rather than given a guess, and created and modified are the
+// earliest and latest of the real ones, so none at all gives no map.
+func publishTimes(versions []registry.NPMVersion) map[string]string {
+	var out map[string]string
+	var first, last time.Time
+	for _, v := range versions {
+		if v.PublishedAt.IsZero() {
+			continue
+		}
+		at := v.PublishedAt.UTC()
+		if out == nil {
+			out = make(map[string]string, len(versions)+2)
+			first, last = at, at
+		}
+		out[v.Version] = at.Format(npmTimeFormat)
+		if at.Before(first) {
+			first = at
+		}
+		if at.After(last) {
+			last = at
+		}
+	}
+	if out != nil {
+		out["created"] = first.Format(npmTimeFormat)
+		out["modified"] = last.Format(npmTimeFormat)
+	}
+	return out
 }
 
 // rewriteUpstream is upstream's document with each dist.tarball pointing at the
 // repository the client asked for, so installs stay behind auth.Authorize and
 // placement (ADR 24). Everything else goes through as raw JSON, which is what
-// keeps dist.signatures and any field Sindri has never heard of intact.
+// keeps dist.signatures and any field Sindri has never heard of intact, with two
+// exceptions. The top-level _attachments (a publish payload: it can carry
+// tarball bytes as base64) and each version's _resolved (the URL of upstream's
+// tarball) are write-side or install-side fields that a reader has no use for,
+// and _resolved would point a client past Sindri to upstream.
 func (h *handler) rewriteUpstream(repo string, up remote.NPMPackument) (map[string]json.RawMessage, error) {
 	versions := make(map[string]map[string]json.RawMessage, len(up.Versions))
 	for version, v := range up.Versions {
@@ -88,12 +130,14 @@ func (h *handler) rewriteUpstream(repo string, up remote.NPMPackument) (map[stri
 			return nil, err
 		}
 		entry := maps.Clone(v.Fields)
+		delete(entry, "_resolved")
 		if err := setJSON(entry, "dist", dist); err != nil {
 			return nil, err
 		}
 		versions[version] = entry
 	}
 	doc := maps.Clone(up.Fields)
+	delete(doc, "_attachments")
 	if err := setJSON(doc, "versions", versions); err != nil {
 		return nil, err
 	}

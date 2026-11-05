@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -91,6 +92,20 @@ func (r *Resolver) GetNPMTarball(ctx context.Context, repoName, name, filename s
 		// A hosted member holds the file or lacks the package: if the name were
 		// claimed there, the walk would have asked no other member.
 		if m.Type == model.RepoTypeProxy {
+			// A fresh document, or a backoff, settles a placed or flagged file
+			// without loading the packument (SIN-61). The member has the package
+			// then, so the answer is its own.
+			if f, reader, done, err := r.remote.ServePlacedNPMTarball(ctx, m.Name, name, filename); done {
+				switch {
+				case err == nil:
+					file, rc = f, reader
+					return true, nil
+				case errors.Is(err, remote.ErrFileGone):
+					return true, nil
+				default:
+					return false, err
+				}
+			}
 			if _, err := r.npmMemberPackument(ctx, m, name); err != nil {
 				if absent(err) {
 					return false, nil

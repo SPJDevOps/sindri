@@ -101,18 +101,44 @@ asked for, including a virtual one, so installs stay behind `auth.Authorize` and
 Upstream `dist.integrity` is verified when a tarball is cached. (Amended in M9 when the
 proxy was built; the paragraphs below say what "as upstream sent them" came to.)
 
-**A proxy asks for abbreviated documents only, and that costs three things.** Sindri sends
-`Accept: application/vnd.npm.install-v1+json`, so the cached document has no `time` map and
-no readme. `npm view` therefore shows less. `npm install --before` and pnpm's release-age
-setting both read `time`, so neither works through a proxy. Fetching full documents would
-fix that and make every cached packument several times larger; this is not done. It narrows
-"as upstream sent them" to "as upstream sent the abbreviated form".
+**A proxy asks for the whole document.** (Amended in v1.1.1, SIN-60; M9 asked for the
+abbreviated form and rejected this.) Sindri sends `Accept: application/json`, so the cached
+document carries upstream's `time` map and readme, and passes `time` through unchanged.
+`npm install --before`, pnpm's release-age setting and yarn 4's `npmMinimalAgeGate` all read
+`time`, and yarn 4 refuses every version it cannot date. The abbreviated form made all
+three fail through a proxy. The costs, accepted:
 
-Hosted packuments have no `time` map either. Yarn 4.18 defaults `npmMinimalAgeGate` to 1440
-minutes and needs `time`, so with its defaults it refuses every hosted and proxied version
-("quarantined", YN0016). The documented workaround is `npmMinimalAgeGate: 0` in
-`.yarnrc.yml`, which turns off yarn's age safeguard for that project. SIN-60 tracks serving
-real publish times.
+- **Upstream traffic.** Every refresh downloads the whole document. Measured on
+  2026-11-05, full against abbreviated: `typescript` 15.9 MB against 8.8 MB, `@types/node`
+  11.2 MB against 2.3 MB, `next` 31.5 MB against 25.7 MB, `aws-sdk` 10.6 MB against 3.8 MB.
+- **Parsing.** Each refresh parses the larger document, and each read rewrites it. The
+  largest real document is well inside the 128 MiB read bound.
+- **Larger responses to clients.** A client of a proxy gets the whole document, since one
+  document answers every `Accept` type. Clients of a hosted repository are unaffected.
+- **Cache size.** The cached document is that much larger, per package, under the
+  existing `ttl`.
+
+It restores "as upstream sent them" to its plain meaning, with two exceptions the rewrite
+drops: the top-level `_attachments`, which is a publish payload and can carry tarball bytes,
+and each version's `_resolved`, which names upstream's own tarball URL and would point a
+client past Sindri. A document upstream sends with no `time` stays without one: Sindri
+never invents a timestamp.
+
+**Hosted packuments carry `time`, and only real times.** `versions.published_at` is set by
+the column default when a version is inserted, and migration 00011 adds it as nullable.
+Each version's entry is that time, written as npm does, in UTC with milliseconds.
+`created` and `modified` are the earliest and latest of those. A version with no time is
+left out of the map, and a package with none has no `time` at all. There is no backfill:
+versions published before 1.1.1 have no recorded time, the migration leaves them NULL, and
+a guess would be an invented timestamp. Yarn 4.18.1 quarantines a version missing from
+`time` (tested: a row set back to NULL gets YN0016 again), so such a version does not
+install on defaults. An operator who wants one to install can pre-approve its scope in yarn
+(below), or set its `published_at` by hand, which is the operator asserting a time Sindri
+never observed. A proxy cache entry gets `time` only when it next refreshes, after its
+`ttl`; with `ttl: 0`, which is fresh forever, it never does until a non-zero `ttl` is set.
+
+Yarn 4's `npmPreapprovedPackages` exempts an internal scope from the gate. The gate
+verifies `["@acme/*"]` on yarn 4.18.1; a bare scope name (`"@acme"`) does not match.
 
 **The packument is parsed with exact keys and its `name` must match the request.** Go's
 struct decoding is case-insensitive and would read a `DIST` that npm ignores. A version that
@@ -217,8 +243,57 @@ read disagreed about one file. The accepted cost is that a pinned install breaks
 left-pad style unpublish, until upstream lists the file again. A second cost: a placed file
 read past its TTL now waits on upstream before it serves, because the refresh decides whether
 the file is still listed. With an upstream that accepts connections and never answers, each
-such read can wait the whole upstream timeout (30 seconds by default) before the placed copy
-serves, and nothing backs off between reads. A backoff has its own ticket.
+such read could wait the whole upstream timeout (30 seconds by default) before the placed copy
+serves. SIN-61 added the backoff below.
+
+**A failed refresh backs the repository off for 30 seconds, and a fresh read parses nothing**
+(SIN-61, v1.1.1). The state is a map from repository to the time it may be asked again, held
+on `remote.Client`, in memory and per process, so a restart or another replica costs one
+wait. The 30 seconds is a constant, not configuration. Only the upstream not answering at
+all starts it: a connection that fails, or a timeout before the response headers arrive,
+marked by an error of its own (`errUpstreamDown`). A 5xx is not a trigger. It is an answer,
+and a fast one: it fails that one request as `ErrUpstreamUnavailable` with a stale copy still
+served, exactly as before SIN-61, and costs the next request no more than a healthy
+upstream would. The backoff exists to stop reads queueing on a wait, and a 5xx has none. A
+timeout counts only while waiting for headers. A body that stalls after a 200 is read
+outside the request, fails that read, and starts nothing. `ErrUpstreamUnavailable` is not
+the trigger either, because a 5xx, an oversize or unparsable document and a 401/403 wrap it
+too, and one package's bad document must not turn away every other package of the
+repository.
+
+`noteRefresh` is the whole rule. A successful refresh or a 404 clears the backoff, since
+either shows the upstream answering. 401, 403, 429, a 5xx and a document that does not
+parse change nothing: they start no backoff and end none. 429 is not a trigger because it is
+a fast answer that says the caller is going too fast, not that the upstream is down, and
+a fixed 30 second window would be a guess at a `Retry-After` Sindri does not read; it also
+says nothing about the other packages of the repository.
+
+During a backoff, a stale document is read from the cache without contacting upstream,
+a placed file serves through the placement check as always (I2), a file already flagged as
+gone is a 404, and any other read fails at once as `ErrUpstreamUnavailable`, so a client
+sees the 502 a real outage gives and a virtual walk fails as before, without asking the next
+member. On a fresh document the
+`upstream_gone_at` flag is authoritative, since the refresh that stored the document set it.
+A placed file, or a flagged one, is then answered from the `files` rows alone and the
+document is not loaded or parsed. A file that is neither placed nor flagged still needs the
+document, to find where it lives. Both hold through a virtual repository.
+
+Two costs. A file upstream removes while the repository is backing off keeps serving until a
+read after the window ends refreshes the document. That is no sooner than 30 seconds after
+the last failed refresh, and later if no read comes, since nothing refreshes in the
+background. The read that refreshes restarts the window if it fails too. And "only the
+first read waits" is true per window, not per concurrent read: reads already in flight when
+the first failure lands have already started their own wait, and each one's failure
+restarts the window.
+
+The estimate for a 500-package lockfile install at 16 concurrent reads against a blackholed
+upstream, every document past its TTL, is derived, not measured. Without a backoff the
+reads go in 500 / 16, about 32 rounds that each wait the 30 second timeout: roughly 16
+minutes. With it, the first 16 reads are in flight together and all fail at about 30
+seconds; the other 484 find the repository backing off and serve their placed copies at
+once, so the install takes roughly 30 seconds, or about 60 if it is still running when the
+window ends and one more read has to find out the upstream is still down. A figure that
+assumed the first read alone waits would be too low by that in-flight round.
 
 **A hosted package row survives the deletion of its last file.** The claim is the `packages`
 row, so deleting a file removes the version when emptied and keeps the package, hidden from
@@ -280,7 +355,8 @@ matches `pypi`. The roadmap's `npmjs` changes.
 `scripts/npm-tarball-differential.sh` installs each tarball shape the parser accepts from a
 local file with the npm on PATH (10.9.9 in the recorded run) and pnpm 10.34.9 and yarn 1.22.22,
 which the script fetches at those exact versions. Installs use `--ignore-scripts` in temp
-directories. The installed `package.json` is compared with what `inspectManifest` read. The
+directories. The whole installed `package.json` is compared, key by key and by exact key, with the
+sanitized manifest `inspectManifest` returned, not only its name, version and description. The
 harness is `internal/proto/npm/tarball_differential_test.go`, behind the `differential`
 build tag. Each tarball holds the real manifest and placeholder files. Shapes a client could misread
 also hold a decoy, a second `package.json` with a different name, version and description,
@@ -294,11 +370,19 @@ which document was read. The test fails if a shape's parser outcome differs from
 client errors outside a named allowlist, or if no negative control shows a client
 installing the decoy.
 
-The recorded run had 59 candidate shapes (excluding controls): 40 accepted and compared, 19
-refused and so skipped. Of the 120 client rows, 119 agree, none disagree, and one is a
-client error: yarn 1.22.22 cannot extract a tarball with 7 stray zero bytes after the end
-marker ("Unexpected end of data"). Sindri accepts that tarball. yarn reads no manifest from it,
-so it is not manifest confusion; it is tracked as SIN-59. Every agree row installed the
+The recorded run had 64 candidate shapes (excluding controls): 44 accepted and compared, 20
+refused and so skipped. Of the 132 client rows, all agree and none is a client error. One shape,
+7 stray zero bytes after the end marker, was accepted in the earlier run: yarn 1.22.22 cannot
+extract such a tarball ("Unexpected end of data") while npm and pnpm install it. yarn reads no
+manifest from it, so it was not manifest confusion, but a package that installs with two clients
+and fails with a third is one a publisher cannot reproduce. SIN-59 decided to refuse it at
+publish: after the end marker the parser accepts only whole 512-byte blocks of zeros. The shape
+is now on the refused list, and the allowlist of tolerated client errors is empty. This applies
+to hosted publishes only: `publish.go` is the one caller of the parser, and a proxied tarball is
+stored as the upstream sent it and never passes through it. Five JSON-level shapes (a repeated
+`name`, a repeated `version` and `description`, `NAME` before and after `name`, and `Version`
+and `Description` beside the lower-case keys) show that all three clients and Sindri keep the
+last value of a repeated key and treat a key that differs in case as a different key. Every agree row installed the
 name, version and description the parser read, not the decoy's.
 
 | Shape | npm | pnpm | yarn |
@@ -311,7 +395,11 @@ name, version and description the parser read, not the decoy's.
 | directories with and without a slash | agree | agree | agree |
 | manifest after other files | agree | agree | agree |
 | extra zero blocks | agree | agree | agree |
-| zero bytes short of a block | agree | agree | client error (SIN-59) |
+| duplicate name key, last wins | agree | agree | agree |
+| duplicate version and description keys | agree | agree | agree |
+| NAME key before name | agree | agree | agree |
+| NAME key after name | agree | agree | agree |
+| Version and Description keys beside the lower-case ones | agree | agree | agree |
 | manifest split over prefix and name | agree | agree | agree |
 | manifest named by a pax path over a short name | agree | agree | agree |
 | pax with every allowed key | agree | agree | agree |
@@ -389,11 +477,11 @@ filesystem: this run was on macOS, whose default filesystem folds case.
   deleted before migration 00009 are not remembered and can still be published again.
   Only hosted npm and PyPI repositories retire anything: a proxy
   and a hosted OCI-protocol repository do not.
-- A proxy cannot see `time` or the readme, so `npm install --before` and pnpm's release-age
-  setting do not work through one.
-- Neither hosted nor proxied packuments carry `time`, so yarn 4.18's default age gate fails
-  on both. Installing needs `npmMinimalAgeGate: 0`, which also disables that safeguard.
-  SIN-60 tracks real publish times; the M9 gate asserts the failure so it notices the fix.
+- Versions published before 1.1.1 have no recorded publish time and are left out of the
+  `time` map, so yarn 4 quarantines them (see above). There is no backfill.
+- The proxy downloads and caches whole upstream documents, which costs upstream traffic,
+  parsing, response size and cache size. Sindri serves upstream's `time`, so
+  `npm install --before` and release-age settings work through a proxy.
 - A proxy takes only tarballs on its own host under its base path, with no off-origin
   redirects. Registries that write `%2f` into a tarball URL, or redirect downloads to a CDN,
   get a 502 or are left out. Bearer credentials and private upstreams are SIN-53.
@@ -413,9 +501,12 @@ filesystem: this run was on macOS, whose default filesystem folds case.
   a GC root, so a dist-tag could keep a deleted version's tarball readable.
 - **Recording tag moves in `lifecycle_events`.** Its actions are approve and revoke, every
   row needs a stage, and it is keyed by digest. A tag move is none of those.
-- **Fetching full packuments from the upstream.** It would restore `time` and the readme at
-  several times the cache size for every package, and the abbreviated form is what installs
-  use.
+- **Fetching abbreviated packuments from the upstream.** This was the M9 choice, and
+  v1.1.1 reversed it: the abbreviated form has no `time`, so yarn 4 on defaults, `--before`
+  and release-age settings all failed through a proxy.
+- **Backfilling `published_at` for existing versions.** The only candidate is the migration
+  time or the first-read time, and both are made-up publish times. A client gating on age
+  would trust them.
 - **Declaring a length on a proxied tarball and aborting on a bad hash.** The length frames
   the body as complete, and net/http then computes the end of the response from it, so the
   abort cannot be told from a finished download.

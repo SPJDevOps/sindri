@@ -221,8 +221,9 @@ type Tag struct {
 }
 
 type Version struct {
-	ID         uuid.UUID   `json:"id"`
-	PackageID  uuid.UUID   `json:"package_id"`
-	Version    string      `json:"version"`
-	Deprecated pgtype.Text `json:"deprecated"`
+	ID          uuid.UUID          `json:"id"`
+	PackageID   uuid.UUID          `json:"package_id"`
+	Version     string             `json:"version"`
+	Deprecated  pgtype.Text        `json:"deprecated"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
 }

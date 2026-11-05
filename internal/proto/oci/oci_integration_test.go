@@ -38,44 +38,7 @@ const testToken = "m3-e2e-token"
 // create repos via the management API, push a blob and manifest, pull them
 // back byte-identical, and fail a cross-repo blob GET with 404 (invariant I2).
 func TestOCI_PushPullAndPlacementGate(t *testing.T) {
-	url := testsupport.StartPostgres(t)
-	opts := testsupport.DBOptions(url)
-	if err := db.Migrate(t.Context(), opts, nil); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	database, err := db.Open(t.Context(), opts)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(database.Close)
-
-	blobs := memstore.New()
-	casStore := cas.New(blobs)
-	reg := registry.New(database, casStore, "memory")
-	remoteClient := remote.New(remote.Options{Registry: reg})
-	resolver := resolve.New(reg, remoteClient)
-	authenticator := auth.NewStaticBearer(testToken)
-
-	srv, err := server.New(server.Options{
-		Address:  "127.0.0.1:0",
-		Database: database,
-		Blobs:    blobs,
-		API: api.Handler(api.Options{
-			Registry:  reg,
-			Auth:      authenticator,
-			RequestID: server.RequestIDFromContext,
-		}),
-		OCI: oci.Handler(oci.Options{
-			Resolver: resolver,
-			CAS:      casStore,
-			Auth:     auth.NewStaticBearer(testToken),
-		}),
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
-	if err != nil {
-		t.Fatalf("server.New: %v", err)
-	}
-	client := srv.Handler()
+	client := newOCIClient(t)
 
 	createRepo(t, client, "demo/app", "oci")
 	createRepo(t, client, "other/app", "oci")
@@ -204,6 +167,50 @@ func TestOCI_PushPullAndPlacementGate(t *testing.T) {
 	}
 }
 
+// newOCIClient serves the hosted OCI adapter, the management API and a real
+// Postgres behind the server's router, and returns the handler.
+func newOCIClient(t *testing.T) http.Handler {
+	t.Helper()
+	url := testsupport.StartPostgres(t)
+	opts := testsupport.DBOptions(url)
+	if err := db.Migrate(t.Context(), opts, nil); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	database, err := db.Open(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(database.Close)
+
+	blobs := memstore.New()
+	casStore := cas.New(blobs)
+	reg := registry.New(database, casStore, "memory")
+	remoteClient := remote.New(remote.Options{Registry: reg})
+	resolver := resolve.New(reg, remoteClient)
+	authenticator := auth.NewStaticBearer(testToken)
+
+	srv, err := server.New(server.Options{
+		Address:  "127.0.0.1:0",
+		Database: database,
+		Blobs:    blobs,
+		API: api.Handler(api.Options{
+			Registry:  reg,
+			Auth:      authenticator,
+			RequestID: server.RequestIDFromContext,
+		}),
+		OCI: oci.Handler(oci.Options{
+			Resolver: resolver,
+			CAS:      casStore,
+			Auth:     auth.NewStaticBearer(testToken),
+		}),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	return srv.Handler()
+}
+
 func pushBlob(t *testing.T, h http.Handler, repo string, payload []byte, digest string) {
 	t.Helper()
 	path := fmt.Sprintf("/v2/%s/blobs/uploads/?digest=%s", repo, digest)
@@ -252,4 +259,74 @@ func mustDo(t *testing.T, h http.Handler, method, path string, body []byte, cont
 func digestOf(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// TestPushManifest_InvalidProvenanceIsRefused: a NUL in a provenance annotation
+// or header is a client error in the OCI error shape, answered before anything
+// is placed. The database cannot store a NUL, so before this it surfaced as a
+// 500 at the provenance insert (SIN-63).
+func TestPushManifest_InvalidProvenanceIsRefused(t *testing.T) {
+	client := newOCIClient(t)
+	createRepo(t, client, "demo/app", "oci")
+
+	config := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
+	configDigest := digestOf(config)
+	pushBlob(t, client, "demo/app", config, configDigest)
+
+	manifestWith := func(annotations map[string]string) []byte {
+		body, err := json.Marshal(ocispec.Manifest{
+			Versioned:   specs.Versioned{SchemaVersion: 2},
+			MediaType:   ocispec.MediaTypeImageManifest,
+			Config:      ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig, Digest: digest.Digest(configDigest), Size: int64(len(config))},
+			Layers:      []ocispec.Descriptor{},
+			Annotations: annotations,
+		})
+		if err != nil {
+			t.Fatalf("marshal manifest: %v", err)
+		}
+		return body
+	}
+
+	tests := []struct {
+		name    string
+		body    []byte
+		headers map[string]string
+	}{
+		{name: "NULInSourceAnnotation", body: manifestWith(map[string]string{ocispec.AnnotationSource: "a\x00b"})},
+		{name: "NULInRevisionAnnotation", body: manifestWith(map[string]string{ocispec.AnnotationRevision: "a\x00b"})},
+		{name: "NULInSourceHeader", body: manifestWith(nil), headers: map[string]string{"X-Sindri-Source-Ref": "a\x00b"}},
+		{name: "NULInBuildHeader", body: manifestWith(nil), headers: map[string]string{"X-Sindri-Build-Ref": "a\x00b"}},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tag := fmt.Sprintf("bad%d", i)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/v2/demo/app/manifests/"+tag, bytes.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer "+testToken)
+			req.Header.Set("Content-Type", ocispec.MediaTypeImageManifest)
+			for k, v := range tc.headers {
+				req.Header[k] = []string{v}
+			}
+			rec := httptest.NewRecorder()
+			client.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("PUT manifest: %d %s, want 400", rec.Code, rec.Body)
+			}
+			var e struct {
+				Errors []struct {
+					Code string `json:"code"`
+				} `json:"errors"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil || len(e.Errors) != 1 || e.Errors[0].Code != oci.CodeManifestInvalid {
+				t.Fatalf("body = %s, want an OCI error body with code %s", rec.Body, oci.CodeManifestInvalid)
+			}
+			if got := mustDo(t, client, http.MethodGet, "/v2/demo/app/manifests/"+tag, nil, ""); got.StatusCode != http.StatusNotFound {
+				t.Fatalf("GET refused manifest: %d %s, want 404 (nothing placed)", got.StatusCode, got.Body)
+			}
+		})
+	}
+	tags := mustDo(t, client, http.MethodGet, "/v2/demo/app/tags/list", nil, "")
+	if strings.Contains(tags.Body, `"bad`) {
+		t.Fatalf("tags after refusals = %s, want none placed", tags.Body)
+	}
 }

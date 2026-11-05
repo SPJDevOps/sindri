@@ -7,6 +7,7 @@ run:
   # Postgres and real S3, so they are the last code that should go unchecked.
   build-tags:
     - integration
+    - differential
 
 linters:
   default: none

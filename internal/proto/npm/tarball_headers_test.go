@@ -394,6 +394,8 @@ func TestInspectManifest_RefusesBadEndsOfArchive(t *testing.T) {
 		{name: "partial header", raw: cat(benign, benign[:100]), reason: "end-of-archive"},
 		{name: "entry after the end marker", raw: cat(benign, endOfArchive(), rawEntry(manifestEntry, installedVariant, '0')), reason: "after the end"},
 		{name: "one byte after the end marker", raw: cat(benign, endOfArchive(), []byte{1}), reason: "after the end"},
+		{name: "zero bytes short of a block after the end marker", raw: cat(benign, endOfArchive(), make([]byte, 7)), reason: "partial block"},
+		{name: "zero bytes short of a block after extra zero blocks", raw: cat(benign, endOfArchive(), zero, make([]byte, 511)), reason: "partial block"},
 		{name: "byte far past the end marker", raw: cat(benign, endOfArchive(), make([]byte, 64<<10), []byte{1}), reason: "after the end"},
 		{name: "truncated body", raw: cat(rawHeader(manifestEntry, 2048, '0', ustarMagic), zero), reason: "end-of-archive"},
 		{name: "truncated skipped body", raw: cat(benign, rawHeader("package/z.js", 2048, '0', ustarMagic), zero), reason: "end-of-archive"},
@@ -568,7 +570,6 @@ func TestInspectManifest_AcceptsHeadersRealToolsWrite(t *testing.T) {
 		}},
 		{name: "plain second file", entries: [][]byte{benign, rawEntry("package/also-harmless.js", installedVariant, '0')}},
 		{name: "extra zero blocks", entries: [][]byte{benign, make([]byte, 8192)}},
-		{name: "zero bytes short of a block", entries: [][]byte{benign, make([]byte, 1024+7)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

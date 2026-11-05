@@ -158,6 +158,20 @@ WHERE r.name = $1
 ORDER BY v.version, f.id
 LIMIT 1;
 
+-- name: ProxyFileGone :one
+-- Whether a refresh flagged the file as gone upstream. Called only after
+-- GetFileByFilename found nothing, which hides flagged rows.
+SELECT EXISTS (
+    SELECT 1 FROM files f
+    JOIN versions v ON v.id = f.version_id
+    JOIN packages p ON p.id = v.package_id
+    JOIN repositories r ON r.id = p.repo_id
+    WHERE r.name = $1
+      AND p.normalized_name = $2
+      AND f.filename = $3
+      AND f.upstream_gone_at IS NOT NULL
+) AS gone;
+
 -- name: ListFilesByPackage :many
 SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata,
        v.version, b.size AS blob_size

@@ -178,7 +178,7 @@ fetch, stream to the client, and cache into the CAS. They carry a positive TTL f
 metadata freshness and a negative TTL so that a missing package does not hammer upstream.
 Cached bytes are indistinguishable from any other blob in storage, but their placement row
 marks them as proxied, which is what keeps invariant I4 enforceable. An npm proxy caches the
-abbreviated packument only and verifies each tarball against its `integrity` or `shasum`
+whole upstream packument, `time` included, and verifies each tarball against its `integrity` or `shasum`
 (ADR 24).
 
 **Virtual** repositories are the developer-facing view. One URL, an explicit ordered list

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -219,6 +220,7 @@ type packumentView struct {
 	Name     string                     `json:"name"`
 	DistTags map[string]string          `json:"dist-tags"`
 	Versions map[string]json.RawMessage `json:"versions"`
+	Time     map[string]string          `json:"time"`
 }
 
 type distView struct {
@@ -394,6 +396,46 @@ func TestPublish_ScopedAndUnscopedRoundTrip(t *testing.T) {
 				t.Fatalf("HEAD = %d with %d body bytes, Content-Length %q", status, len(bytesGot), header.Get("Content-Length"))
 			}
 		})
+	}
+}
+
+// A real HTTP publish is what yarn 4's minimum age gate reads back: time[version]
+// is when the registry took the version, and created and modified bracket them.
+func TestPublish_PackumentReportsThePublishTime(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	before := time.Now().UTC().Add(-time.Second)
+	f.mustPublish("timed", "1.0.0")
+	f.mustPublish("timed", "1.1.0")
+	after := time.Now().UTC().Add(time.Second)
+
+	doc := f.packument("timed")
+	parse := func(key string) time.Time {
+		t.Helper()
+		raw, ok := doc.Time[key]
+		if !ok {
+			t.Fatalf("time has no %q: %v", key, doc.Time)
+		}
+		at, err := time.Parse("2006-01-02T15:04:05.000Z", raw)
+		if err != nil {
+			t.Fatalf("time[%q] = %q: %v", key, raw, err)
+		}
+		if at.Before(before) || at.After(after) {
+			t.Fatalf("time[%q] = %s, want the moment of this test (%s to %s)", key, at, before, after)
+		}
+		return at
+	}
+	first, second := parse("1.0.0"), parse("1.1.0")
+	if second.Before(first) {
+		t.Fatalf("1.1.0 published at %s, before 1.0.0 at %s", second, first)
+	}
+	if got := parse("created"); !got.Equal(first) {
+		t.Fatalf("created = %s, want the first publish %s", got, first)
+	}
+	if got := parse("modified"); !got.Equal(second) {
+		t.Fatalf("modified = %s, want the last publish %s", got, second)
+	}
+	if len(doc.Time) != 4 {
+		t.Fatalf("time = %v, want exactly two versions, created and modified", doc.Time)
 	}
 }
 

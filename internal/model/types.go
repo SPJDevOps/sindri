@@ -168,6 +168,16 @@ type Provenance struct {
 // header and never quotes the value.
 var ErrInvalidProvenance = errors.New("invalid provenance header")
 
+// CheckProvenanceValue refuses a provenance value the database cannot store: one
+// that is not valid UTF-8 or holds a NUL. name says where the value came from (a
+// header or an annotation) and is the only thing the error quotes.
+func CheckProvenanceValue(name, value string) error {
+	if !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
+		return fmt.Errorf("%w: %s must be valid UTF-8 without NUL bytes", ErrInvalidProvenance, name)
+	}
+	return nil
+}
+
 // HeaderProvenance builds a provenance claim from request headers. get is a
 // header lookup such as http.Header.Get, taken as a function so this package
 // stays free of the HTTP layer. A value that is not valid UTF-8 or holds a NUL
@@ -180,8 +190,8 @@ func HeaderProvenance(sourceType string, get func(string) string) (Provenance, e
 		{HeaderSourceRef, sourceRef},
 		{HeaderBuildRef, buildRef},
 	} {
-		if !utf8.ValidString(h.value) || strings.ContainsRune(h.value, 0) {
-			return Provenance{}, fmt.Errorf("%w: %s must be valid UTF-8 without NUL bytes", ErrInvalidProvenance, h.name)
+		if err := CheckProvenanceValue(h.name, h.value); err != nil {
+			return Provenance{}, err
 		}
 	}
 	return Provenance{SourceType: sourceType, SourceRef: sourceRef, BuildRef: buildRef}, nil

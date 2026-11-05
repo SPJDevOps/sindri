@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -25,7 +26,10 @@ const (
 type NPMVersion struct {
 	Version    string
 	Deprecated string // empty when the version is not deprecated
-	File       PackageFile
+	// PublishedAt is when the version was published, or the zero time for a row
+	// that predates the column. Sindri never invents one (ADR 24).
+	PublishedAt time.Time
+	File        PackageFile
 }
 
 // NPMPackage is everything a packument is derived from.
@@ -120,8 +124,9 @@ func (r *Registry) GetNPMPackage(ctx context.Context, repo, name string) (NPMPac
 			meta = json.RawMessage("{}")
 		}
 		out.Versions = append(out.Versions, NPMVersion{
-			Version:    row.Version,
-			Deprecated: row.Deprecated.String,
+			Version:     row.Version,
+			Deprecated:  row.Deprecated.String,
+			PublishedAt: row.PublishedAt.Time, // zero when NULL
 			File: PackageFile{
 				ID:        row.ID.String(),
 				VersionID: row.VersionID.String(),

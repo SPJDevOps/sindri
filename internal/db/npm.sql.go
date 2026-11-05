@@ -78,7 +78,7 @@ const insertVersionExclusive = `-- name: InsertVersionExclusive :one
 INSERT INTO versions (package_id, version)
 VALUES ($1, $2)
 ON CONFLICT (package_id, version) DO NOTHING
-RETURNING id, package_id, version, deprecated
+RETURNING id, package_id, version, deprecated, published_at
 `
 
 type InsertVersionExclusiveParams struct {
@@ -95,6 +95,7 @@ func (q *Queries) InsertVersionExclusive(ctx context.Context, arg InsertVersionE
 		&i.PackageID,
 		&i.Version,
 		&i.Deprecated,
+		&i.PublishedAt,
 	)
 	return i, err
 }
@@ -157,7 +158,7 @@ func (q *Queries) ListDistTagsForVersion(ctx context.Context, versionID uuid.UUI
 }
 
 const listNPMVersions = `-- name: ListNPMVersions :many
-SELECT v.id AS version_id, v.version, v.deprecated,
+SELECT v.id AS version_id, v.version, v.deprecated, v.published_at,
        f.id, f.blob_digest, f.filename, f.media_type, f.metadata,
        b.size AS blob_size
 FROM versions v
@@ -168,15 +169,16 @@ ORDER BY v.version, f.filename
 `
 
 type ListNPMVersionsRow struct {
-	VersionID  uuid.UUID   `json:"version_id"`
-	Version    string      `json:"version"`
-	Deprecated pgtype.Text `json:"deprecated"`
-	ID         uuid.UUID   `json:"id"`
-	BlobDigest string      `json:"blob_digest"`
-	Filename   string      `json:"filename"`
-	MediaType  string      `json:"media_type"`
-	Metadata   []byte      `json:"metadata"`
-	BlobSize   int64       `json:"blob_size"`
+	VersionID   uuid.UUID          `json:"version_id"`
+	Version     string             `json:"version"`
+	Deprecated  pgtype.Text        `json:"deprecated"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+	ID          uuid.UUID          `json:"id"`
+	BlobDigest  string             `json:"blob_digest"`
+	Filename    string             `json:"filename"`
+	MediaType   string             `json:"media_type"`
+	Metadata    []byte             `json:"metadata"`
+	BlobSize    int64              `json:"blob_size"`
 }
 
 func (q *Queries) ListNPMVersions(ctx context.Context, packageID uuid.UUID) ([]ListNPMVersionsRow, error) {
@@ -192,6 +194,7 @@ func (q *Queries) ListNPMVersions(ctx context.Context, packageID uuid.UUID) ([]L
 			&i.VersionID,
 			&i.Version,
 			&i.Deprecated,
+			&i.PublishedAt,
 			&i.ID,
 			&i.BlobDigest,
 			&i.Filename,

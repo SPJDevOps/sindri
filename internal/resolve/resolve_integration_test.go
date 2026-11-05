@@ -69,16 +69,7 @@ func newEnv(t *testing.T, upstream http.HandlerFunc, options ...envOption) *test
 	}))
 	t.Cleanup(up.Close)
 
-	url := testsupport.StartPostgres(t)
-	opts := testsupport.DBOptions(url)
-	if err := db.Migrate(t.Context(), opts, nil); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	database, err := db.Open(t.Context(), opts)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(database.Close)
+	database := testsupport.MigratedDB(t)
 
 	blobs := memstore.New()
 	casStore := cas.New(blobs)

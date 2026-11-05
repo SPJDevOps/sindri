@@ -395,7 +395,7 @@ INSERT INTO versions (package_id, version)
 VALUES ($1, $2)
 ON CONFLICT (package_id, version) DO UPDATE
 SET version = EXCLUDED.version
-RETURNING id, package_id, version, deprecated
+RETURNING id, package_id, version, deprecated, published_at
 `
 
 type GetOrCreateVersionParams struct {
@@ -411,6 +411,7 @@ func (q *Queries) GetOrCreateVersion(ctx context.Context, arg GetOrCreateVersion
 		&i.PackageID,
 		&i.Version,
 		&i.Deprecated,
+		&i.PublishedAt,
 	)
 	return i, err
 }
@@ -507,7 +508,7 @@ func (q *Queries) GetTag(ctx context.Context, arg GetTagParams) (Tag, error) {
 }
 
 const getVersion = `-- name: GetVersion :one
-SELECT id, package_id, version, deprecated FROM versions
+SELECT id, package_id, version, deprecated, published_at FROM versions
 WHERE package_id = $1 AND version = $2
 `
 
@@ -524,6 +525,7 @@ func (q *Queries) GetVersion(ctx context.Context, arg GetVersionParams) (Version
 		&i.PackageID,
 		&i.Version,
 		&i.Deprecated,
+		&i.PublishedAt,
 	)
 	return i, err
 }
@@ -855,7 +857,7 @@ func (q *Queries) ListTags(ctx context.Context, arg ListTagsParams) ([]string, e
 }
 
 const listVersionsByPackage = `-- name: ListVersionsByPackage :many
-SELECT id, package_id, version, deprecated FROM versions
+SELECT id, package_id, version, deprecated, published_at FROM versions
 WHERE package_id = $1
   AND ($2::text IS NULL OR version > $2)
 ORDER BY version
@@ -882,6 +884,7 @@ func (q *Queries) ListVersionsByPackage(ctx context.Context, arg ListVersionsByP
 			&i.PackageID,
 			&i.Version,
 			&i.Deprecated,
+			&i.PublishedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -891,6 +894,34 @@ func (q *Queries) ListVersionsByPackage(ctx context.Context, arg ListVersionsByP
 		return nil, err
 	}
 	return items, nil
+}
+
+const proxyFileGone = `-- name: ProxyFileGone :one
+SELECT EXISTS (
+    SELECT 1 FROM files f
+    JOIN versions v ON v.id = f.version_id
+    JOIN packages p ON p.id = v.package_id
+    JOIN repositories r ON r.id = p.repo_id
+    WHERE r.name = $1
+      AND p.normalized_name = $2
+      AND f.filename = $3
+      AND f.upstream_gone_at IS NOT NULL
+) AS gone
+`
+
+type ProxyFileGoneParams struct {
+	Name           string `json:"name"`
+	NormalizedName string `json:"normalized_name"`
+	Filename       string `json:"filename"`
+}
+
+// Whether a refresh flagged the file as gone upstream. Called only after
+// GetFileByFilename found nothing, which hides flagged rows.
+func (q *Queries) ProxyFileGone(ctx context.Context, arg ProxyFileGoneParams) (bool, error) {
+	row := q.db.QueryRow(ctx, proxyFileGone, arg.Name, arg.NormalizedName, arg.Filename)
+	var gone bool
+	err := row.Scan(&gone)
+	return gone, err
 }
 
 const reserveBlob = `-- name: ReserveBlob :exec

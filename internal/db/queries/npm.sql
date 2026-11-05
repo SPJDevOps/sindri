@@ -6,7 +6,7 @@ ON CONFLICT (package_id, version) DO NOTHING
 RETURNING *;
 
 -- name: ListNPMVersions :many
-SELECT v.id AS version_id, v.version, v.deprecated,
+SELECT v.id AS version_id, v.version, v.deprecated, v.published_at,
        f.id, f.blob_digest, f.filename, f.media_type, f.metadata,
        b.size AS blob_size
 FROM versions v

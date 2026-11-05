@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/registry"
@@ -19,9 +18,9 @@ import (
 )
 
 const (
-	// npmPackumentAccept asks for the abbreviated packument, which holds all an
-	// install needs; a registry that ignores it answers with the full document.
-	npmPackumentAccept = "application/vnd.npm.install-v1+json, application/json;q=0.8"
+	// npmPackumentAccept asks for the full document. The abbreviated one has no
+	// time map, and yarn 4 will not install a version it cannot date (ADR 24).
+	npmPackumentAccept = "application/json"
 	// npmTarballMediaType matches what a hosted publish stores.
 	npmTarballMediaType = "application/octet-stream"
 	// maxNPMFilenameLength allows npm's longest name and node-semver's longest
@@ -205,13 +204,16 @@ func (c *Client) FetchNPMPackument(ctx context.Context, repoName, name string) (
 	key := registry.CacheKeyNPMPackument(name)
 	entry, entryErr := c.reg.GetCacheEntry(ctx, repoName, key)
 
-	switch EvaluateCache(entry, time.Now().UTC(), remote.TTL, remote.NegativeTTL, entryErr) {
+	switch EvaluateCache(entry, c.now().UTC(), remote.TTL, remote.NegativeTTL, entryErr) {
 	case CacheFreshHit:
 		return c.loadNPMPackument(ctx, name, entry)
 	case CacheFreshNegative:
 		return NPMPackument{}, ErrNegativeCached
 	case CacheStaleHit:
-		doc, err := c.fetchAndCacheNPMPackument(ctx, repoName, name, remote)
+		if c.inBackoff(repoName) {
+			return c.loadNPMPackument(ctx, name, entry)
+		}
+		doc, err := c.refreshNPMPackument(ctx, repoName, name, remote)
 		if err == nil {
 			return doc, nil
 		}
@@ -220,8 +222,19 @@ func (c *Client) FetchNPMPackument(ctx context.Context, repoName, name string) (
 		}
 		return c.loadNPMPackument(ctx, name, entry)
 	default:
-		return c.fetchAndCacheNPMPackument(ctx, repoName, name, remote)
+		if c.inBackoff(repoName) {
+			return NPMPackument{}, errBackingOff(repoName)
+		}
+		return c.refreshNPMPackument(ctx, repoName, name, remote)
 	}
+}
+
+// refreshNPMPackument fetches and caches a document, and tells the backoff what
+// that showed about the upstream.
+func (c *Client) refreshNPMPackument(ctx context.Context, repoName, name string, remote registry.Remote) (NPMPackument, error) {
+	doc, err := c.fetchAndCacheNPMPackument(ctx, repoName, name, remote)
+	c.noteRefresh(repoName, err)
+	return doc, err
 }
 
 func (c *Client) loadNPMPackument(ctx context.Context, name string, entry registry.CacheEntry) (NPMPackument, error) {
@@ -439,8 +452,10 @@ func comparableHost(u *url.URL) string {
 	}
 }
 
-// FetchNPMTarball returns a tarball from a proxy repository. The package
-// document is fetched first, so a stale entry refreshes and a file upstream has
+// FetchNPMTarball returns a tarball from a proxy repository. While the document
+// is fresh, or the upstream is backing off, local state settles a placed or gone
+// file without the document (SIN-61). Otherwise the package document is fetched
+// first, so a stale entry refreshes and a file upstream has
 // dropped stops serving (SIN-54): a 404 or a cached miss is a 404 here. Only an
 // unavailable upstream falls back to a placed copy, which is served through the
 // placement check without contacting upstream for the file. Otherwise the file
@@ -454,6 +469,9 @@ func comparableHost(u *url.URL) string {
 // out chunked, and the abort lands before the terminating chunk. upstream's own
 // Content-Length is still enforced, by cachingBody.
 func (c *Client) FetchNPMTarball(ctx context.Context, repoName, name, filename string) (registry.PackageFile, io.ReadCloser, error) {
+	if file, rc, done, err := c.ServePlacedNPMTarball(ctx, repoName, name, filename); done {
+		return file, rc, err
+	}
 	doc, docErr := c.FetchNPMPackument(ctx, repoName, name)
 	if docErr == nil || errors.Is(docErr, ErrUpstreamUnavailable) {
 		if file, rc, err := c.reg.GetNPMTarball(ctx, repoName, name, filename); err == nil {

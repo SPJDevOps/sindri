@@ -138,8 +138,24 @@ func differentialShapes() []differentialShape {
 		{name: "extra zero blocks", build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), make([]byte, 8192)}
 		}},
-		{name: "zero bytes short of a block", build: func(m shapeManifests) [][]byte {
-			return [][]byte{manifest(m), make([]byte, 1024+7)}
+
+		// JSON-level shapes: the same bytes as two documents. Each is the real manifest
+		// with a repeated or case-varied key added; m.real starts with its name key. A client and Sindri must
+		// agree on which value a repeated key keeps, and on a key that differs only in case.
+		{name: "duplicate name key, last wins", build: func(m shapeManifests) [][]byte {
+			return [][]byte{rawEntry(manifestEntry, `{"name":"decoy-first",`+m.real[1:], '0')}
+		}},
+		{name: "duplicate version and description keys", build: func(m shapeManifests) [][]byte {
+			return [][]byte{rawEntry(manifestEntry, `{"version":"0.0.1","description":"FIRST",`+m.real[1:], '0')}
+		}},
+		{name: "NAME key before name", build: func(m shapeManifests) [][]byte {
+			return [][]byte{rawEntry(manifestEntry, `{"NAME":"decoy-upper",`+m.real[1:], '0')}
+		}},
+		{name: "NAME key after name", build: func(m shapeManifests) [][]byte {
+			return [][]byte{rawEntry(manifestEntry, strings.TrimSuffix(m.real, "}")+`,"NAME":"decoy-upper"}`, '0')}
+		}},
+		{name: "Version and Description keys beside the lower-case ones", build: func(m shapeManifests) [][]byte {
+			return [][]byte{rawEntry(manifestEntry, strings.Replace(m.real, "{", `{"Version":"7.7.7","Description":"UPPER",`, 1), '0')}
 		}},
 
 		// Accepted forms where a second parser could read a different manifest.
@@ -260,6 +276,9 @@ func differentialShapes() []differentialShape {
 		{name: "refused: base-256 size", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), patchedHeader("package/z.js", 0, '0', field(124, "\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"))}
 		}},
+		{name: "refused: zero bytes short of a block", refused: true, build: func(m shapeManifests) [][]byte {
+			return [][]byte{manifest(m), make([]byte, 1024+7)}
+		}},
 		{name: "refused: one zero block before more data", refused: true, build: func(m shapeManifests) [][]byte {
 			return [][]byte{manifest(m), make([]byte, 512), decoy(m, manifestEntry)}
 		}},
@@ -298,22 +317,44 @@ func differentialShapes() []differentialShape {
 	)
 }
 
+// fieldsRead is the identifying part of a package.json, read by exact key. It is not
+// decoded into a struct, because encoding/json matches a struct field's name without
+// regard to case, so a NAME beside name would be read as name and a difference in how
+// the two sides treat that key would go unseen.
 type fieldsRead struct {
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	Description string `json:"description"`
+	Name        string
+	Version     string
+	Description string
 }
 
 func (f fieldsRead) String() string {
 	return fmt.Sprintf("%s@%s %s", f.Name, f.Version, f.Description)
 }
 
+// parseManifest reads a package.json the way a JavaScript JSON.parse would: a
+// repeated key keeps its last value and a key is matched exactly. It returns the
+// identifying fields and the whole document, re-encoded with sorted keys so two
+// documents with the same content compare equal.
+func parseManifest(raw []byte) (fieldsRead, string, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return fieldsRead{}, "", err
+	}
+	str := func(key string) string {
+		v, _ := doc[key].(string)
+		return v
+	}
+	canonical, err := json.Marshal(doc)
+	if err != nil {
+		return fieldsRead{}, "", err
+	}
+	return fieldsRead{Name: str("name"), Version: str("version"), Description: str("description")}, string(canonical), nil
+}
+
 // allowedClientErrors names the client errors that do not fail the test, keyed by
 // shape and client. A client error is otherwise a failure: it means nothing was
 // compared.
-var allowedClientErrors = map[string]string{
-	"zero bytes short of a block|yarn": "SIN-59",
-}
+var allowedClientErrors = map[string]string{}
 
 type differentialRow struct {
 	shape, client, verdict, sindri, installed string
@@ -343,7 +384,7 @@ func TestDifferential_TarballParserAgreesWithInstallers(t *testing.T) {
 			t.Run(shape.name, func(t *testing.T) {
 				t.Parallel()
 				m := shapeManifests{
-					real:      fmt.Sprintf(`{"name":"diff-shape-%02d","version":"1.%d.0","description":"READ-BY-SINDRI"}`, i, i),
+					real:      fmt.Sprintf(`{"name":"diff-shape-%02d","version":"1.%d.0","description":"READ-BY-SINDRI","keywords":["k"],"config":{"port":8080}}`, i, i),
 					decoy:     fmt.Sprintf(`{"name":"decoy-shape-%02d","version":"9.9.%d","description":"INSTALLED-VARIANT"}`, i, i),
 					decoyName: fmt.Sprintf("decoy-shape-%02d", i),
 				}
@@ -375,13 +416,13 @@ func TestDifferential_TarballParserAgreesWithInstallers(t *testing.T) {
 
 				// A control is compared with the first manifest, which is what the
 				// parser would have kept had it not refused.
-				var sindri fieldsRead
 				source := read
 				if err != nil {
 					source = json.RawMessage(m.real)
 				}
-				if err := json.Unmarshal(source, &sindri); err != nil {
-					t.Fatalf("parser result is not JSON: %v", err)
+				sindri, sindriDoc, perr := parseManifest(source)
+				if perr != nil {
+					t.Fatalf("parser result is not JSON: %v", perr)
 				}
 
 				shapeDir := filepath.Join(workDir, fmt.Sprintf("shape-%02d", i))
@@ -394,7 +435,7 @@ func TestDifferential_TarballParserAgreesWithInstallers(t *testing.T) {
 				}
 
 				for _, c := range differentialClients {
-					row := runClient(t, c, paths[c.name], shapeDir, tarballPath, sindri, shape.name, m.decoyName)
+					row := runClient(t, c, paths[c.name], shapeDir, tarballPath, sindri, sindriDoc, shape.name, m.decoyName)
 					row.shape = shape.name
 					rows[i] = append(rows[i], row)
 				}
@@ -431,10 +472,10 @@ func TestDifferential_TarballParserAgreesWithInstallers(t *testing.T) {
 		compared++
 		for _, row := range rows[i] {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", row.shape, row.client, row.verdict, row.sindri, row.installed)
-			switch {
-			case row.verdict == "agree":
+			switch row.verdict {
+			case "agree":
 				agreed++
-			case row.verdict == "DISAGREE":
+			case "DISAGREE":
 				disagreed++
 				t.Errorf("%s: %s installed a different package.json from the one the parser read", row.shape, row.client)
 			default:
@@ -473,7 +514,7 @@ func TestDifferential_TarballParserAgreesWithInstallers(t *testing.T) {
 // runClient installs the tarball with one client in a fresh project and reports
 // what landed in node_modules. A package the client placed under the decoy's name
 // is a disagreement, not a missing install.
-func runClient(t *testing.T, c differentialClient, bin, shapeDir, tarballPath string, sindri fieldsRead, shapeName, decoyName string) differentialRow {
+func runClient(t *testing.T, c differentialClient, bin, shapeDir, tarballPath string, sindri fieldsRead, sindriDoc, shapeName, decoyName string) differentialRow {
 	t.Helper()
 	row := differentialRow{client: c.name, sindri: sindri.String()}
 
@@ -511,17 +552,16 @@ func runClient(t *testing.T, c differentialClient, bin, shapeDir, tarballPath st
 		return clientError(fmt.Sprintf("%v: %s", err, output))
 	}
 
-	read := func(name string) (fieldsRead, error) {
-		var f fieldsRead
+	read := func(name string) (fieldsRead, string, error) {
 		raw, err := os.ReadFile(filepath.Join(project, "node_modules", filepath.FromSlash(name), "package.json"))
 		if err != nil {
-			return f, err
+			return fieldsRead{}, "", err
 		}
-		return f, json.Unmarshal(raw, &f)
+		return parseManifest(raw)
 	}
-	installed, err := read(sindri.Name)
+	installed, installedDoc, err := read(sindri.Name)
 	if errors.Is(err, os.ErrNotExist) && decoyName != "" {
-		if decoy, derr := read(decoyName); derr == nil {
+		if decoy, _, derr := read(decoyName); derr == nil {
 			row.verdict, row.installed = "DISAGREE", decoy.String()
 			return row
 		}
@@ -531,8 +571,13 @@ func runClient(t *testing.T, c differentialClient, bin, shapeDir, tarballPath st
 	}
 	row.installed = installed.String()
 	row.verdict = "agree"
-	if installed != sindri {
+	// The whole document is compared, not only the fields above: a client that kept,
+	// dropped or changed any other field read a different manifest.
+	if installed != sindri || installedDoc != sindriDoc {
 		row.verdict = "DISAGREE"
+		if installed == sindri {
+			row.installed += " (other fields differ: " + oneLine(installedDoc) + " vs parser " + oneLine(sindriDoc) + ")"
+		}
 	}
 	return row
 }

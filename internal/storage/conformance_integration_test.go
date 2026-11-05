@@ -58,7 +58,9 @@ func TestBlobStore_Conformance(t *testing.T) {
 			newStore: func(t *testing.T) storage.BlobStore { return openS3(t, prefixFor(t)) },
 			reopen: func(t *testing.T) (storage.BlobStore, func() storage.BlobStore) {
 				prefix := prefixFor(t)
-				return openS3(t, prefix), func() storage.BlobStore { return openS3(t, prefix) }
+				return openS3(t, prefix), func() storage.BlobStore {
+					return openS3(t, prefix)
+				}
 			},
 		},
 	}

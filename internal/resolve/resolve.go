@@ -399,6 +399,14 @@ func (r *Resolver) GetPyPIFile(ctx context.Context, repoName, project, filename 
 var errNotListed = fmt.Errorf("%w: the index does not list the file", ErrNotFound)
 
 func (r *Resolver) getProxyPyPIFile(ctx context.Context, repoName, project, filename string) (registry.PackageFile, io.ReadCloser, error) {
+	// A fresh index, or an upstream that just failed to answer, settles a placed
+	// or flagged file from local state without loading the index (SIN-61).
+	if file, rc, done, err := r.remote.ServePlacedPyPIFile(ctx, repoName, project, filename); done {
+		if errors.Is(err, remote.ErrFileGone) {
+			return registry.PackageFile{}, nil, errNotListed
+		}
+		return file, rc, err
+	}
 	// The index first, so a stale entry refreshes and a file upstream dropped
 	// is flagged before the placed copy is looked up (SIN-54). Only an
 	// unavailable upstream lets a placed copy serve without it.
