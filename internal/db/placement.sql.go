@@ -896,6 +896,34 @@ func (q *Queries) ListVersionsByPackage(ctx context.Context, arg ListVersionsByP
 	return items, nil
 }
 
+const proxyFileGone = `-- name: ProxyFileGone :one
+SELECT EXISTS (
+    SELECT 1 FROM files f
+    JOIN versions v ON v.id = f.version_id
+    JOIN packages p ON p.id = v.package_id
+    JOIN repositories r ON r.id = p.repo_id
+    WHERE r.name = $1
+      AND p.normalized_name = $2
+      AND f.filename = $3
+      AND f.upstream_gone_at IS NOT NULL
+) AS gone
+`
+
+type ProxyFileGoneParams struct {
+	Name           string `json:"name"`
+	NormalizedName string `json:"normalized_name"`
+	Filename       string `json:"filename"`
+}
+
+// Whether a refresh flagged the file as gone upstream. Called only after
+// GetFileByFilename found nothing, which hides flagged rows.
+func (q *Queries) ProxyFileGone(ctx context.Context, arg ProxyFileGoneParams) (bool, error) {
+	row := q.db.QueryRow(ctx, proxyFileGone, arg.Name, arg.NormalizedName, arg.Filename)
+	var gone bool
+	err := row.Scan(&gone)
+	return gone, err
+}
+
 const reserveBlob = `-- name: ReserveBlob :exec
 INSERT INTO blobs (digest, size, storage_backend)
 VALUES ($1, $2, $3)

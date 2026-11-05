@@ -239,8 +239,41 @@ read disagreed about one file. The accepted cost is that a pinned install breaks
 left-pad style unpublish, until upstream lists the file again. A second cost: a placed file
 read past its TTL now waits on upstream before it serves, because the refresh decides whether
 the file is still listed. With an upstream that accepts connections and never answers, each
-such read can wait the whole upstream timeout (30 seconds by default) before the placed copy
-serves, and nothing backs off between reads. A backoff has its own ticket.
+such read could wait the whole upstream timeout (30 seconds by default) before the placed copy
+serves. SIN-61 added the backoff below.
+
+**A failed refresh backs the repository off for 30 seconds, and a fresh read parses nothing**
+(SIN-61, v1.1.1). The state is a map from repository to the time it may be asked again, held
+on `remote.Client`, in memory and per process, so a restart or another replica costs one
+wait. The 30 seconds is a constant, not configuration. Only the upstream not answering starts
+it: a connection failure, a timeout, or a 5xx, marked by an error of its own
+(`errUpstreamDown`). `ErrUpstreamUnavailable` is not the trigger, because an oversize or
+unparsable document and a 401/403 wrap it too, and one package's bad document must not turn
+away every other package of the repository. Any answer from upstream, a 404 included, clears
+the backoff. During it, a stale document is read from the cache without contacting upstream,
+a placed file serves through the placement check as always (I2), a file already flagged as
+gone is a 404, and any other read fails at once as `ErrUpstreamUnavailable`, so a client
+sees the 502 a real outage gives and a virtual walk fails as before. On a fresh document the
+`upstream_gone_at` flag is authoritative, since the refresh that stored the document set it.
+A placed file, or a flagged one, is then answered from the `files` rows alone and the
+document is not loaded or parsed. A file that is neither placed nor flagged still needs the
+document, to find where it lives. Both hold through a virtual repository.
+
+Two costs. A file upstream removes while the repository is backing off keeps serving until
+the window ends and the next read refreshes: at most 30 seconds after the last failed
+refresh, plus the one read that does the refreshing. If that refresh also fails, the window
+restarts. And "only the first read waits" is true per window, not per concurrent read: reads
+already in flight when the first failure lands have already started their own wait, and each
+one's failure restarts the window.
+
+The estimate for a 500-package lockfile install at 16 concurrent reads against a blackholed
+upstream, every document past its TTL, is derived, not measured. Without a backoff the
+reads go in 500 / 16, about 32 rounds that each wait the 30 second timeout: roughly 16
+minutes. With it, the first 16 reads are in flight together and all fail at about 30
+seconds; the other 484 find the repository backing off and serve their placed copies at
+once, so the install takes roughly 30 seconds, or about 60 if it is still running when the
+window ends and one more read has to find out the upstream is still down. A figure that
+assumed the first read alone waits would be too low by that in-flight round.
 
 **A hosted package row survives the deletion of its last file.** The claim is the `packages`
 row, so deleting a file removes the version when emptied and keeps the package, hidden from

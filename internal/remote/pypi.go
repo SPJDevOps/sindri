@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/registry"
@@ -51,7 +50,7 @@ func (c *Client) FetchPyPIIndex(ctx context.Context, repoName, project string) (
 		return PyPIIndex{}, err
 	}
 	key := registry.CacheKeyPyPIIndex(project)
-	now := time.Now().UTC()
+	now := c.now().UTC()
 	entry, entryErr := c.reg.GetCacheEntry(ctx, repoName, key)
 	decision := EvaluateCache(entry, now, remote.TTL, remote.NegativeTTL, entryErr)
 
@@ -61,7 +60,10 @@ func (c *Client) FetchPyPIIndex(ctx context.Context, repoName, project string) (
 	case CacheFreshNegative:
 		return PyPIIndex{}, ErrNegativeCached
 	case CacheStaleHit:
-		idx, err := c.fetchAndCachePyPIIndex(ctx, repoName, project, remote)
+		if c.inBackoff(repoName) {
+			return c.loadPyPIIndex(ctx, entry)
+		}
+		idx, err := c.refreshPyPIIndex(ctx, repoName, project, remote)
 		if err == nil {
 			return idx, nil
 		}
@@ -71,8 +73,19 @@ func (c *Client) FetchPyPIIndex(ctx context.Context, repoName, project string) (
 		// Upstream down: serve stale.
 		return c.loadPyPIIndex(ctx, entry)
 	default:
-		return c.fetchAndCachePyPIIndex(ctx, repoName, project, remote)
+		if c.inBackoff(repoName) {
+			return PyPIIndex{}, errBackingOff(repoName)
+		}
+		return c.refreshPyPIIndex(ctx, repoName, project, remote)
 	}
+}
+
+// refreshPyPIIndex fetches and caches an index, and tells the backoff what that
+// showed about the upstream.
+func (c *Client) refreshPyPIIndex(ctx context.Context, repoName, project string, remote registry.Remote) (PyPIIndex, error) {
+	idx, err := c.fetchAndCachePyPIIndex(ctx, repoName, project, remote)
+	c.noteRefresh(repoName, err)
+	return idx, err
 }
 
 func (c *Client) loadPyPIIndex(ctx context.Context, entry registry.CacheEntry) (PyPIIndex, error) {

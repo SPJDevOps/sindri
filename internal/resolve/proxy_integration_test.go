@@ -817,11 +817,11 @@ type goneEnv struct {
 
 // newGoneEnv serves demo 1.0.0 and 2.0.0 through proxy "up" and virtual "all",
 // reads both files so they are placed, and returns with the cache still fresh.
-func newGoneEnv(t *testing.T, p goneProtocol) *goneEnv {
+func newGoneEnv(t *testing.T, p goneProtocol, opts ...envOption) *goneEnv {
 	t.Helper()
 	up := &goneUpstream{versions: []string{"1.0.0", "2.0.0"}}
 	var env *testEnv
-	env = newEnv(t, p.handler(up, func() string { return env.upstream.URL }))
+	env = newEnv(t, p.handler(up, func() string { return env.upstream.URL }), opts...)
 	env.createProxyAt(t, "up", p.protocol, env.upstream.URL+upstreamBase(p), "")
 	env.createVirtualOf(t, "all", p.protocol, "up")
 	e := &goneEnv{testEnv: env, p: p, up: up}

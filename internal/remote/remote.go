@@ -99,6 +99,14 @@ type Client struct {
 	log     *slog.Logger
 	// maxPackument bounds an npm packument read into memory.
 	maxPackument int64
+	// now is the clock the cache TTL and the refresh backoff read.
+	now func() time.Time
+
+	// backoffUntil holds, per repository, when a refresh may next be tried after
+	// the upstream failed to answer one. In memory and per process, on purpose:
+	// losing it costs one wait, and nothing has to agree across replicas.
+	backoffMu    sync.Mutex
+	backoffUntil map[string]time.Time
 
 	// tokenCache holds bearer tokens obtained from WWW-Authenticate
 	// challenges, keyed by registry host and image, since a token's scope is
@@ -125,6 +133,9 @@ type Options struct {
 	// MaxNPMPackumentBytes bounds an npm packument read into memory; zero means
 	// 128 MiB. Tests lower it to stay cheap.
 	MaxNPMPackumentBytes int64
+	// Now is the clock for cache freshness and the refresh backoff; nil means
+	// time.Now. Tests inject one to cross a backoff window without waiting.
+	Now func() time.Time
 }
 
 // New returns a Client.
@@ -147,6 +158,9 @@ func New(opts Options) *Client {
 	if opts.MaxNPMPackumentBytes <= 0 {
 		opts.MaxNPMPackumentBytes = maxNPMPackumentBytes
 	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
 	followed, pinned := redirectClients(opts.HTTPClient)
 	return &Client{
 		reg:          opts.Registry,
@@ -156,6 +170,8 @@ func New(opts Options) *Client {
 		timeout:      opts.Timeout,
 		log:          opts.Logger,
 		maxPackument: opts.MaxNPMPackumentBytes,
+		now:          opts.Now,
+		backoffUntil: make(map[string]time.Time),
 		tokenCache:   make(map[string]cachedToken),
 	}
 }
@@ -257,7 +273,7 @@ func (c *Client) do(ctx context.Context, ur upstreamRequest) (*http.Response, er
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, err)
+			return nil, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, down(err))
 		}
 		return resp, nil
 	}
@@ -308,6 +324,9 @@ func classify(status int) error {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return deniedError(fmt.Sprintf("status %d", status))
 	default:
+		if status >= 500 {
+			return fmt.Errorf("%w: %w: status %d", ErrUpstreamUnavailable, errUpstreamDown, status)
+		}
 		return fmt.Errorf("%w: status %d", ErrUpstreamUnavailable, status)
 	}
 }

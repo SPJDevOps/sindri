@@ -91,6 +91,15 @@ Read these before upgrading a server that other people depend on.
   client gets, and the cache all grow. A cached document gains `time` only when it
   refreshes, after the repository's `ttl`.
   See [ADR 24](adr/0024-npm-packument-and-dist-tags.md).
+- **A proxy backs off for 30 seconds after its upstream stops answering.** Since 1.1.0 a
+  placed npm or PyPI file read past the `ttl` contacts upstream before it serves, so a
+  blackholed upstream made each such read wait the full timeout. After one refresh fails
+  by connection error, timeout, or 5xx, that repository's documents are not refreshed for
+  30 seconds: placed files serve from the cache and anything else answers 502 at once. A
+  file upstream removes during that window keeps serving until it ends. The window is not
+  configurable, and is held in memory per process. An oversize or unparsable document and a
+  401/403 do not start it. A placed file whose document is still fresh is also served
+  without loading the document.
 
 ## Rolling back
 

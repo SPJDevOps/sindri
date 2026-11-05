@@ -433,7 +433,8 @@ func TestProxyNPM_PackumentRefreshesAfterTTL(t *testing.T) {
 }
 
 func TestProxyNPM_NotFoundIsCachedAndAnOutageIsNot(t *testing.T) {
-	e := newNPMProxy(t, npmProxyConfig{ttl: 3600, negativeTTL: 300})
+	clock := newTestClock()
+	e := newNPMProxy(t, npmProxyConfig{ttl: 3600, negativeTTL: 300, options: []envOption{withClock(clock)}})
 
 	e.wantStatus(t, "absent", http.StatusNotFound)
 	e.wantStatus(t, "absent", http.StatusNotFound)
@@ -448,6 +449,7 @@ func TestProxyNPM_NotFoundIsCachedAndAnOutageIsNot(t *testing.T) {
 	}
 	e.stub.setStatus(0)
 	e.serveOneVersion(t, "/flaky", "flaky")
+	clock.advance(31 * time.Second) // past the backoff the outage started (SIN-61)
 	e.mustGet(t, "flaky")
 }
 
