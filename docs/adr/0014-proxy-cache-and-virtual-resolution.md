@@ -72,6 +72,38 @@ from placement after upstream removes it, since the caller names the hash and th
 cannot change. An image pulled upstream as malicious therefore keeps serving by digest until
 its tag is evicted and the collector reclaims it.
 
+*Decided 2026-11-05 (SIN-62): this is intended.* An OCI proxy keeps serving a digest after
+upstream removes it, and there is no per-digest upstream check. A digest names its bytes, so
+what a caller gets cannot differ from what it asked for, and a read that needs no upstream
+call keeps needing none. The price is the case above, and scheduled collection is off by
+default (`worker.gc.interval` is zero), so the window lasts until an operator runs a
+collection.
+
+What an operator can do about a known-bad digest today, traced in the code:
+
+- **There is no way to stop one digest serving.** A proxy repository answers an OCI
+  `DELETE` of a manifest or blob with a read-only refusal (`ensureWritable`,
+  `internal/proto/oci/handler.go`). The management API's `deleteFile` addresses `files`
+  rows, which npm and PyPI use; an OCI manifest and its layers are placed in
+  `repository_blobs` and `tags`, and no route reaches them.
+- **The blunt option is deleting the proxy repository** (`DELETE /api/v1/repositories/{name}`,
+  `Registry.DeleteRepository`). It unlinks every placement in it, so nothing in that
+  repository serves, good images included; they are fetched again on the next pull. A
+  config-managed repository is refused: remove it from the configuration and apply with
+  `--prune`.
+- **The bytes go only when a collection runs** (`sindri gc`, or `POST /api/v1/gc`; both need
+  an administrator). Deleting the repository stops serving but leaves the bytes, because
+  `DeleteRepository` never calls `cas.Delete` (ADR 19). `sindri gc --dry-run` lists what
+  would go. A digest that a tag in another repository still reaches is kept, since
+  reachability is by digest.
+- **Waiting is the other path.** Retention evicts a tag after its cache entry is stale for
+  `worker.retention.proxyStaleAfter` (seven days by default). That removes the tag only; the
+  digest still serves until a collection reclaims it, and only once the blob is older than
+  `worker.gc.grace` (24 hours by default).
+
+A follow-up should add an administrator route that evicts one digest from one proxy
+repository, so a known-bad image need not cost the whole repository.
+
 **Mutable names go through the TTL; immutable ones do not.** An OCI digest
 reference, once placed, is served locally forever. An OCI tag and a PyPI
 project index are mutable upstream, so they are served locally only while
@@ -174,5 +206,10 @@ create; M7's reconciler will call the same function.
 - **Holding back the final chunk until verification.** It would let a failed
   digest end as a clean error status instead of a cut connection, but headers
   are already sent by then, so the status cannot change anyway.
+- **An optional per-digest upstream check (SIN-62).** It would stop a removed image serving
+  by digest, but it adds an upstream call to reads that need none today, and it forces a
+  rule for an upstream that is down or refuses the check: serving anyway defeats it, and
+  refusing makes a cached image depend on upstream uptime, which the stale-hit fallback
+  above exists to avoid. The gap is better closed by an operator action (see above).
 - **Automatic `library/` for every upstream.** Only Docker Hub has the
   convention; elsewhere a single-segment name is a real name.
