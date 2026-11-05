@@ -231,3 +231,61 @@ func TestProxy_AnswerThatIsNotAnOutageDoesNotBackOffTheRepository(t *testing.T) 
 		}
 	}
 }
+
+// A virtual repository stops at the first member that has the name. When that
+// member is backing off, the answer is its failure: the next member is not
+// asked, since it could hold a name the first one owns (dependency confusion,
+// ADR 7), and the backoff exists to spare requests.
+func TestProxy_BackoffOfAnEarlierMemberDoesNotFallThroughToTheNext(t *testing.T) {
+	cases := []struct {
+		name string
+		// prepare leaves "up" in backoff, and returns the version to request
+		// through the virtual and the status it must answer.
+		prepare func(t *testing.T, e *goneEnv) (version string, want int)
+	}{
+		{"unplaced file", func(t *testing.T, e *goneEnv) (string, int) {
+			e.up.list("1.0.0", "2.0.0", "3.0.0") // 3.0.0 is listed, never fetched
+			e.age(t)
+			e.up.dropConnections()
+			if got := e.status(t, "up", e.p.filePath("1.0.0")); got != http.StatusOK {
+				t.Fatalf("read that starts the backoff = %d, want the placed copy (200)", got)
+			}
+			return "3.0.0", http.StatusBadGateway
+		}},
+		{"flagged file", func(t *testing.T, e *goneEnv) (string, int) {
+			e.age(t)
+			e.up.list("2.0.0") // 1.0.0 is flagged as gone by this refresh
+			if got := e.status(t, "up", e.p.filePath("2.0.0")); got != http.StatusOK {
+				t.Fatalf("refreshing read = %d, want 200", got)
+			}
+			e.age(t)
+			e.up.dropConnections()
+			if got := e.status(t, "up", e.p.filePath("2.0.0")); got != http.StatusOK {
+				t.Fatalf("read that starts the backoff = %d, want the placed copy (200)", got)
+			}
+			return "1.0.0", http.StatusNotFound
+		}},
+	}
+	for _, p := range goneProtocols() {
+		for _, tc := range cases {
+			t.Run(p.name+"/"+tc.name, func(t *testing.T) {
+				e, _ := newStaleEnv(t, p)
+				// A second proxy holds the same name, with files "up" lacks.
+				second := &goneUpstream{versions: []string{"1.0.0", "2.0.0", "3.0.0"}}
+				var two *countedUpstream
+				two = e.countedUpstream(t, p.handler(second, func() string { return two.url }))
+				e.createProxyAt(t, "up2", p.protocol, two.url+upstreamBase(p), "")
+				e.createVirtualOf(t, "two", p.protocol, "up", "up2")
+
+				version, want := tc.prepare(t, e)
+				before := two.hits.Load()
+				if got := e.status(t, "two", p.filePath(version)); got != want {
+					t.Fatalf("GET %s through the virtual = %d, want %d", version, got, want)
+				}
+				if got := two.hits.Load() - before; got != 0 {
+					t.Fatalf("%d requests reached the second member, want none", got)
+				}
+			})
+		}
+	}
+}
