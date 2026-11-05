@@ -290,6 +290,15 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	if err != nil {
 		return model.File{}, fmt.Errorf("ensuring package %s: %w", p.Package, err)
 	}
+	// Package first, then versions and files: the order DeleteFile and the npm
+	// dist-tag paths take, so none of them can wait on each other in a cycle.
+	// Holding it also queues this publish behind a delete in flight, so the
+	// tombstone checks below see that delete's committed work (SIN-64).
+	if retiresNames(repo) {
+		if _, err := q.LockPackage(ctx, pkg.ID); err != nil {
+			return model.File{}, fmt.Errorf("locking package %s: %w", p.Package, err)
+		}
+	}
 
 	var ver db.Version
 	if p.ExclusiveVersion {
@@ -500,6 +509,19 @@ func (r *Registry) CheckPlacement(ctx context.Context, repo string, digest model
 	return nil
 }
 
+// retiresNames reports whether a repository's published names are immutable
+// (SIN-52): a hosted npm or PyPI repository. A proxy only mirrors upstream,
+// and an OCI-protocol repository keeps its v1.0 behaviour; both must be able
+// to place a file again, so neither keeps tombstones or takes the package
+// lock for them.
+func retiresNames(repo db.Repository) bool {
+	if repo.Type != string(model.RepoTypeHosted) {
+		return false
+	}
+	protocol := model.Protocol(repo.Protocol)
+	return protocol == model.ProtocolNPM || protocol == model.ProtocolPyPI
+}
+
 // DeleteFile unlinks a placement. It never calls cas.Delete. actor is
 // recorded on the dist-tag events a removed npm version leaves behind.
 func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename, actor string) error {
@@ -542,6 +564,18 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 
 	versionID := file.VersionID
 
+	// Lock the package before touching its rows, the order Publish and the npm
+	// dist-tag paths use (SIN-64). A concurrent publish then waits here and
+	// finds this delete's tombstone committed. Re-resolving is unnecessary: the
+	// delete below reports a file another delete already removed as not found.
+	npm := model.Protocol(repoRow.Protocol) == model.ProtocolNPM
+	retires := retiresNames(repoRow)
+	if npm || retires {
+		if _, err := q.LockPackage(ctx, pkgRow.ID); err != nil {
+			return fmt.Errorf("locking package %s: %w", pkg, err)
+		}
+	}
+
 	n, err := q.DeleteFile(ctx, db.DeleteFileParams{
 		Name:           repo,
 		NormalizedName: normalized,
@@ -558,10 +592,7 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 	// Dist-tags cascade with their version, so record the tags a removal takes
 	// with it before the row goes. The history outlives the version (ADR 24).
 	var strandedTags []string
-	if model.Protocol(repoRow.Protocol) == model.ProtocolNPM {
-		if _, err := q.LockPackage(ctx, pkgRow.ID); err != nil {
-			return fmt.Errorf("locking package %s: %w", pkg, err)
-		}
+	if npm {
 		strandedTags, err = q.ListDistTagsForVersion(ctx, versionID)
 		if err != nil {
 			return fmt.Errorf("listing dist-tags of version %s: %w", version, err)
@@ -572,8 +603,7 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 	// deleted file keeps its version and filename taken (SIN-52). A proxy only
 	// mirrors upstream, and an OCI-protocol repository keeps its v1.0 behaviour;
 	// both must be able to place the file again.
-	if repoRow.Type == string(model.RepoTypeHosted) &&
-		(model.Protocol(repoRow.Protocol) == model.ProtocolNPM || model.Protocol(repoRow.Protocol) == model.ProtocolPyPI) {
+	if retires {
 		if err := q.InsertRetiredFile(ctx, db.InsertRetiredFileParams{
 			PackageID: pkgRow.ID,
 			Version:   version,

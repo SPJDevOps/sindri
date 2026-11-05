@@ -4,12 +4,15 @@ package registry_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	godigest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -495,37 +498,226 @@ func TestPublish_DeletedFilenameIsRefusedWithoutImmutable(t *testing.T) {
 	}
 }
 
-// A delete and a republish of one version, run together, never leave the new
-// bytes placed: the publish's insert waits for the delete, then sees its
-// tombstone.
-func TestPublish_RetiredVersionRacingADelete(t *testing.T) {
-	f := newNPMFixture(t)
-	const rounds = 15
-	for i := range rounds {
-		version := "1." + string(rune('0'+i%10)) + "." + string(rune('a'+i))
-		f.mustPublish("left-pad", version, "latest", "old")
+// lockVersionRow holds the row of one version in a transaction of the test's
+// own until release is called. A DeleteFile of that version's last file then
+// stops at its final statement, after the file is gone and the tombstone is
+// written but before either is committed: the interleaving SIN-64 is about,
+// held open instead of hoped for.
+func (f *evictFixture) lockVersionRow(repo, normalized, version string) (release func()) {
+	f.t.Helper()
+	tx, err := f.db.Pool().Begin(f.t.Context())
+	if err != nil {
+		f.t.Fatalf("beginning the holding transaction: %v", err)
+	}
+	var id string
+	if err := tx.QueryRow(f.t.Context(), `
+		SELECT v.id::text FROM versions v
+		JOIN packages p ON p.id = v.package_id
+		JOIN repositories r ON r.id = p.repo_id
+		WHERE r.name = $1 AND p.normalized_name = $2 AND v.version = $3
+		FOR UPDATE OF v`, repo, normalized, version).Scan(&id); err != nil {
+		f.t.Fatalf("locking version %s: %v", version, err)
+	}
+	released := false
+	release = func() {
+		if !released {
+			released = true
+			_ = tx.Rollback(context.WithoutCancel(f.t.Context()))
+		}
+	}
+	f.t.Cleanup(release)
+	return release
+}
 
+// blockedBackends counts backends of this database waiting on a lock.
+func (f *evictFixture) blockedBackends() int {
+	f.t.Helper()
+	return f.count(`SELECT count(*) FROM pg_stat_activity
+		WHERE datname = current_database() AND wait_event_type = 'Lock'`)
+}
+
+// raceDeleteAndPublish deletes a file while a publish starts against the same
+// package, with the delete held open uncommitted. It returns once the publish
+// has either finished or is blocked behind the delete, which it learns from
+// pg_stat_activity and not from a pause, then lets the delete commit.
+func (f *evictFixture) raceDeleteAndPublish(repo, pkg, normalized, version, filename string, publish func() error) (deleteErr, publishErr error) {
+	f.t.Helper()
+	release := f.lockVersionRow(repo, normalized, version)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		deleteErr = f.reg.DeleteFile(f.t.Context(), repo, pkg, version, filename, "carol")
+	}()
+	f.waitBlocked(1)
+
+	published := make(chan struct{})
+	go func() {
+		defer wg.Done()
+		defer close(published)
+		publishErr = publish()
+	}()
+	f.waitBlockedOr(2, published)
+
+	release()
+	wg.Wait()
+	return deleteErr, publishErr
+}
+
+func (f *evictFixture) waitBlocked(n int) {
+	f.t.Helper()
+	f.waitBlockedOr(n, nil)
+}
+
+func (f *evictFixture) waitBlockedOr(n int, done <-chan struct{}) {
+	f.t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for f.blockedBackends() < n {
+		select {
+		case <-done:
+			return
+		case <-time.After(5 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			f.t.Fatalf("fewer than %d backends blocked on a lock after 15s", n)
+		}
+	}
+}
+
+// A delete that has not committed must still keep the publisher from placing
+// the name it retires: the publish waits for the delete, then sees the
+// tombstone (SIN-64).
+func TestPublish_RetiredNameRacingAnUncommittedDelete(t *testing.T) {
+	pypiPublish := func(f *evictFixture, version, filename string, immutable bool) func() error {
+		return func() error {
+			_, err := f.reg.Publish(t.Context(), registry.PublishParams{
+				Repo: "hosted", Package: "our-lib", Version: version, Filename: filename,
+				Body: bytes.NewReader([]byte("new")), Size: 3, Immutable: immutable,
+			})
+			return err
+		}
+	}
+	cases := []struct {
+		name string
+		// run races the delete of our-lib 1.0.0 against a publish and returns both errors.
+		run     func(t *testing.T) (*evictFixture, error, error)
+		wantErr error
+		// retired is the filename that must not be placed afterwards.
+		retired string
+	}{
+		{
+			name: "npm republish of the deleted version",
+			run: func(t *testing.T) (*evictFixture, error, error) {
+				f := newNPMFixture(t)
+				f.mustPublish("left-pad", "1.0.0", "latest", "old")
+				d, p := f.raceDeleteAndPublish(f.repo, "left-pad", "left-pad", "1.0.0", "left-pad-1.0.0.tgz",
+					func() error { return f.publish("left-pad", "1.0.0", "latest", "new") })
+				return f.evictFixture, d, p
+			},
+			wantErr: registry.ErrVersionExists,
+			retired: "left-pad-1.0.0.tgz",
+		},
+		{
+			name: "immutable PyPI upload of the deleted filename",
+			run: func(t *testing.T) (*evictFixture, error, error) {
+				f := newEvictFixture(t)
+				f.hostedRepo("hosted", model.ProtocolPyPI)
+				filename := f.publishPyPI("hosted", "our-lib", "1.0.0")
+				d, p := f.raceDeleteAndPublish("hosted", "our-lib", "our-lib", "1.0.0", filename,
+					pypiPublish(f, "1.0.0", filename, true))
+				return f, d, p
+			},
+			wantErr: registry.ErrFileExists,
+			retired: "our-lib-1.0.0.tar.gz",
+		},
+		{
+			name: "immutable PyPI upload of the deleted filename under another version",
+			run: func(t *testing.T) (*evictFixture, error, error) {
+				f := newEvictFixture(t)
+				f.hostedRepo("hosted", model.ProtocolPyPI)
+				filename := f.publishPyPI("hosted", "our-lib", "1.0.0")
+				d, p := f.raceDeleteAndPublish("hosted", "our-lib", "our-lib", "1.0.0", filename,
+					pypiPublish(f, "2.0.0", filename, true))
+				return f, d, p
+			},
+			wantErr: registry.ErrFileExists,
+			retired: "our-lib-1.0.0.tar.gz",
+		},
+		{
+			name: "API publish of the deleted filename under another version",
+			run: func(t *testing.T) (*evictFixture, error, error) {
+				f := newEvictFixture(t)
+				f.hostedRepo("hosted", model.ProtocolPyPI)
+				filename := f.publishPyPI("hosted", "our-lib", "1.0.0")
+				d, p := f.raceDeleteAndPublish("hosted", "our-lib", "our-lib", "1.0.0", filename,
+					pypiPublish(f, "2.0.0", filename, false))
+				return f, d, p
+			},
+			wantErr: registry.ErrFileExists,
+			retired: "our-lib-1.0.0.tar.gz",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, deleteErr, publishErr := tc.run(t)
+			if deleteErr != nil {
+				t.Fatalf("DeleteFile: %v", deleteErr)
+			}
+			if !errors.Is(publishErr, tc.wantErr) {
+				t.Fatalf("publish = %v, want %v", publishErr, tc.wantErr)
+			}
+			if n := f.count(`SELECT count(*) FROM files WHERE filename = $1`, tc.retired); n != 0 {
+				t.Fatalf("%d files named %s placed after its delete", n, tc.retired)
+			}
+			if n := f.count(`SELECT count(*) FROM files`); n != 0 {
+				t.Fatalf("files = %d, want the refused publish to place nothing", n)
+			}
+		})
+	}
+}
+
+// A PyPI delete and a publish into the same package, run together many times,
+// never fail with a deadlock (40P01) or a 500. SIN-64 reasoned that they could
+// from the order each takes locks in.
+func TestDeleteAndPublish_PyPIDoNotDeadlock(t *testing.T) {
+	f := newEvictFixture(t)
+	f.hostedRepo("hosted", model.ProtocolPyPI)
+	const rounds = 60
+	for i := range rounds {
+		version := fmt.Sprintf("1.%d.0", i)
+		doomed := f.publishPyPI("hosted", "our-lib", version)
+		sibling := "our-lib-" + version + "-py3-none-any.whl"
+
+		start := make(chan struct{})
 		var wg sync.WaitGroup
-		var deleteErr, publishErr error
-		wg.Add(2)
+		var deleteErr, publishErr, otherErr error
+		wg.Add(3)
 		go func() {
 			defer wg.Done()
-			deleteErr = f.reg.DeleteFile(t.Context(), f.repo, "left-pad", version, "left-pad-"+version+".tgz", "carol")
+			<-start
+			deleteErr = f.reg.DeleteFile(t.Context(), "hosted", "our-lib", version, doomed, "carol")
 		}()
 		go func() {
 			defer wg.Done()
-			publishErr = f.publish("left-pad", version, "latest", "new")
+			<-start
+			publishErr = f.publishPyPIAs("hosted", "our-lib", version, sibling, "wheel")
 		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			// A different filename of another version, so the publish contends on the package only.
+			otherErr = f.publishPyPIAs("hosted", "our-lib", version+".post1", "our-lib-"+version+".post1.tar.gz", "post")
+		}()
+		close(start)
 		wg.Wait()
 
-		if deleteErr != nil {
-			t.Fatalf("round %d: DeleteFile: %v", i, deleteErr)
+		for what, err := range map[string]error{"DeleteFile": deleteErr, "publish": publishErr, "other publish": otherErr} {
+			if err != nil {
+				t.Fatalf("round %d: %s: %v", i, what, err)
+			}
 		}
-		if !errors.Is(publishErr, registry.ErrVersionExists) {
-			t.Fatalf("round %d: publish = %v, want ErrVersionExists", i, publishErr)
-		}
-		if n := f.count(`SELECT count(*) FROM files f JOIN versions v ON v.id = f.version_id WHERE v.version = $1`, version); n != 0 {
-			t.Fatalf("round %d: %d files placed under retired version %s", i, n, version)
+		if n := f.count(`SELECT count(*) FROM files WHERE filename = $1`, doomed); n != 0 {
+			t.Fatalf("round %d: deleted file %s still placed", i, doomed)
 		}
 	}
 }
