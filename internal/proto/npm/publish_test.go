@@ -114,6 +114,8 @@ func TestCheckManifestAgrees(t *testing.T) {
 		{name: "name is not a string", manifest: `{"name":1,"version":"1.0.0"}`, wantErr: true},
 		{name: "null name", manifest: `{"name":null,"version":"1.0.0"}`, wantErr: true},
 		{name: "another case does not stand in for the key", manifest: `{"Name":"foo","version":"1.0.0"}`, wantErr: true},
+		{name: "NAME beside name is ignored", manifest: `{"NAME":"bar","name":"foo","version":"1.0.0"}`},
+		{name: "NAME beside a wrong name does not rescue it", manifest: `{"NAME":"foo","name":"bar","version":"1.0.0"}`, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
