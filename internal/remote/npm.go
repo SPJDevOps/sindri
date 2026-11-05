@@ -19,9 +19,9 @@ import (
 )
 
 const (
-	// npmPackumentAccept asks for the abbreviated packument, which holds all an
-	// install needs; a registry that ignores it answers with the full document.
-	npmPackumentAccept = "application/vnd.npm.install-v1+json, application/json;q=0.8"
+	// npmPackumentAccept asks for the full document. The abbreviated one has no
+	// time map, and yarn 4 will not install a version it cannot date (ADR 24).
+	npmPackumentAccept = "application/json"
 	// npmTarballMediaType matches what a hosted publish stores.
 	npmTarballMediaType = "application/octet-stream"
 	// maxNPMFilenameLength allows npm's longest name and node-semver's longest

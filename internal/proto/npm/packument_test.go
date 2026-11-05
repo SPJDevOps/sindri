@@ -1,7 +1,9 @@
 package npm
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -123,4 +125,76 @@ func TestIsTarballFilename(t *testing.T) {
 			}
 		})
 	}
+}
+
+// timedPackage is a hosted package whose versions carry the given publish times;
+// a zero time is a row with no recorded time.
+func timedPackage(times map[string]time.Time) registry.NPMPackage {
+	pkg := registry.NPMPackage{Name: "foo", DistTags: map[string]string{}}
+	for version, at := range times {
+		pkg.Versions = append(pkg.Versions, registry.NPMVersion{
+			Version:     version,
+			PublishedAt: at,
+			File: registry.PackageFile{
+				Filename: "foo-" + version + ".tgz",
+				Metadata: json.RawMessage(`{"manifest":{"name":"foo"},"integrity":"sha512-x","shasum":"y"}`),
+			},
+		})
+	}
+	return pkg
+}
+
+func derivedTime(t *testing.T, pkg registry.NPMPackage) map[string]string {
+	t.Helper()
+	h := &handler{publicURL: "https://s.example"}
+	doc, err := h.derivePackument("r", pkg)
+	if err != nil {
+		t.Fatalf("derivePackument: %v", err)
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	var out struct {
+		Time map[string]string `json:"time"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	return out.Time
+}
+
+func TestPackument_HostedReportsRealPublishTimes(t *testing.T) {
+	t.Parallel()
+	first := time.Date(2026, 1, 2, 3, 4, 5, 678_000_000, time.UTC)
+	second := time.Date(2026, 3, 4, 5, 6, 7, 0, time.FixedZone("CET", 3600))
+	got := derivedTime(t, timedPackage(map[string]time.Time{"1.0.0": first, "1.1.0": second}))
+	want := map[string]string{
+		"1.0.0":    "2026-01-02T03:04:05.678Z",
+		"1.1.0":    "2026-03-04T04:06:07.000Z",
+		"created":  "2026-01-02T03:04:05.678Z",
+		"modified": "2026-03-04T04:06:07.000Z",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("time (-want +got):\n%s", diff)
+	}
+}
+
+func TestPackument_VersionWithNoTimeIsLeftOut(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	t.Run("a NULL row is absent and the rest are reported", func(t *testing.T) {
+		t.Parallel()
+		got := derivedTime(t, timedPackage(map[string]time.Time{"1.0.0": {}, "1.1.0": at}))
+		want := map[string]string{"1.1.0": "2026-01-02T03:04:05.000Z", "created": "2026-01-02T03:04:05.000Z", "modified": "2026-01-02T03:04:05.000Z"}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("time (-want +got):\n%s", diff)
+		}
+	})
+	t.Run("no real time anywhere omits the whole map", func(t *testing.T) {
+		t.Parallel()
+		if got := derivedTime(t, timedPackage(map[string]time.Time{"1.0.0": {}})); got != nil {
+			t.Fatalf("time = %v, want none", got)
+		}
+	})
 }

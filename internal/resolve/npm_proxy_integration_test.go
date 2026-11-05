@@ -321,8 +321,68 @@ func TestProxyNPM_PackumentRewritesOnlyTheTarball(t *testing.T) {
 	if got.Modified != "2026-01-01T00:00:00.000Z" || got.DistTags["next"] != "1.0.0" || got.Name != "@acme/new" {
 		t.Fatalf("top-level fields lost: %+v", got)
 	}
-	if got := e.stub.firstAccept(); got != "application/vnd.npm.install-v1+json, application/json;q=0.8" {
-		t.Fatalf("Accept = %q", got)
+}
+
+func TestProxyNPM_FetchesTheFullDocument(t *testing.T) {
+	e := newNPMProxy(t, npmProxyConfig{ttl: 3600, negativeTTL: 300})
+	e.serveOneVersion(t, "/foo", "foo")
+	e.mustGet(t, "foo")
+	// The abbreviated document has no time map, and yarn 4 needs one.
+	if got := e.stub.firstAccept(); got != "application/json" {
+		t.Fatalf("Accept = %q, want the full document", got)
+	}
+}
+
+func TestProxyNPM_ServesUpstreamTimes(t *testing.T) {
+	e := newNPMProxy(t, npmProxyConfig{ttl: 3600, negativeTTL: 300})
+	tgz := []byte("tarball")
+	tarballURI := "/foo/-/foo-1.0.0.tgz"
+	e.stub.setTarball(tarballURI, tgz)
+	dist := map[string]any{"tarball": e.upstream.URL + tarballURI, "integrity": sri512(tgz), "shasum": shasum(tgz)}
+
+	read := func(t *testing.T, extra map[string]any) map[string]json.RawMessage {
+		t.Helper()
+		doc := map[string]any{
+			"name": "foo", "dist-tags": map[string]string{"latest": "1.0.0"},
+			"versions": map[string]any{"1.0.0": map[string]any{"name": "foo", "version": "1.0.0", "dist": dist}},
+		}
+		for k, v := range extra {
+			doc[k] = v
+		}
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.stub.setDocument("/foo", raw)
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(e.mustGet(t, "foo"), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	times := map[string]string{"created": "2020-01-01T00:00:00.000Z", "modified": "2020-02-01T00:00:00.000Z", "1.0.0": "2020-02-01T00:00:00.000Z"}
+	got := read(t, map[string]any{"time": times})
+	var gotTimes map[string]string
+	if err := json.Unmarshal(got["time"], &gotTimes); err != nil {
+		t.Fatalf("time: %v", err)
+	}
+	for k, want := range times {
+		if gotTimes[k] != want {
+			t.Fatalf("time[%s] = %q, want %q", k, gotTimes[k], want)
+		}
+	}
+}
+
+func TestProxyNPM_UpstreamWithoutTimeStaysWithoutTime(t *testing.T) {
+	e := newNPMProxy(t, npmProxyConfig{ttl: 3600, negativeTTL: 300})
+	e.serveOneVersion(t, "/foo", "foo")
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(e.mustGet(t, "foo"), &got); err != nil {
+		t.Fatal(err)
+	}
+	if raw, ok := got["time"]; ok {
+		t.Fatalf("time = %s, want none: Sindri never invents a timestamp", raw)
 	}
 }
 

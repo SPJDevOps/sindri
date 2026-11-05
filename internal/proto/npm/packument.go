@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"time"
 
 	"golang.org/x/mod/semver"
 
@@ -24,7 +25,13 @@ type packument struct {
 	Name     string                    `json:"name"`
 	DistTags map[string]string         `json:"dist-tags"`
 	Versions map[string]map[string]any `json:"versions"`
+	// Time maps each version to when it was published, plus created and
+	// modified. It holds only real times and is absent when there are none.
+	Time map[string]string `json:"time,omitempty"`
 }
+
+// npmTimeFormat is how npm writes a time: UTC with milliseconds.
+const npmTimeFormat = "2006-01-02T15:04:05.000Z"
 
 type packumentDist struct {
 	Tarball   string `json:"tarball"`
@@ -73,7 +80,38 @@ func (h *handler) derivePackument(repo string, pkg registry.NPMPackage) (packume
 		}
 		doc.Versions[v.Version] = entry
 	}
+	doc.Time = publishTimes(pkg.Versions)
 	return doc, nil
+}
+
+// publishTimes is the time map of a hosted package. A version with no recorded
+// time is left out rather than given a guess, and created and modified are the
+// earliest and latest of the real ones, so none at all gives no map.
+func publishTimes(versions []registry.NPMVersion) map[string]string {
+	var out map[string]string
+	var first, last time.Time
+	for _, v := range versions {
+		if v.PublishedAt.IsZero() {
+			continue
+		}
+		at := v.PublishedAt.UTC()
+		if out == nil {
+			out = make(map[string]string, len(versions)+2)
+			first, last = at, at
+		}
+		out[v.Version] = at.Format(npmTimeFormat)
+		if at.Before(first) {
+			first = at
+		}
+		if at.After(last) {
+			last = at
+		}
+	}
+	if out != nil {
+		out["created"] = first.Format(npmTimeFormat)
+		out["modified"] = last.Format(npmTimeFormat)
+	}
+	return out
 }
 
 // rewriteUpstream is upstream's document with each dist.tarball pointing at the

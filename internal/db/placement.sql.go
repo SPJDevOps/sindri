@@ -395,7 +395,7 @@ INSERT INTO versions (package_id, version)
 VALUES ($1, $2)
 ON CONFLICT (package_id, version) DO UPDATE
 SET version = EXCLUDED.version
-RETURNING id, package_id, version, deprecated
+RETURNING id, package_id, version, deprecated, published_at
 `
 
 type GetOrCreateVersionParams struct {
@@ -411,6 +411,7 @@ func (q *Queries) GetOrCreateVersion(ctx context.Context, arg GetOrCreateVersion
 		&i.PackageID,
 		&i.Version,
 		&i.Deprecated,
+		&i.PublishedAt,
 	)
 	return i, err
 }
@@ -507,7 +508,7 @@ func (q *Queries) GetTag(ctx context.Context, arg GetTagParams) (Tag, error) {
 }
 
 const getVersion = `-- name: GetVersion :one
-SELECT id, package_id, version, deprecated FROM versions
+SELECT id, package_id, version, deprecated, published_at FROM versions
 WHERE package_id = $1 AND version = $2
 `
 
@@ -524,6 +525,7 @@ func (q *Queries) GetVersion(ctx context.Context, arg GetVersionParams) (Version
 		&i.PackageID,
 		&i.Version,
 		&i.Deprecated,
+		&i.PublishedAt,
 	)
 	return i, err
 }
@@ -855,7 +857,7 @@ func (q *Queries) ListTags(ctx context.Context, arg ListTagsParams) ([]string, e
 }
 
 const listVersionsByPackage = `-- name: ListVersionsByPackage :many
-SELECT id, package_id, version, deprecated FROM versions
+SELECT id, package_id, version, deprecated, published_at FROM versions
 WHERE package_id = $1
   AND ($2::text IS NULL OR version > $2)
 ORDER BY version
@@ -882,6 +884,7 @@ func (q *Queries) ListVersionsByPackage(ctx context.Context, arg ListVersionsByP
 			&i.PackageID,
 			&i.Version,
 			&i.Deprecated,
+			&i.PublishedAt,
 		); err != nil {
 			return nil, err
 		}

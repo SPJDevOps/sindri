@@ -70,8 +70,7 @@ Deliberately deferred, so nothing is silently missing. The reasons are in
 - **Config:** a Git-polling operator and webhooks
 - **Auth:** SAML, LDAP, and fine-grained per-path ACLs
 - **UI:** administration in the browser; the UI is read-only
-- **npm:** upstreams that need a token (SIN-53), and real publish times in packuments
-  (SIN-60)
+- **npm:** upstreams that need a token (SIN-53)
 
 ## Quickstart
 
@@ -291,16 +290,21 @@ unsafeHttpWhitelist:
   - localhost
 npmAlwaysAuth: true
 npmAuthToken: "${SINDRI_TOKEN}"
-npmMinimalAgeGate: 0
 ```
 
-**`npmMinimalAgeGate: 0` turns off yarn 4's age safeguard, and yarn 4 needs it for now.**
-Yarn 4.18 refuses to install a package younger than a day by default, and decides the age
-from the `time` map in the packument. Sindri does not serve that map yet, so yarn 4
-refuses every package Sindri serves with a quarantine error (`YN0016`). Setting the gate
-to `0` installs them, and also means yarn will no longer hold back a freshly published
-package from you. Set it only in the projects that install from Sindri. Real publish
-times are tracked as SIN-60.
+Yarn 4 keeps its default age gate (`npmMinimalAgeGate`, 1440 minutes): it holds back a
+version published less than a day ago, judging by the `time` map in the packument. Sindri
+serves that map, with each hosted version's real publish time and, through a proxy,
+npmjs's own, so the gate works as it does against npmjs and needs no setting.
+
+If your team publishes an internal package and installs it within a day, list your scope
+as pre-approved. Yarn then skips the age gate for those packages only, and keeps it for
+everything else:
+
+```yaml
+npmPreapprovedPackages:
+  - "@acme/*"
+```
 
 Or run [`scripts/npm-gate.sh`](scripts/npm-gate.sh), which does all of the above against
 the Compose stack.

@@ -29,9 +29,11 @@ PG_CONTAINER="${PG_CONTAINER:-sindri-dev-postgres-1}"
 PG_PORT="${SINDRI_PG_PORT:-55432}"
 HOST="localhost:8080"
 BASE="http://${HOST}"
-PGVER="${PNPM_VERSION:-10}"
+# Exact versions: the yarn 4 assertions below depend on its age-gate behaviour,
+# which a newer release may change. Bump them on purpose, not by accident.
+PGVER="${PNPM_VERSION:-10.34.9}"
 Y1VER="${YARN1_VERSION:-1.22.22}"
-Y4VER="${YARN4_VERSION:-4}"
+Y4VER="${YARN4_VERSION:-4.18.1}"
 VERSION="1.0.0"
 
 fresh_db() {
@@ -152,8 +154,12 @@ YARN4_README_LINES=(
   'npmAlwaysAuth: true'
   'npmAuthToken: "${SINDRI_TOKEN}"'
 )
-YARN4_AGE_GATE='npmMinimalAgeGate: 0'
-for line in "${YARN4_README_LINES[@]}" "${YARN4_AGE_GATE}"; do readme_has "${line}"; done
+# The scope exemption README.md shows for an internal scope installed within a day.
+YARN4_PREAPPROVED_LINES=(
+  'npmPreapprovedPackages:'
+  '  - "@acme/*"'
+)
+for line in "${YARN4_README_LINES[@]}" "${YARN4_PREAPPROVED_LINES[@]}"; do readme_has "${line}"; done
 
 # tree_hash DIR: one hash over the relative path and content of every file in
 # the installed package, so a changed, missing or extra file changes it.
@@ -239,22 +245,35 @@ YML
   printf '%s\n' "${YARN4_README_LINES[@]}"
 } > "${Y4DIR}/.yarnrc.yml"
 Y4_BASE_RC="$(cat "${Y4DIR}/.yarnrc.yml")"
-# Without the setting below yarn 4 must fail today. If it ever installs, SIN-60
-# has landed and the workaround can go. Looked for by its code, YN0016.
+# yarn 4 holds back a version younger than npmMinimalAgeGate (1440 minutes by
+# default), judging by the packument's `time` map. Sindri serves each version's
+# real publish time, so the gate works as it does against npmjs, with no setting.
+#
+# @acme/demo was published seconds ago, so yarn 4 must refuse it. Looked for by
+# its code, YN0016.
 if (cd "${Y4DIR}" && YARN_IGNORE_PATH=1 "${YARN4[@]}" install >"${WORK}/yarn4-default.log" 2>&1); then
-  echo "  NOTE: yarn 4 installed with its default age gate: SIN-60's npmMinimalAgeGate workaround can be removed"
-else
-  grep -q YN0016 "${WORK}/yarn4-default.log" ||
-    { cat "${WORK}/yarn4-default.log" >&2; fail "yarn 4 failed by default, but not with the expected YN0016 quarantine"; }
-  echo "  yarn 4 refuses by default (YN0016 quarantined), as expected until SIN-60"
+  fail "yarn 4 installed a version published seconds ago: its age gate is not being applied"
 fi
-rm -rf "${Y4DIR}/node_modules" "${WORK}/yarn4-cache"
-# yarn 4.18 defaults this gate to 1440 minutes and needs the packument's `time`
-# map, which Sindri does not serve yet (SIN-60). This setting turns off yarn's
-# age safeguard, so it is set for THIS directory only and for no other client.
-printf '%s\n%s\n' "${Y4_BASE_RC}" "${YARN4_AGE_GATE}" > "${Y4DIR}/.yarnrc.yml"
+grep -q YN0016 "${WORK}/yarn4-default.log" ||
+  { cat "${WORK}/yarn4-default.log" >&2; fail "yarn 4 failed on a new version, but not with the expected YN0016 quarantine"; }
+echo "  yarn 4 holds back a version published seconds ago (YN0016), on defaults"
+# The exemption README.md documents: the same fresh version installs once its
+# scope is pre-approved, so an internal package can be used the day it is published.
+printf '%s\n' "${Y4_BASE_RC}" "${YARN4_PREAPPROVED_LINES[@]}" > "${Y4DIR}/.yarnrc.yml"
+rm -rf "${XDG_DATA_HOME}/yarn/berry/metadata"
+(cd "${Y4DIR}" && YARN_IGNORE_PATH=1 "${YARN4[@]}" install >"${WORK}/yarn4-preapproved.log" 2>&1) ||
+  { cat "${WORK}/yarn4-preapproved.log" >&2; fail "yarn 4 refused a fresh @acme/demo even with npmPreapprovedPackages: [\"@acme/*\"]"; }
+assert_demo "${Y4DIR}" "yarn4 with npmPreapprovedPackages"
+printf '%s\n' "${Y4_BASE_RC}" > "${Y4DIR}/.yarnrc.yml"
+# yarn keeps the packument it fetched, so the refused one would be reused below.
+rm -rf "${Y4DIR}/node_modules" "${WORK}/yarn4-cache" "${XDG_DATA_HOME}/yarn/berry/metadata"
+: > "${Y4DIR}/yarn.lock"
+# Back-date the publish time two days. Nothing else changes, so the install
+# below is the same package as the refused one, only older than the gate.
+docker exec -e PGOPTIONS='--client-min-messages=warning' "${PG_CONTAINER}" psql -q -v ON_ERROR_STOP=1 -U sindri -d sindri_m9_npm \
+  -c "UPDATE versions SET published_at = now() - interval '2 days' WHERE version = '${VERSION}'" >/dev/null
 (cd "${Y4DIR}" && YARN_IGNORE_PATH=1 "${YARN4[@]}" install >"${WORK}/yarn4.log" 2>&1) ||
-  { cat "${WORK}/yarn4.log" >&2; fail "yarn 4 install failed (a 401 or a wrong dist.tarball is a product finding)"; }
+  { cat "${WORK}/yarn4.log" >&2; fail "yarn 4 refused a version older than its age gate (or a 401, or a wrong dist.tarball: a product finding)"; }
 assert_demo "${Y4DIR}" yarn4
 
 echo "== 6. every client installed identical bytes"
@@ -281,6 +300,18 @@ write_npmrc "${PROXYDIR}" javascript
 node -e "process.exit(require('${PROXYDIR}/node_modules/is-number')(5) === true ? 0 : 1)" ||
   fail "installed is-number does not work"
 echo "  is-number@7.0.0 installed from the proxy"
+
+# A proxied package is old, and its time comes from npmjs. yarn 4 on defaults.
+PROXY4="${WORK}/yarn4-proxy"
+mkdir -p "${PROXY4}"
+echo '{ "name": "proxy-client4", "version": "0.0.0", "private": true, "dependencies": { "is-number": "7.0.0" } }' > "${PROXY4}/package.json"
+: > "${PROXY4}/yarn.lock"
+printf '%s\n' "${Y4_BASE_RC}" > "${PROXY4}/.yarnrc.yml"
+(cd "${PROXY4}" && YARN_IGNORE_PATH=1 "${YARN4[@]}" install >"${WORK}/yarn4-proxy.log" 2>&1) ||
+  { cat "${WORK}/yarn4-proxy.log" >&2; fail "yarn 4 on defaults could not install is-number@7.0.0 through the proxy"; }
+[ "$(node -p "require('${PROXY4}/node_modules/is-number/package.json').version")" = "7.0.0" ] ||
+  fail "yarn 4 did not install is-number@7.0.0 through javascript"
+echo "  yarn 4 installed is-number@7.0.0 from the proxy on defaults"
 
 echo "== 8. shadow guard: a hosted name or scope is never served from the proxy"
 # @acme/demo answers 404 on npmjs, so it proves nothing alone; these names exist

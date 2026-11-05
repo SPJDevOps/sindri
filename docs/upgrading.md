@@ -76,6 +76,22 @@ Read these before upgrading a server that other people depend on.
   declares one without it no longer loads. See the
   [configuration reference](configuration.md).
 
+## Behaviour changes in 1.1.1
+
+- **npm packuments carry real publish times.** Migration 00011 adds
+  `versions.published_at`, set to the insert time for every new version. Yarn 4 now
+  installs on its default settings, so remove `npmMinimalAgeGate: 0` from `.yarnrc.yml`
+  and the gate protects you again.
+- **There is no backfill.** A version published before the upgrade has no recorded time
+  and is left out of `time`, because Sindri does not invent one. Yarn 4 treats it as
+  quarantined, so it will not install on defaults until you set its `published_at`
+  yourself or yarn's `npmPreapprovedPackages` exempts it.
+- **A proxy downloads whole upstream documents.** The proxy now asks npmjs for the full
+  document instead of the abbreviated one, so upstream traffic, parsing, the response a
+  client gets, and the cache all grow. A cached document gains `time` only when it
+  refreshes, after the repository's `ttl`.
+  See [ADR 24](adr/0024-npm-packument-and-dist-tags.md).
+
 ## Rolling back
 
 Every migration stays backward compatible for one release, so the previous

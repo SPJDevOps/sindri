@@ -101,18 +101,40 @@ asked for, including a virtual one, so installs stay behind `auth.Authorize` and
 Upstream `dist.integrity` is verified when a tarball is cached. (Amended in M9 when the
 proxy was built; the paragraphs below say what "as upstream sent them" came to.)
 
-**A proxy asks for abbreviated documents only, and that costs three things.** Sindri sends
-`Accept: application/vnd.npm.install-v1+json`, so the cached document has no `time` map and
-no readme. `npm view` therefore shows less. `npm install --before` and pnpm's release-age
-setting both read `time`, so neither works through a proxy. Fetching full documents would
-fix that and make every cached packument several times larger; this is not done. It narrows
-"as upstream sent them" to "as upstream sent the abbreviated form".
+**A proxy asks for the whole document.** (Amended in v1.1.1, SIN-60; M9 asked for the
+abbreviated form and rejected this.) Sindri sends `Accept: application/json`, so the cached
+document carries upstream's `time` map and readme, and passes `time` through unchanged.
+`npm install --before`, pnpm's release-age setting and yarn 4's `npmMinimalAgeGate` all read
+`time`, and yarn 4 refuses every version it cannot date. The abbreviated form made all
+three fail through a proxy. The costs, accepted:
 
-Hosted packuments have no `time` map either. Yarn 4.18 defaults `npmMinimalAgeGate` to 1440
-minutes and needs `time`, so with its defaults it refuses every hosted and proxied version
-("quarantined", YN0016). The documented workaround is `npmMinimalAgeGate: 0` in
-`.yarnrc.yml`, which turns off yarn's age safeguard for that project. SIN-60 tracks serving
-real publish times.
+- **Upstream traffic.** Every refresh downloads the whole document. Measured on
+  2026-11-05, full against abbreviated: `typescript` 15.9 MB against 8.8 MB, `@types/node`
+  11.2 MB against 2.3 MB, `next` 31.5 MB against 25.7 MB, `aws-sdk` 10.6 MB against 3.8 MB.
+- **Parsing.** Each refresh parses the larger document, and each read rewrites it. The
+  largest real document is well inside the 128 MiB read bound.
+- **Larger responses to clients.** A client of a proxy gets the whole document, since one
+  document answers every `Accept` type. Clients of a hosted repository are unaffected.
+- **Cache size.** The cached document is that much larger, per package, under the
+  existing `ttl`.
+
+It restores "as upstream sent them" to its plain meaning. A document upstream sends with
+no `time` stays without one: Sindri never invents a timestamp.
+
+**Hosted packuments carry `time`, and only real times.** `versions.published_at` is set by
+the column default when a version is inserted, and migration 00011 adds it as nullable.
+Each version's entry is that time, written as npm does, in UTC with milliseconds.
+`created` and `modified` are the earliest and latest of those. A version with no time is
+left out of the map, and a package with none has no `time` at all. There is no backfill:
+versions published before 1.1.1 have no recorded time, the migration leaves them NULL, and
+a guess would be an invented timestamp. Yarn 4.18.1 quarantines a version missing from `time` (tested: a row set back to NULL
+gets YN0016 again), so such a version does not install on defaults. An operator who wants
+one to install can set its `published_at`, or pre-approve its scope in yarn (below).
+A proxy cache that already holds an abbreviated document gets
+`time` only when it next refreshes, after its `ttl`.
+
+Yarn 4's `npmPreapprovedPackages` exempts an internal scope from the gate. The gate
+verifies `["@acme/*"]` on yarn 4.18.1; a bare scope name (`"@acme"`) does not match.
 
 **The packument is parsed with exact keys and its `name` must match the request.** Go's
 struct decoding is case-insensitive and would read a `DIST` that npm ignores. A version that
@@ -389,11 +411,11 @@ filesystem: this run was on macOS, whose default filesystem folds case.
   deleted before migration 00009 are not remembered and can still be published again.
   Only hosted npm and PyPI repositories retire anything: a proxy
   and a hosted OCI-protocol repository do not.
-- A proxy cannot see `time` or the readme, so `npm install --before` and pnpm's release-age
-  setting do not work through one.
-- Neither hosted nor proxied packuments carry `time`, so yarn 4.18's default age gate fails
-  on both. Installing needs `npmMinimalAgeGate: 0`, which also disables that safeguard.
-  SIN-60 tracks real publish times; the M9 gate asserts the failure so it notices the fix.
+- Versions published before 1.1.1 have no recorded publish time and are left out of the
+  `time` map, so yarn 4 quarantines them (see above). There is no backfill.
+- The proxy downloads and caches whole upstream documents, which costs upstream traffic,
+  parsing, response size and cache size. Sindri serves upstream's `time`, so
+  `npm install --before` and release-age settings work through a proxy.
 - A proxy takes only tarballs on its own host under its base path, with no off-origin
   redirects. Registries that write `%2f` into a tarball URL, or redirect downloads to a CDN,
   get a 502 or are left out. Bearer credentials and private upstreams are SIN-53.
@@ -413,9 +435,12 @@ filesystem: this run was on macOS, whose default filesystem folds case.
   a GC root, so a dist-tag could keep a deleted version's tarball readable.
 - **Recording tag moves in `lifecycle_events`.** Its actions are approve and revoke, every
   row needs a stage, and it is keyed by digest. A tag move is none of those.
-- **Fetching full packuments from the upstream.** It would restore `time` and the readme at
-  several times the cache size for every package, and the abbreviated form is what installs
-  use.
+- **Fetching abbreviated packuments from the upstream.** This was the M9 choice, and
+  v1.1.1 reversed it: the abbreviated form has no `time`, so yarn 4 on defaults, `--before`
+  and release-age settings all failed through a proxy.
+- **Backfilling `published_at` for existing versions.** The only candidate is the migration
+  time or the first-read time, and both are made-up publish times. A client gating on age
+  would trust them.
 - **Declaring a length on a proxied tarball and aborting on a bad hash.** The length frames
   the body as complete, and net/http then computes the end of the response from it, so the
   abort cannot be told from a finished download.
