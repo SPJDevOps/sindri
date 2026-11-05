@@ -70,7 +70,13 @@ func TestBlobStore_Conformance(t *testing.T) {
 						minio.LogUploads(t)
 					}
 				})
-				return openS3(t, prefix), func() storage.BlobStore { return openS3(t, prefix) }
+				return openS3(t, prefix), func() storage.BlobStore {
+					// Before the purge runs, whatever the outcome: a listing taken
+					// only after a failure cannot tell an upload that was never
+					// listed from one the purge already removed.
+					minio.LogUploads(t)
+					return openS3(t, prefix)
+				}
 			},
 		},
 	}
