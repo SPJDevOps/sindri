@@ -118,8 +118,11 @@ three fail through a proxy. The costs, accepted:
 - **Cache size.** The cached document is that much larger, per package, under the
   existing `ttl`.
 
-It restores "as upstream sent them" to its plain meaning. A document upstream sends with
-no `time` stays without one: Sindri never invents a timestamp.
+It restores "as upstream sent them" to its plain meaning, with two exceptions the rewrite
+drops: the top-level `_attachments`, which is a publish payload and can carry tarball bytes,
+and each version's `_resolved`, which names upstream's own tarball URL and would point a
+client past Sindri. A document upstream sends with no `time` stays without one: Sindri
+never invents a timestamp.
 
 **Hosted packuments carry `time`, and only real times.** `versions.published_at` is set by
 the column default when a version is inserted, and migration 00011 adds it as nullable.
@@ -127,11 +130,12 @@ Each version's entry is that time, written as npm does, in UTC with milliseconds
 `created` and `modified` are the earliest and latest of those. A version with no time is
 left out of the map, and a package with none has no `time` at all. There is no backfill:
 versions published before 1.1.1 have no recorded time, the migration leaves them NULL, and
-a guess would be an invented timestamp. Yarn 4.18.1 quarantines a version missing from `time` (tested: a row set back to NULL
-gets YN0016 again), so such a version does not install on defaults. An operator who wants
-one to install can set its `published_at`, or pre-approve its scope in yarn (below).
-A proxy cache that already holds an abbreviated document gets
-`time` only when it next refreshes, after its `ttl`.
+a guess would be an invented timestamp. Yarn 4.18.1 quarantines a version missing from
+`time` (tested: a row set back to NULL gets YN0016 again), so such a version does not
+install on defaults. An operator who wants one to install can pre-approve its scope in yarn
+(below), or set its `published_at` by hand, which is the operator asserting a time Sindri
+never observed. A proxy cache entry gets `time` only when it next refreshes, after its
+`ttl`; with `ttl: 0`, which is fresh forever, it never does until a non-zero `ttl` is set.
 
 Yarn 4's `npmPreapprovedPackages` exempts an internal scope from the gate. The gate
 verifies `["@acme/*"]` on yarn 4.18.1; a bare scope name (`"@acme"`) does not match.
@@ -245,26 +249,42 @@ serves. SIN-61 added the backoff below.
 **A failed refresh backs the repository off for 30 seconds, and a fresh read parses nothing**
 (SIN-61, v1.1.1). The state is a map from repository to the time it may be asked again, held
 on `remote.Client`, in memory and per process, so a restart or another replica costs one
-wait. The 30 seconds is a constant, not configuration. Only the upstream not answering starts
-it: a connection failure, a timeout, or a 5xx, marked by an error of its own
-(`errUpstreamDown`). `ErrUpstreamUnavailable` is not the trigger, because an oversize or
-unparsable document and a 401/403 wrap it too, and one package's bad document must not turn
-away every other package of the repository. Any answer from upstream, a 404 included, clears
-the backoff. During it, a stale document is read from the cache without contacting upstream,
+wait. The 30 seconds is a constant, not configuration. Only the upstream not answering at
+all starts it: a connection that fails, or a timeout before the response headers arrive,
+marked by an error of its own (`errUpstreamDown`). A 5xx is not a trigger. It is an answer,
+and a fast one: it fails that one request as `ErrUpstreamUnavailable` with a stale copy still
+served, exactly as before SIN-61, and costs the next request no more than a healthy
+upstream would. The backoff exists to stop reads queueing on a wait, and a 5xx has none. A
+timeout counts only while waiting for headers. A body that stalls after a 200 is read
+outside the request, fails that read, and starts nothing. `ErrUpstreamUnavailable` is not
+the trigger either, because a 5xx, an oversize or unparsable document and a 401/403 wrap it
+too, and one package's bad document must not turn away every other package of the
+repository.
+
+`noteRefresh` is the whole rule. A successful refresh or a 404 clears the backoff, since
+either shows the upstream answering. 401, 403, 429, a 5xx and a document that does not
+parse change nothing: they start no backoff and end none. 429 is not a trigger because it is
+a fast answer that says the caller is going too fast, not that the upstream is down, and
+a fixed 30 second window would be a guess at a `Retry-After` Sindri does not read; it also
+says nothing about the other packages of the repository.
+
+During a backoff, a stale document is read from the cache without contacting upstream,
 a placed file serves through the placement check as always (I2), a file already flagged as
 gone is a 404, and any other read fails at once as `ErrUpstreamUnavailable`, so a client
-sees the 502 a real outage gives and a virtual walk fails as before. On a fresh document the
+sees the 502 a real outage gives and a virtual walk fails as before, without asking the next
+member. On a fresh document the
 `upstream_gone_at` flag is authoritative, since the refresh that stored the document set it.
 A placed file, or a flagged one, is then answered from the `files` rows alone and the
 document is not loaded or parsed. A file that is neither placed nor flagged still needs the
 document, to find where it lives. Both hold through a virtual repository.
 
-Two costs. A file upstream removes while the repository is backing off keeps serving until
-the window ends and the next read refreshes: at most 30 seconds after the last failed
-refresh, plus the one read that does the refreshing. If that refresh also fails, the window
-restarts. And "only the first read waits" is true per window, not per concurrent read: reads
-already in flight when the first failure lands have already started their own wait, and each
-one's failure restarts the window.
+Two costs. A file upstream removes while the repository is backing off keeps serving until a
+read after the window ends refreshes the document. That is no sooner than 30 seconds after
+the last failed refresh, and later if no read comes, since nothing refreshes in the
+background. The read that refreshes restarts the window if it fails too. And "only the
+first read waits" is true per window, not per concurrent read: reads already in flight when
+the first failure lands have already started their own wait, and each one's failure
+restarts the window.
 
 The estimate for a 500-package lockfile install at 16 concurrent reads against a blackholed
 upstream, every document past its TTL, is derived, not measured. Without a backoff the

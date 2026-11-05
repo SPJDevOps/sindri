@@ -80,26 +80,55 @@ Read these before upgrading a server that other people depend on.
 
 - **npm packuments carry real publish times.** Migration 00011 adds
   `versions.published_at`, set to the insert time for every new version. Yarn 4 now
-  installs on its default settings, so remove `npmMinimalAgeGate: 0` from `.yarnrc.yml`
-  and the gate protects you again.
-- **There is no backfill.** A version published before the upgrade has no recorded time
-  and is left out of `time`, because Sindri does not invent one. Yarn 4 treats it as
-  quarantined, so it will not install on defaults until you set its `published_at`
-  yourself or yarn's `npmPreapprovedPackages` exempts it.
+  installs on its default settings, so you can remove `npmMinimalAgeGate: 0` from
+  `.yarnrc.yml`. Read the next two items first.
+- **Yarn 4 on defaults now holds back anything published in the last 24 hours, internal
+  versions included.** Its default `npmMinimalAgeGate` is one day, and it now has a real
+  time to compare. A version your team publishes will not install for a day. To exempt an
+  internal scope, add it to `.yarnrc.yml`:
+
+  ```yaml
+  npmPreapprovedPackages: ["@acme/*"]
+  ```
+
+  The glob form is the one that matches on yarn 4.18.1; a bare `"@acme"` does not.
+- **There is no backfill, and removing `npmMinimalAgeGate: 0` breaks versions published
+  before the upgrade.** Such a version has no recorded time and is left out of `time`,
+  because Sindri does not invent one. Yarn 4 treats a version it cannot date as
+  quarantined, so once you remove the setting it will not install, now or later, unless
+  its package is pre-approved as above. Pre-approve the affected scopes before you remove
+  `npmMinimalAgeGate: 0`. The other way out is to set the time yourself in Postgres
+  (`UPDATE versions SET published_at = ... WHERE ...`, on the `versions` table). That is
+  an operator asserting a publish time Sindri never observed, so it is your choice to
+  make, and Sindri does not suggest it.
 - **A proxy downloads whole upstream documents.** The proxy now asks npmjs for the full
   document instead of the abbreviated one, so upstream traffic, parsing, the response a
   client gets, and the cache all grow. A cached document gains `time` only when it
-  refreshes, after the repository's `ttl`.
+  refreshes, and a repository with `ttl: 0` never refreshes (a cached hit is fresh
+  forever), so a document cached before the upgrade never gains `time` there. To fix
+  that, set a non-zero `ttl` on the proxy and reload (or run `sindri apply`). The `ttl` is
+  read on every request and an entry's age counts from when it was fetched, so an old
+  entry is stale at once and the next read refreshes it. This is from reading the code,
+  not a run of an upgraded instance.
   See [ADR 24](adr/0024-npm-packument-and-dist-tags.md).
 - **A proxy backs off for 30 seconds after its upstream stops answering.** Since 1.1.0 a
   placed npm or PyPI file read past the `ttl` contacts upstream before it serves, so a
   blackholed upstream made each such read wait the full timeout. After one refresh fails
-  by connection error, timeout, or 5xx, that repository's documents are not refreshed for
-  30 seconds: placed files serve from the cache and anything else answers 502 at once. A
-  file upstream removes during that window keeps serving until it ends. The window is not
-  configurable, and is held in memory per process. An oversize or unparsable document and a
-  401/403 do not start it. A placed file whose document is still fresh is also served
-  without loading the document.
+  because the connection failed or no response headers arrived within the timeout, that
+  repository's documents are not refreshed for 30 seconds: placed files serve from the
+  cache and anything else answers 502 at once. A file upstream removes during that window
+  keeps serving until a read after the window ends refreshes the document. A 5xx does not
+  start the window: it is a fast answer, so it fails that one request with a 502, and a
+  stale copy still serves, as before. Nor do 401, 403, 429, an oversize or unparsable
+  document, or a body that stalls after the headers. The window is not configurable, and
+  is held in memory per process. A placed file whose document is still fresh is also
+  served without loading the document.
+- **Two pushes are now refused.** Publishing an npm tarball
+  that has a partial block after its end-of-archive marker is refused (SIN-59). npm and pnpm
+  install such a tarball, but yarn 1 cannot extract it. An OCI manifest whose
+  `org.opencontainers.image.source` or `org.opencontainers.image.revision` annotation
+  holds a NUL byte or invalid UTF-8 is a 400 (SIN-63), as a bad provenance header already
+  was.
 
 ## Rolling back
 
@@ -113,6 +142,12 @@ binary does not know `publicUrl` or `protocol: npm`, so it refuses to start on a
 has either. Remove `publicUrl` and the npm repositories before starting it. While rolled
 back, files an upstream dropped serve again and deleted names are no longer enforced as
 taken.
+
+Rolling back from 1.1.1 to 1.1.0 needs no configuration change. A 1.1.0 server serves no
+`time` for a hosted package, and a proxy goes back to the abbreviated document as its cache
+entries refresh, so yarn 4 refuses every version again unless `npmMinimalAgeGate: 0` is
+back in `.yarnrc.yml`. Restore it before you roll back. The `published_at` column stays,
+unused.
 
 Rolling back further than one release is not supported without restoring the
 backup taken before the upgrade.

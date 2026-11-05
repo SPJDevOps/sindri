@@ -22,6 +22,7 @@ func TestNoteRefresh_OnlyAnOutageStartsABackoff(t *testing.T) {
 		{"5xx is a fast answer", classify(http.StatusBadGateway), false},
 		{"caller went away", fmt.Errorf("%w: %w", ErrUpstreamUnavailable, down(context.Canceled)), false},
 		{"redirect refused", fmt.Errorf("%w: %w", ErrUpstreamUnavailable, down(errRedirectRefused)), false},
+		{"body stalls after the headers", fmt.Errorf("%w: reading body: %w", ErrUpstreamUnavailable, context.DeadlineExceeded), false},
 		{"401", classify(http.StatusUnauthorized), false},
 		{"403", classify(http.StatusForbidden), false},
 		{"429", classify(http.StatusTooManyRequests), false},
