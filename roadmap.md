@@ -856,7 +856,7 @@ v1.0.1 is published, with binaries and `ghcr.io/spjdevops/sindri:1.0.1` for amd6
 
 ---
 
-### M9 — npm adapter
+### M9 — npm adapter ✅
 
 **Goal.** `npm publish` and `npm install` work against hosted, proxy, and virtual npm
 repositories, so a team can retire Verdaccio. This is the third adapter, and the test of
@@ -914,6 +914,11 @@ bytes across all four clients, a proxy-only package, and the shadow guard
 `npmMinimalAgeGate: 0` in `.yarnrc.yml`: its 4.18 default gate wants the packument's `time`
 map, which Sindri does not serve yet (SIN-60), and the setting turns off yarn's age
 safeguard. The gate asserts the default still fails (YN0016) so it notices when SIN-60 lands.
+
+**Gate.** Verified on 2026-11-05 on main at 5bc324d, with Go 1.27.1: `make ci`,
+`make test-integration`, and `./scripts/npm-gate.sh` all passed, and so did CI on main.
+CI on #32 needed one rerun of its integration job for a flaky test (SIN-67). v1.1.0 is
+published, with binaries and `ghcr.io/spjdevops/sindri:1.1.0` for amd64 and arm64.
 
 ---
 
