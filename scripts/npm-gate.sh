@@ -16,6 +16,9 @@
 #
 # Credentials use PATH-level .npmrc keys, //localhost:8080/npm/<repo>/:_authToken.
 # Host-level keys gave ENEEDAUTH on publish and yarn 1 sent no token at all.
+# The token lines live in the user-level .npmrc (pnpm will not expand an env
+# reference in a project one) and the registry lines in each project's. README.md
+# shows these lines, and the gate fails if it stops containing them.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -70,6 +73,7 @@ export npm_config_globalconfig="${WORK}/global.npmrc"
 export npm_config_cache="${WORK}/npm-cache"
 export npm_config_update_notifier=false
 export npm_config_fund=false
+export npm_config_loglevel=warn
 export npm_config_audit=false
 : > "${npm_config_userconfig}"
 : > "${npm_config_globalconfig}"
@@ -108,11 +112,48 @@ versions() {
     python3 -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin)["versions"])))'
 }
 
-# write_npmrc DIR REPO: the project .npmrc, path-level token for that repo.
-write_npmrc() {
-  printf 'registry=%s/npm/%s/\n//%s/npm/%s/:_authToken=%s\n' \
-    "${BASE}" "$2" "${HOST}" "$2" "${SINDRI_TOKEN}" > "$1/.npmrc"
+# registry_line REPO and token_line REPO: the lines README.md shows. The token is
+# npm's own ${SINDRI_TOKEN} reference, so no file here holds the secret and the
+# gate exercises the same expansion a reader gets. The registry goes in the
+# project .npmrc; the token goes in the user-level one, because pnpm refuses to
+# expand environment variables in a credential from a project .npmrc.
+registry_line() { printf 'registry=%s/npm/%s/\n' "${BASE}" "$1"; }
+token_line() {
+  # shellcheck disable=SC2016  # the ${...} is for npm to expand, not the shell
+  printf '//%s/npm/%s/:_authToken=${SINDRI_TOKEN}\n' "${HOST}" "$1"
 }
+
+# write_npmrc DIR REPO: the project .npmrc, which names the registry only.
+write_npmrc() { registry_line "$2" > "$1/.npmrc"; }
+
+# The user-level .npmrc, with a path-level token for each repository the
+# clients below use. HOME is the temp directory, so yarn and pnpm find it too.
+for repo in internal-js javascript; do token_line "${repo}"; done > "${npm_config_userconfig}"
+cp "${npm_config_userconfig}" "${HOME}/.npmrc"
+
+# The README must show what this gate runs. Each line is looked up whole, so a
+# README that drifts from the gate fails here instead of misleading a reader.
+readme_has() { grep -Fxq -- "$1" "${ROOT}/README.md" || fail "README.md does not contain the line: $1"; }
+for repo in internal-js javascript; do
+  readme_has "$(registry_line "${repo}")"
+  readme_has "$(token_line "${repo}")"
+done
+# The commands are run below with the same name and flags, plus gate-only paths
+# (store, cache and lockfile-version options) on the pnpm and yarn lines.
+for cmd in 'npm publish --access public' 'npm install' 'pnpm import' \
+  'pnpm install --frozen-lockfile' 'yarn import' 'yarn install --frozen-lockfile'; do
+  readme_has "${cmd}"
+done
+# The yarn 4 settings README.md shows. They are written to .yarnrc.yml below.
+YARN4_README_LINES=(
+  'npmRegistryServer: "http://localhost:8080/npm/javascript/"'
+  'unsafeHttpWhitelist:'
+  '  - localhost'
+  'npmAlwaysAuth: true'
+  'npmAuthToken: "${SINDRI_TOKEN}"'
+)
+YARN4_AGE_GATE='npmMinimalAgeGate: 0'
+for line in "${YARN4_README_LINES[@]}" "${YARN4_AGE_GATE}"; do readme_has "${line}"; done
 
 # tree_hash DIR: one hash over the relative path and content of every file in
 # the installed package, so a changed, missing or extra file changes it.
@@ -141,7 +182,7 @@ echo "module.exports = require('./lib/answer.js') + 1;" > "${PUB}/index.js"
 echo "module.exports = 41;" > "${PUB}/lib/answer.js"
 printf 'sindri m9 gate fixture\n' > "${PUB}/README.md"
 write_npmrc "${PUB}" internal-js
-(cd "${PUB}" && npm publish --loglevel=warn --access public >/dev/null)
+(cd "${PUB}" && npm publish --access public >/dev/null)
 [ "$(versions "${BASE}/npm/internal-js/@acme%2fdemo")" = "${VERSION}" ] ||
   fail "internal-js packument does not list exactly @acme/demo@${VERSION}"
 echo "  published and listed in internal-js"
@@ -188,17 +229,15 @@ Y4DIR="${WORK}/yarn4-client"
 mkdir -p "${Y4DIR}"
 cp "${NPMDIR}/package.json" "${Y4DIR}/"
 : > "${Y4DIR}/yarn.lock"
-cat > "${Y4DIR}/.yarnrc.yml" <<YML
+{
+  cat <<YML
 nodeLinker: node-modules
 enableTelemetry: false
 enableGlobalCache: false
 cacheFolder: ${WORK}/yarn4-cache
-npmRegistryServer: "${BASE}/npm/javascript/"
-unsafeHttpWhitelist:
-  - localhost
-npmAlwaysAuth: true
-npmAuthToken: "${SINDRI_TOKEN}"
 YML
+  printf '%s\n' "${YARN4_README_LINES[@]}"
+} > "${Y4DIR}/.yarnrc.yml"
 Y4_BASE_RC="$(cat "${Y4DIR}/.yarnrc.yml")"
 # Without the setting below yarn 4 must fail today. If it ever installs, SIN-60
 # has landed and the workaround can go. Looked for by its code, YN0016.
@@ -213,7 +252,7 @@ rm -rf "${Y4DIR}/node_modules" "${WORK}/yarn4-cache"
 # yarn 4.18 defaults this gate to 1440 minutes and needs the packument's `time`
 # map, which Sindri does not serve yet (SIN-60). This setting turns off yarn's
 # age safeguard, so it is set for THIS directory only and for no other client.
-printf '%s\nnpmMinimalAgeGate: 0\n' "${Y4_BASE_RC}" > "${Y4DIR}/.yarnrc.yml"
+printf '%s\n%s\n' "${Y4_BASE_RC}" "${YARN4_AGE_GATE}" > "${Y4DIR}/.yarnrc.yml"
 (cd "${Y4DIR}" && YARN_IGNORE_PATH=1 "${YARN4[@]}" install >"${WORK}/yarn4.log" 2>&1) ||
   { cat "${WORK}/yarn4.log" >&2; fail "yarn 4 install failed (a 401 or a wrong dist.tarball is a product finding)"; }
 assert_demo "${Y4DIR}" yarn4
@@ -258,7 +297,7 @@ mkdir -p "${SHADOW}"
 echo '{ "name": "is-number", "version": "999.0.0-gate", "main": "index.js", "license": "MIT" }' > "${SHADOW}/package.json"
 echo "module.exports = function () { return 'hosted'; };" > "${SHADOW}/index.js"
 write_npmrc "${SHADOW}" internal-js
-(cd "${SHADOW}" && npm publish --loglevel=warn --tag gate >/dev/null)
+(cd "${SHADOW}" && npm publish --tag gate >/dev/null)
 [ "$(versions "${BASE}/npm/proxy-first/is-number")" = "999.0.0-gate" ] ||
   fail "proxy-first packument for is-number is not ONLY 999.0.0-gate (the proxy's versions leaked in)"
 echo "  is-number through proxy-first lists only 999.0.0-gate"
@@ -268,7 +307,7 @@ SCOPE="${WORK}/scope"
 mkdir -p "${SCOPE}"
 echo '{ "name": "@types/sindri-gate", "version": "1.0.0", "license": "MIT" }' > "${SCOPE}/package.json"
 write_npmrc "${SCOPE}" internal-js
-(cd "${SCOPE}" && npm publish --loglevel=warn --access public >/dev/null)
+(cd "${SCOPE}" && npm publish --access public >/dev/null)
 # Control: npmjs really has @types/node, and the proxy alone serves it.
 [ "$(status "${BASE}/npm/npm/@types%2fnode")" = "200" ] ||
   fail "control failed: the npm proxy alone does not serve @types/node"

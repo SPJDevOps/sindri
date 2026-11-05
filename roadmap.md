@@ -307,7 +307,8 @@ An upload must prove what it is before it is placed: the wheel `METADATA` or
 sdist `PKG-INFO`, the filename, and the form fields must agree on project and
 version, and a claimed `sha256_digest` is checked against the received bytes.
 A published file is immutable, so a re-upload of identical bytes is idempotent
-and one with different bytes is 409. Adapter path markers (`simple`, `packages`,
+and one with different bytes is 409 (a deleted file's name is later refused too, even with
+identical bytes; see [ADR 13](docs/adr/0013-pypi-write-time-validation-and-immutable-files.md)). Adapter path markers (`simple`, `packages`,
 `upload`, `blobs`, `manifests`, `tags`, `uploads`) are reserved repository name
 segments, which is what makes a slash-containing repository name unambiguous to
 route ([ADR 13](docs/adr/0013-pypi-write-time-validation-and-immutable-files.md)).
@@ -883,7 +884,7 @@ the claim that a third protocol is cheap.
 - [x] `npm` in `repos:` short form, `testdata/config/sindri.yaml`, and `testdata/manifests/`,
   so both golden tests cover it
 - [x] npm added to the anonymous-access test, the I2 placement tests, and the UI
-- [ ] Docs: a configuration reference page listing every field, the README "Not in v1"
+- [x] Docs: a configuration reference page listing every field, the README "Not in v1"
   list updated, and an npm example in the quickstart, which its gate script runs
 
 **Out of scope.** `npm unpublish` beyond the management API delete, the npm audit

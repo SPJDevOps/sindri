@@ -23,8 +23,10 @@ S3-compatible bucket, and serves two protocols:
   upstream distribution-spec push, pull, and content-management workflows pass.
 - **`/pypi`** — PyPI. `twine upload` and `pip install` work. See
   [using Sindri as a pip index](#using-sindri-as-a-pip-index).
+- **`/npm`** — npm. `npm publish` and `npm install` work, and so do pnpm and yarn. See
+  [using Sindri as an npm registry](#using-sindri-as-an-npm-registry).
 
-Repositories are hosted, proxy (pypi.org, Docker Hub, ghcr.io), or virtual. Artifacts
+Repositories are hosted, proxy (pypi.org, npmjs.org, Docker Hub, ghcr.io), or virtual. Artifacts
 carry lifecycle state and evidence, and `/api/v1/decisions` answers whether a digest is
 approved for an environment. Repositories, stages, and access are declared in the
 configuration file and reconciled on startup. Every request authenticates, with an
@@ -42,7 +44,7 @@ a multi-architecture image.
 
 ## What v1 does
 
-- **Protocols:** OCI (Docker, Helm charts) and PyPI
+- **Protocols:** OCI (Docker, Helm charts), PyPI, and npm
 - **Repository types:** hosted, proxy, and virtual, cleanly separated
 - **Lifecycle:** stages and promotion that change trust status instead of copying bytes
 - **Evidence:** SBOMs and signatures attached to an artifact identity
@@ -56,7 +58,7 @@ a multi-architecture image.
 Deliberately deferred, so nothing is silently missing. The reasons are in
 [roadmap.md](roadmap.md#scope-of-v1).
 
-- **Protocols:** npm, Maven, and Helm's own repository format (Helm charts as OCI
+- **Protocols:** Maven, and Helm's own repository format (Helm charts as OCI
   artifacts work today)
 - **OCI:** the referrers API and cross-repository blob mounts
 - **PyPI:** yanking; removing a file is a management API call
@@ -68,6 +70,8 @@ Deliberately deferred, so nothing is silently missing. The reasons are in
 - **Config:** a Git-polling operator and webhooks
 - **Auth:** SAML, LDAP, and fine-grained per-path ACLs
 - **UI:** administration in the browser; the UI is read-only
+- **npm:** upstreams that need a token (SIN-53), and real publish times in packuments
+  (SIN-60)
 
 ## Quickstart
 
@@ -153,6 +157,8 @@ an image whose tag moved and that was never promoted, and `sindri gc` deletes it
 to a running server with an administrator's `$SINDRI_TOKEN`. Set `worker.gc.interval` to
 run it on a schedule. See [ADR 19](docs/adr/0019-garbage-collection-roots-write-intent-and-sweep.md).
 
+Every key the file accepts is in the [configuration reference](docs/configuration.md).
+
 Identity: configure `auth.oidc` and `auth.admins`, and people use their identity
 provider's ID token as the password for docker, pip, and twine. CI uses machine tokens
 from `POST /api/v1/tokens`. See [ADR 18](docs/adr/0018-authentication-and-rbac-in-v1.md).
@@ -205,15 +211,117 @@ Worth knowing before you point real work at it:
   version and not by trust. A virtual repository listing your hosted repository before a
   pypi.org proxy never serves a name you publish from the proxy, whatever version the
   proxy offers. That is the dependency-confusion defence of invariant I5.
-- **A published file is immutable.** Re-uploading identical bytes is a no-op; different
-  bytes under a filename already published is a 409, because consumers pin the hash the
-  index advertised. Bump the version to republish. See
+- **A published file is immutable.** Re-uploading identical bytes is a no-op while the
+  file exists; different bytes under a filename already published is a 409, because
+  consumers pin the hash the index advertised. A deleted file's name stays taken too: it
+  is refused even with identical bytes. Bump the version to republish. See
   [ADR 13](docs/adr/0013-pypi-write-time-validation-and-immutable-files.md).
 - **Wheels and sdists only** (`.whl`, `.tar.gz`, `.tgz`), and an upload must be
   self-consistent: the filename, the packaged metadata, and twine's form fields have to
   agree on project and version. Build tools satisfy that; a hand-rolled `curl -F` may not.
 - **No yanking.** Removing a file is a `DELETE` on its management API path,
   `/api/v1/repositories/{repo}/packages/{name}/versions/{version}/files/{filename}`.
+
+## Using Sindri as an npm registry
+
+Sindri serves npm at `/npm/{repo}/`, for publishing and installing, with npm, pnpm, and
+yarn. Declare the repositories in the configuration file. npm packuments carry absolute
+tarball URLs, so a server with an npm repository must be told its own address with
+`publicUrl`, and refuses to load without it:
+
+```yaml
+publicUrl: http://localhost:8080   # the origin your clients use
+
+repos:
+  internal-js: { protocol: npm }                       # hosted
+  npm:         { upstream: npm }                       # proxy of registry.npmjs.org
+  javascript:  { members: [internal-js, npm] }         # virtual
+```
+
+Point a project at a repository with a `.npmrc`, and keep the token out of the project:
+put it in your user-level `~/.npmrc`, under the repository's own path. A host-level key
+makes `npm publish` fail with `ENEEDAUTH`, and pnpm refuses to expand `${SINDRI_TOKEN}`
+in a credential from a project `.npmrc`. To publish to `internal-js`, the project's
+`.npmrc` names the registry:
+
+```ini
+registry=http://localhost:8080/npm/internal-js/
+```
+
+and `~/.npmrc` carries the token:
+
+```ini
+//localhost:8080/npm/internal-js/:_authToken=${SINDRI_TOKEN}
+```
+
+```bash
+npm publish --access public
+```
+
+To install through the virtual repository, name it instead, and add its token line:
+
+```ini
+registry=http://localhost:8080/npm/javascript/
+//localhost:8080/npm/javascript/:_authToken=${SINDRI_TOKEN}
+```
+
+```bash
+npm install
+```
+
+`SINDRI_TOKEN` is the bootstrap token, or any token with the right role; the real
+deployment uses an identity provider's ID token or a machine token, the same as for pip.
+pnpm reads the same `.npmrc`. `pnpm import` turns npm's `package-lock.json` into a
+lockfile, and `pnpm install --frozen-lockfile` installs from it. Yarn 1 reads it too:
+
+```bash
+pnpm import
+pnpm install --frozen-lockfile
+yarn import
+yarn install --frozen-lockfile
+```
+
+Yarn 4 reads `.yarnrc.yml` instead, and allows plain `http` only for hosts you list:
+
+```yaml
+npmRegistryServer: "http://localhost:8080/npm/javascript/"
+unsafeHttpWhitelist:
+  - localhost
+npmAlwaysAuth: true
+npmAuthToken: "${SINDRI_TOKEN}"
+npmMinimalAgeGate: 0
+```
+
+**`npmMinimalAgeGate: 0` turns off yarn 4's age safeguard, and yarn 4 needs it for now.**
+Yarn 4.18 refuses to install a package younger than a day by default, and decides the age
+from the `time` map in the packument. Sindri does not serve that map yet, so yarn 4
+refuses every package Sindri serves with a quarantine error (`YN0016`). Setting the gate
+to `0` installs them, and also means yarn will no longer hold back a freshly published
+package from you. Set it only in the projects that install from Sindri. Real publish
+times are tracked as SIN-60.
+
+Or run [`scripts/npm-gate.sh`](scripts/npm-gate.sh), which does all of the above against
+the Compose stack.
+
+Worth knowing before you point real work at it:
+
+- **Every request authenticates**, packuments and tarballs included.
+  Publishing needs the write role on the repository.
+- **Use one virtual repository, not two registries.** A virtual repository listing your
+  hosted repository before the npmjs proxy never serves a name you publish from the proxy,
+  whatever version the proxy offers, and a hosted `@scope/name` claims the whole scope.
+  That is the dependency-confusion defence of invariant I5. See
+  [ADR 24](docs/adr/0024-npm-packument-and-dist-tags.md).
+- **A published version is immutable.** Publishing the same version again is refused, and
+  so is publishing a version you deleted, even with identical bytes. Bump the version.
+- **Files upstream drops disappear.** Once npmjs stops listing a file, a proxy answers 404
+  for it at once, in a lockfile install too. It serves again if npmjs relists it, and the
+  row is removed after `worker.retention.proxyStaleAfter`.
+- **An upstream that refuses Sindri's credential is a 502**, not a 404, and fails a
+  virtual repository's walk; a cached copy still serves. See
+  [upgrading](docs/upgrading.md).
+- **Token-authenticated private npm upstreams are not supported yet** (SIN-53). The
+  `npm` preset reaches the public registry anonymously.
 
 ## Why
 

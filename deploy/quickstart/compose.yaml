@@ -66,8 +66,11 @@ configs:
       listen: :8080
       storage: /var/lib/sindri
       database: postgres://sindri:sindri@postgres:5432/sindri?sslmode=disable
+      # npm packuments carry absolute tarball URLs, so a server with an npm
+      # repository must know the address its clients use.
+      publicUrl: http://localhost:8080
       auth:
-        # The bootstrap administrator token: docker login uses it below.
+        # The bootstrap administrator token: docker login and npm use it below.
         static_token: $${SINDRI_TOKEN}
         admins: [authors]
         oidc:
@@ -76,6 +79,10 @@ configs:
           clientSecret: quickstart-not-a-secret
           redirectUrl: http://localhost:8080/auth/callback
           scopes: [openid, profile, email, groups]
+      repos:
+        # A hosted npm repository. Container images need no declaration here:
+        # docker push creates its repository.
+        js: { protocol: npm }
   dex:
     content: |
       issuer: http://localhost:5556/dex
