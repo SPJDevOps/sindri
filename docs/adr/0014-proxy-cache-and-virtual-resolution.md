@@ -112,9 +112,13 @@ What an operator can do about a known-bad digest today, traced in the code:
   repository declared with `ttl_seconds` of zero, which the API accepts and the table
   defaults to, means "fresh forever", and its hits are never evicted. Eviction removes the
   tag only; the digest still serves until a collection reclaims it. A digest pulled with no
-  tag has no tag to remove: its cache row is deleted (`evictPlacement` in
-  `internal/registry/evict.go` skips digest references) and nothing else changes, so it was
-  never reached by a tag and is collectable once outside the grace period.
+  tag has no tag to remove, but its cache row is itself a collection root: every manifest
+  fetch, by tag or digest, records the manifest digest in `remote_cache.blob_digest`
+  (`internal/remote/oci.go`, `PutCacheEntry`), and `gc.sql` roots that column and follows
+  `manifest_children`. Evicting the row (`evictOne`; `evictPlacement` skips digest
+  references, so nothing else changes) is what unroots the image, and it becomes
+  collectable once it is also outside the grace period. With `ttl_seconds` of zero the row
+  is never evicted, so the image stays rooted and no collection takes it.
 
 A follow-up (SIN-73) should add an administrator route that evicts one digest from one proxy
 repository, so a known-bad image need not cost the whole repository. It has the same limit
@@ -122,7 +126,12 @@ as removal: unless it also makes the repository refuse that digest afterwards, t
 fetches the image from upstream again.
 
 **Mutable names go through the TTL; immutable ones do not.** An OCI digest
-reference, once placed, is served locally forever. An OCI tag and a PyPI
+reference, once placed, is served locally without a TTL check or an upstream call, for as
+long as its placement and bytes exist. They go only when retention has evicted the cache
+row and a collection has then reclaimed the image; the next pull by digest goes upstream,
+and is a 404 if upstream has dropped it. Where retention or collection is not running
+(scheduled collection is off by default), or the repository's TTL is zero, the placement is
+not removed and the digest serves indefinitely. An OCI tag and a PyPI
 project index are mutable upstream, so they are served locally only while
 their `remote_cache` row is fresh. A placed tag is not a reason to skip the
 TTL, or `latest` would be pinned to its first pull for good.
