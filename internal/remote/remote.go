@@ -324,9 +324,6 @@ func classify(status int) error {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return deniedError(fmt.Sprintf("status %d", status))
 	default:
-		if status >= 500 {
-			return fmt.Errorf("%w: %w: status %d", ErrUpstreamUnavailable, errUpstreamDown, status)
-		}
 		return fmt.Errorf("%w: status %d", ErrUpstreamUnavailable, status)
 	}
 }

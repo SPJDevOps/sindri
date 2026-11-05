@@ -74,14 +74,16 @@ func TestProxy_OutageWaitsOnlyOncePerWindow(t *testing.T) {
 			e, clock := newStaleEnv(t, p)
 			e.up.list("1.0.0", "2.0.0", "3.0.0") // 3.0.0 is listed, never fetched
 			e.age(t)
-			e.up.answer(http.StatusServiceUnavailable)
+			e.up.dropConnections()
 
 			before := e.requests.Load()
 			if got := e.status(t, "up", p.filePath("1.0.0")); got != http.StatusOK {
 				t.Fatalf("first read past the TTL = %d, want the placed copy (200)", got)
 			}
-			if got := e.requests.Load() - before; got != 1 {
-				t.Fatalf("first read made %d upstream requests, want the one that failed", got)
+			// net/http retries a GET once when a reused connection is cut, so the
+			// one failed refresh can show as two requests.
+			if got := e.requests.Load() - before; got < 1 || got > 2 {
+				t.Fatalf("first read made %d upstream requests, want the one failed refresh", got)
 			}
 
 			before = e.requests.Load()
@@ -105,7 +107,7 @@ func TestProxy_OutageWaitsOnlyOncePerWindow(t *testing.T) {
 			if got := e.status(t, "up", p.filePath("1.0.0")); got != http.StatusOK {
 				t.Fatalf("read after the window = %d, want the placed copy (200)", got)
 			}
-			if got := e.requests.Load() - before; got != 1 {
+			if got := e.requests.Load() - before; got < 1 || got > 2 {
 				t.Fatalf("read after the window made %d upstream requests, want one retry", got)
 			}
 		})
@@ -164,7 +166,7 @@ func TestProxy_FileGoneUpstreamIsNotFoundAfterRecovery(t *testing.T) {
 	for _, p := range goneProtocols() {
 		t.Run(p.name, func(t *testing.T) {
 			e, clock := newStaleEnv(t, p)
-			e.up.answer(http.StatusServiceUnavailable)
+			e.up.dropConnections()
 			if got := e.status(t, "up", p.filePath("1.0.0")); got != http.StatusOK {
 				t.Fatalf("read during the outage = %d, want the placed copy (200)", got)
 			}
@@ -189,7 +191,7 @@ func TestProxy_FileGoneUpstreamIsNotFoundAfterRecovery(t *testing.T) {
 	}
 }
 
-func TestProxy_BadDocumentDoesNotBackOffTheRepository(t *testing.T) {
+func TestProxy_AnswerThatIsNotAnOutageDoesNotBackOffTheRepository(t *testing.T) {
 	oversize := `{"name":"demo","pad":"` + strings.Repeat("x", 8192) + `"}`
 	cases := []struct {
 		name string
@@ -201,6 +203,8 @@ func TestProxy_BadDocumentDoesNotBackOffTheRepository(t *testing.T) {
 		{"another project's document", func(u *goneUpstream) { u.serveDoc(`{"name":"other","files":[],"versions":{}}`) }, "", nil},
 		{"unauthenticated", func(u *goneUpstream) { u.answer(http.StatusUnauthorized) }, "", nil},
 		{"refused credential", func(u *goneUpstream) { u.answer(http.StatusForbidden) }, "", nil},
+		{"server error", func(u *goneUpstream) { u.answer(http.StatusServiceUnavailable) }, "", nil},
+		{"rate limited", func(u *goneUpstream) { u.answer(http.StatusTooManyRequests) }, "", nil},
 		{"oversize", func(u *goneUpstream) { u.serveDoc(oversize) }, "npm",
 			[]envOption{func(o *remote.Options) { o.MaxNPMPackumentBytes = 4096 }}},
 	}
@@ -212,7 +216,7 @@ func TestProxy_BadDocumentDoesNotBackOffTheRepository(t *testing.T) {
 			t.Run(p.name+"/"+tc.name, func(t *testing.T) {
 				e, _ := newStaleEnv(t, p, tc.opts...)
 				tc.do(e.up)
-				// Each read refreshes: a bad document is not an outage, so no read
+				// Each read refreshes: a bad document or a 5xx is not an outage, so no read
 				// is turned away unasked, and the placed copy keeps serving.
 				for i := range 3 {
 					before := e.requests.Load()

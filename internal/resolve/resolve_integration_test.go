@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
@@ -547,10 +546,9 @@ func TestProxy_NegativeCacheSeparateFromFiveHundred(t *testing.T) {
 
 	// Separate proxy for 503 behaviour.
 	status.Store(http.StatusServiceUnavailable)
-	clock := newTestClock()
 	env2 := newEnv(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
-	}, withClock(clock))
+	})
 	env2.createJSON(t, "/api/v1/repositories", map[string]any{
 		"name": "proxy/five", "type": "proxy", "protocol": "pypi",
 		"upstream_url": env2.upstream.URL + "/simple",
@@ -562,7 +560,6 @@ func TestProxy_NegativeCacheSeparateFromFiveHundred(t *testing.T) {
 		t.Fatal("503 must not become a cached 404")
 	}
 	n := env2.requests.Load()
-	clock.advance(31 * time.Second) // past the backoff the 503 started (SIN-61)
 	_ = env2.do(t, http.MethodGet, "/pypi/proxy/five/simple/x/", nil,
 		"application/vnd.pypi.simple.v1+json")
 	if env2.requests.Load() <= n {

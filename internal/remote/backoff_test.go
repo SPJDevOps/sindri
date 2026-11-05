@@ -19,7 +19,7 @@ func TestNoteRefresh_OnlyAnOutageStartsABackoff(t *testing.T) {
 		{"success", nil, false},
 		{"connection failure", fmt.Errorf("%w: %w", ErrUpstreamUnavailable, down(errors.New("connection refused"))), true},
 		{"timeout", fmt.Errorf("%w: %w", ErrUpstreamUnavailable, down(context.DeadlineExceeded)), true},
-		{"5xx", classify(http.StatusBadGateway), true},
+		{"5xx is a fast answer", classify(http.StatusBadGateway), false},
 		{"caller went away", fmt.Errorf("%w: %w", ErrUpstreamUnavailable, down(context.Canceled)), false},
 		{"redirect refused", fmt.Errorf("%w: %w", ErrUpstreamUnavailable, down(errRedirectRefused)), false},
 		{"401", classify(http.StatusUnauthorized), false},
@@ -43,7 +43,8 @@ func TestNoteRefresh_OnlyAnOutageStartsABackoff(t *testing.T) {
 func TestNoteRefresh_ASuccessEndsTheBackoffAndTheWindowExpires(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	c := &Client{now: func() time.Time { return now }, backoffUntil: map[string]time.Time{}}
-	c.noteRefresh("r", classify(http.StatusServiceUnavailable))
+	outage := fmt.Errorf("%w: %w", ErrUpstreamUnavailable, down(errors.New("connection refused")))
+	c.noteRefresh("r", outage)
 	if !c.inBackoff("r") || c.inBackoff("other") {
 		t.Fatal("a failure must back off its own repository only")
 	}
@@ -51,7 +52,7 @@ func TestNoteRefresh_ASuccessEndsTheBackoffAndTheWindowExpires(t *testing.T) {
 	if c.inBackoff("r") {
 		t.Fatal("the window did not expire")
 	}
-	c.noteRefresh("r", classify(http.StatusServiceUnavailable))
+	c.noteRefresh("r", outage)
 	c.noteRefresh("r", nil)
 	if c.inBackoff("r") {
 		t.Fatal("a success did not clear the backoff")

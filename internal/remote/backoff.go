@@ -19,11 +19,13 @@ import (
 // after an upstream recovers.
 const refreshBackoff = 30 * time.Second
 
-// errUpstreamDown marks a failure of the upstream itself: a connection that
-// failed or timed out, or a 5xx. It is what starts a backoff, and nothing else
-// does. ErrUpstreamUnavailable is wider, since an oversize or unparsable
-// document and a 401/403 wrap it too, and one package's bad document says nothing
-// about the other packages of the repository.
+// errUpstreamDown marks a failure to get an answer from the upstream: a
+// connection that failed, or a timeout before the response headers. It is what
+// starts a backoff, and nothing else does. A 5xx is an answer, and a fast one,
+// so it fails its own request and costs the next no more. ErrUpstreamUnavailable
+// is wider, since a 5xx, an oversize or unparsable document and a 401/403 wrap
+// it too, and one package's bad document says nothing about the other packages
+// of the repository.
 var errUpstreamDown = errors.New("upstream not answering")
 
 // ErrFileGone means a refresh showed that upstream no longer lists the file. It
@@ -47,9 +49,9 @@ func (c *Client) inBackoff(repo string) bool {
 	return ok && c.now().Before(until)
 }
 
-// noteRefresh records what a document refresh learned about the upstream. An
-// answer, including a 404, ends a backoff; an outage starts one; a refusal or a
-// bad document changes nothing.
+// noteRefresh records what a document refresh learned about the upstream. Success
+// or a 404 ends a backoff; an outage (no answer) starts one; any other
+// outcome (a 5xx, 401, 403, 429, a bad document) changes nothing.
 func (c *Client) noteRefresh(repo string, err error) {
 	c.backoffMu.Lock()
 	defer c.backoffMu.Unlock()
