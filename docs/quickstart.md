@@ -1,7 +1,9 @@
 # Quickstart
 
 A registry with a web UI on one machine, in about two minutes, with nothing
-installed but Docker. You push an image, sign in, and look at it.
+installed but Docker for the image steps. You push an image, sign in, and look at
+it. The npm steps also publish and install a package, and those need Node.js and
+npm on your machine; without them the script skips the npm steps and says so.
 
 This setup is for trying Sindri out. Its identity provider signs in anyone who
 opens a browser on this machine, as an administrator. For a real deployment,
@@ -37,7 +39,7 @@ name: sindri-quickstart
 
 services:
   postgres:
-    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
     environment:
       POSTGRES_USER: sindri
       POSTGRES_PASSWORD: sindri
@@ -53,7 +55,7 @@ services:
   # The identity provider for the UI. Its mock connector signs everyone in as
   # one example user, with no password, which is what makes this a demo.
   dex:
-    image: ghcr.io/dexidp/dex:v2.46.0@sha256:933fcd3f523338c847b88ef84a7145fb2fcb7b9917f08418612afeaaa2001777
+    image: ghcr.io/dexidp/dex:v2.46.1@sha256:65b72ca0f4b0bf6d4ada84ec21da8851782563404ac7b8f926923d27ceced9ab
     command: ["dex", "serve", "/etc/dex/config.yaml"]
     configs:
       - source: dex
@@ -91,8 +93,11 @@ configs:
       listen: :8080
       storage: /var/lib/sindri
       database: postgres://sindri:sindri@postgres:5432/sindri?sslmode=disable
+      # npm packuments carry absolute tarball URLs, so a server with an npm
+      # repository must know the address its clients use.
+      publicUrl: http://localhost:8080
       auth:
-        # The bootstrap administrator token: docker login uses it below.
+        # The bootstrap administrator token: docker login and npm use it below.
         static_token: $${SINDRI_TOKEN}
         admins: [authors]
         oidc:
@@ -101,6 +106,10 @@ configs:
           clientSecret: quickstart-not-a-secret
           redirectUrl: http://localhost:8080/auth/callback
           scopes: [openid, profile, email, groups]
+      repos:
+        # A hosted npm repository. Container images need no declaration here:
+        # docker push creates its repository.
+        js: { protocol: npm }
   dex:
     content: |
       issuer: http://localhost:5556/dex
@@ -126,7 +135,7 @@ volumes:
 ```
 <!-- /quickstart:compose -->
 
-## 2. Start it, push an image, open the UI
+## 2. Start it, push an image, publish a package, open the UI
 
 <!-- quickstart:begin -->
 ```bash
@@ -138,18 +147,45 @@ docker pull alpine:3.20
 docker tag alpine:3.20 localhost:8080/demo/app:1.0
 docker push localhost:8080/demo/app:1.0
 
+# Publish an npm package to the hosted repository `js`, then install it from
+# another directory. This needs npm; without it, these steps are skipped.
+# The token is keyed to the repository's own path.
+if command -v npm >/dev/null 2>&1; then
+  mkdir js-demo js-app
+  cat > js-demo/package.json <<'EOF'
+{ "name": "@demo/hello", "version": "1.0.0", "main": "index.js", "license": "MIT" }
+EOF
+  echo "module.exports = 'hello from sindri';" > js-demo/index.js
+  for dir in js-demo js-app; do
+    printf 'registry=http://localhost:8080/npm/js/\n//localhost:8080/npm/js/:_authToken=%s\n' "$SINDRI_TOKEN" > "$dir/.npmrc"
+  done
+  (cd js-demo && npm publish --access public)
+  (cd js-app && npm install @demo/hello)
+else
+  echo "npm is not installed: skipping the npm steps"
+fi
+
 open http://localhost:8080/ui/
 ```
 <!-- quickstart:end -->
 
 `SINDRI_TOKEN` is the bootstrap administrator credential: `docker login` uses
-it as the password. On Linux, use `xdg-open` instead of `open`, or paste the
+it as the password, and the `.npmrc` files carry it as npm's auth token. The
+npm steps run only if `npm` is on your `PATH`, so Node.js and npm are the one thing
+here that is not Docker. On Linux, use `xdg-open` instead of `open`, or paste the
 URL into a browser.
 
 The browser goes through Dex and back, and lands on the repository list
 signed in as the example user. Open `demo/app`, then tag `1.0`, to see the
 artifact page: digest, owner, provenance, the manifest and its layers, and its
 state in each lifecycle stage.
+
+The compose file declares `js` under `repos:` and sets `publicUrl`. npm
+packuments carry absolute tarball URLs, so Sindri refuses to start with an npm
+repository and no `publicUrl`. Both keys, and every other one, are in the
+[configuration reference](configuration.md). To install from npmjs through
+Sindri as well, add a proxy and a virtual repository; see
+[Using Sindri as an npm registry](../README.md#using-sindri-as-an-npm-registry).
 
 ## 3. Stop it
 
@@ -162,11 +198,16 @@ docker compose down -v     # deletes them too
 
 - **Configuration as code.** Repositories, access, and lifecycle stages
   belong in `sindri.yaml`, reconciled on every start. See
-  [ARCHITECTURE.md section 8](../ARCHITECTURE.md#8-configuration-as-code).
+  [ARCHITECTURE.md section 8](../ARCHITECTURE.md#8-configuration-as-code), and
+  every key is in the [configuration reference](configuration.md).
 - **Your identity provider.** Point `auth.oidc` at it and set `auth.admins`
   to a group of yours. Then people use their ID token as the password for
-  docker, pip, and twine. See
+  docker, pip, twine, and npm. See
   [ADR 18](adr/0018-authentication-and-rbac-in-v1.md).
+- **More repositories.** Add a proxy of registry.npmjs.org and a virtual
+  repository in front of `js`, as
+  [the README](../README.md#using-sindri-as-an-npm-registry) shows, and the
+  same for pip.
 - **Storage.** `storage: s3://bucket/prefix` uses any S3-compatible store.
 - **Garbage collection.** `sindri gc --dry-run` lists what nothing
   references any more. See

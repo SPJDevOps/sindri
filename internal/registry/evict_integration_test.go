@@ -3,6 +3,7 @@
 package registry_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
@@ -294,5 +295,133 @@ func TestEvictProxyCache_HostedRepositoriesAreNeverTouched(t *testing.T) {
 	}
 	if f.tags("1.0") != 1 {
 		t.Fatal("retention removed a hosted tag")
+	}
+}
+
+func (f *evictFixture) place(repo, pkg, version, filename string) {
+	f.t.Helper()
+	blob, err := f.cas.PutBytes(f.t.Context(), []byte("bytes of "+filename))
+	if err != nil {
+		f.t.Fatalf("PutBytes: %v", err)
+	}
+	if _, err := f.reg.PlaceCachedFile(f.t.Context(), registry.PlaceCachedFileParams{
+		Repo: repo, Package: pkg, Version: version, Filename: filename, Blob: blob,
+	}); err != nil {
+		f.t.Fatalf("PlaceCachedFile %s: %v", filename, err)
+	}
+}
+
+// Files upstream dropped are kept for the stale allowance, counted from the
+// flag, and then go with the version and package rows they leave empty.
+func TestEvictProxyCache_GoneFilesGoAfterTheAllowance(t *testing.T) {
+	f := newEvictFixture(t)
+	ctx := t.Context()
+	f.proxy("pyproxy", model.ProtocolPyPI, 60, 0)
+	f.place("pyproxy", "demo", "1.0", "demo-1.0-py3-none-any.whl")
+	f.place("pyproxy", "demo", "2.0", "demo-2.0-py3-none-any.whl")
+	if err := f.reg.SyncProxyFiles(ctx, "pyproxy", "demo", []string{"demo-2.0-py3-none-any.whl"}); err != nil {
+		t.Fatalf("SyncProxyFiles: %v", err)
+	}
+
+	if res := f.evict(); res.GoneFiles != 0 {
+		t.Fatalf("evict inside the allowance = %+v, want nothing removed", res)
+	}
+	if n := f.count(`SELECT count(*) FROM files`); n != 2 {
+		t.Fatalf("%d files inside the allowance, want 2", n)
+	}
+
+	f.exec(`UPDATE files SET upstream_gone_at = now() - interval '2 hours' WHERE upstream_gone_at IS NOT NULL`)
+	if res := f.evict(); res.GoneFiles != 1 {
+		t.Fatalf("evict after the allowance = %+v, want one gone file", res)
+	}
+	for table, n := range map[string]int{
+		"files":    f.count(`SELECT count(*) FROM files`),
+		"versions": f.count(`SELECT count(*) FROM versions`),
+		"packages": f.count(`SELECT count(*) FROM packages`),
+	} {
+		if n != 1 {
+			t.Fatalf("%s holds %d rows, want the listed file's alone", table, n)
+		}
+	}
+
+	// The last file going takes the version and the package with it.
+	if err := f.reg.SyncProxyFiles(ctx, "pyproxy", "demo", nil); err != nil {
+		t.Fatalf("SyncProxyFiles: %v", err)
+	}
+	f.exec(`UPDATE files SET upstream_gone_at = now() - interval '2 hours'`)
+	if res := f.evict(); res.GoneFiles != 1 {
+		t.Fatalf("evict = %+v, want the last gone file", res)
+	}
+	if n := f.count(`SELECT (SELECT count(*) FROM files) + (SELECT count(*) FROM versions) + (SELECT count(*) FROM packages)`); n != 0 {
+		t.Fatalf("%d rows remain after the package's last file went", n)
+	}
+}
+
+func TestEvictProxyCache_RelistingClearsTheFlagAndKeepsTheFirstTime(t *testing.T) {
+	f := newEvictFixture(t)
+	ctx := t.Context()
+	f.proxy("pyproxy", model.ProtocolPyPI, 60, 0)
+	f.place("pyproxy", "demo", "1.0", "demo-1.0-py3-none-any.whl")
+	if err := f.reg.SyncProxyFiles(ctx, "pyproxy", "demo", nil); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(`UPDATE files SET upstream_gone_at = now() - interval '2 hours'`)
+	// A second refresh that still lacks it must not restart the clock.
+	if err := f.reg.SyncProxyFiles(ctx, "pyproxy", "demo", nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(`SELECT count(*) FROM files WHERE upstream_gone_at < now() - interval '1 hour'`); n != 1 {
+		t.Fatal("a repeated refresh moved the time the file went missing")
+	}
+	if err := f.reg.SyncProxyFiles(ctx, "pyproxy", "demo", []string{"demo-1.0-py3-none-any.whl"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(`SELECT count(*) FROM files WHERE upstream_gone_at IS NOT NULL`); n != 0 {
+		t.Fatal("a relisted file stayed flagged")
+	}
+}
+
+func TestEvictProxyCache_PlacingAFlaggedFileClearsTheFlag(t *testing.T) {
+	f := newEvictFixture(t)
+	f.proxy("pyproxy", model.ProtocolPyPI, 60, 0)
+	f.place("pyproxy", "demo", "1.0", "demo-1.0-py3-none-any.whl")
+	f.exec(`UPDATE files SET upstream_gone_at = now()`)
+	f.place("pyproxy", "demo", "1.0", "demo-1.0-py3-none-any.whl")
+	if n := f.count(`SELECT count(*) FROM files WHERE upstream_gone_at IS NOT NULL`); n != 0 {
+		t.Fatal("a successful placement left the gone flag set")
+	}
+}
+
+// Hosted bytes are the repository's own, not a cache of anyone's.
+func TestEvictProxyCache_HostedFilesAreNeverFlagged(t *testing.T) {
+	f := newEvictFixture(t)
+	ctx := t.Context()
+	if _, err := f.reg.CreateRepository(ctx, registry.CreateRepositoryParams{
+		Name: "internal", Type: model.RepoTypeHosted, Protocol: model.ProtocolPyPI,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blob, err := f.cas.PutBytes(ctx, []byte("a hosted wheel"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.reg.Publish(ctx, registry.PublishParams{
+		Repo: "internal", Package: "demo", Version: "1.0", Filename: "demo-1.0-py3-none-any.whl",
+		Body: bytes.NewReader([]byte("a hosted wheel")), Size: blob.Size,
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if err := f.reg.SyncProxyFiles(ctx, "internal", "demo", nil); err != nil {
+		t.Fatalf("SyncProxyFiles: %v", err)
+	}
+	if n := f.count(`SELECT count(*) FROM files WHERE upstream_gone_at IS NOT NULL`); n != 0 {
+		t.Fatal("a hosted file was flagged")
+	}
+	f.exec(`UPDATE files SET upstream_gone_at = now() - interval '30 days'`)
+	if res := f.evict(); res.GoneFiles != 0 {
+		t.Fatalf("evict = %+v; retention removed a hosted file", res)
+	}
+	if n := f.count(`SELECT count(*) FROM files`); n != 1 {
+		t.Fatal("a hosted file was removed")
 	}
 }

@@ -108,6 +108,12 @@ setting both read `time`, so neither works through a proxy. Fetching full docume
 fix that and make every cached packument several times larger; this is not done. It narrows
 "as upstream sent them" to "as upstream sent the abbreviated form".
 
+Hosted packuments have no `time` map either. Yarn 4.18 defaults `npmMinimalAgeGate` to 1440
+minutes and needs `time`, so with its defaults it refuses every hosted and proxied version
+("quarantined", YN0016). The documented workaround is `npmMinimalAgeGate: 0` in
+`.yarnrc.yml`, which turns off yarn's age safeguard for that project. SIN-60 tracks serving
+real publish times.
+
 **The packument is parsed with exact keys and its `name` must match the request.** Go's
 struct decoding is case-insensitive and would read a `DIST` that npm ignores. A version that
 cannot be served safely (a bad version string or filename, a malformed entry) is left out
@@ -147,14 +153,13 @@ lacks, is a 404 when it is not already placed, and a later member is not asked, 
 from outside a nested virtual. Otherwise a second proxy could supply a tarball for a
 version the first member's document never offered.
 
-That check is of the package, not of the version: `FetchNPMTarball` serves a placed copy
-before it looks at the packument's listing. So after upstream removes one version and keeps
-the package, an exact-URL install of that version keeps getting the placed copy, through a
-virtual as well as directly. Retention does not evict it while its cache entry stays alive
-(SIN-54).
+`FetchNPMTarball` fetches the packument before it looks for a placed copy, so the check is
+of the file as well as the package: a version upstream has dropped is flagged by the refresh
+and answers 404, directly and through a virtual (SIN-54, below).
 
-**An upstream 5xx, or a document that fails to parse, fails the walk with a 502.** A 404, a
-negative cache entry, or a 401/403 is a miss and the walk moves on. A stale document still
+**An upstream 5xx, or a document that fails to parse, fails the walk with a 502.** A 404 or a
+negative cache entry is a miss and the walk moves on. A 401/403 is a refusal and fails it
+too, below. A stale document still
 answers from its own member during an outage, so an outage cannot change which member a
 name resolves to, and an outage on a proxy does not touch a claimed name, since the proxy is
 not contacted. Only hosted members claim: a proxy's cached `packages` rows look like hosted
@@ -162,18 +167,16 @@ rows, and `claimOwner` is what keeps them out. Names through a virtual use `vali
 ASCII only, and a hosted member compares exactly while the claim compares in lowercase. So
 `JSONStream` against a hosted `jsonstream` is claimed and then a 404.
 
-**A 401 or 403 from a proxy member is, for now, a miss that moves the walk on.** This is
-behaviour shared with PyPI and OCI (`absent` in `resolve.go`). SIN-55 decided on 2026-11-04
-that a refusal will fail the walk on all three protocols, before v1.1.0: the broken thing is
-Sindri's own upstream credential, not the package's presence. This paragraph describes the
-code until that lands. The risk it closes is real. With members `[private-proxy, public-proxy]`, a broken credential
-on the first makes a private name resolve from the public proxy for as long as the
-credential stays broken. A denial is never negatively cached, so this is not bounded by the
-negative TTL: every read asks the private upstream again, is refused again, and falls to the
-public one. A stale private document stops answering too, because a denial returns before
-the stale fallback, which only an unavailable upstream reaches. A claim by a hosted member
-still holds, so it affects only names that live upstream on a private registry. Docker Hub's
-denial handling is why a refusal counts as a miss today, so SIN-55 has to check it first.
+**A 401 or 403 from a proxy member fails the walk with a 502.** SIN-55 decided on 2026-11-04
+that a refusal fails the walk on all three protocols (ADR 14 has the rule table and the OCI
+exceptions): the broken thing is Sindri's own upstream credential, not the package's
+presence. The risk it closes is real. With members `[private-proxy, public-proxy]`, a broken
+credential on the first would otherwise make a private name resolve from the public proxy for
+as long as the credential stays broken. A refusal is never negatively cached, so that would
+not have been bounded by the negative TTL either. A stale private document keeps answering
+from its own member, as it does in an outage, because a refusal is also unavailable. A claim
+by a hosted member still holds, so this affects only names that live upstream on a private
+registry.
 
 **An npm packument is bounded at 128 MiB, and each read parses all of it.** PyPI pages and
 OCI manifests keep 32 MiB; a packument lists every version and real ones are large
@@ -183,11 +186,39 @@ repository and package name, never the URL, headers or body. The cost is that ev
 cached or not, loads and parses the whole document, and there is no request coalescing, so
 concurrent cold reads of one package each fetch it.
 
-**A placed tarball outlives its package's 404.** If upstream answers 404 for a package after
-a hit, a direct proxy read still serves a placed tarball by exact filename, while a virtual
-walk sees the miss and moves on. The virtual is right, since the tarball follows its
-packument. The direct read is an availability choice. Retention evicts placements only for
-a cache hit, so those files are never evicted. Tracked as SIN-54, with PyPI.
+**A file upstream has removed stops serving at once.** Every refresh that gets an answer
+from upstream tells the registry which files the package still lists: a 200 document names
+the tarball filenames it lists, and a 404 names none. A placed file the answer does not list
+gets `files.upstream_gone_at`, and a file it lists has the flag cleared, so a file upstream
+lists again serves again from the next refresh. A flagged file is invisible to the
+adapter-facing reads (the tarball and file reads, the file listing) and to the placement
+check, so neither a direct read nor a virtual walk can reach it, and that holds for a
+version pulled as malicious as much as for any other. `FetchNPMTarball` and the PyPI file
+read fetch the document before they serve a placed copy, so a stale entry refreshes on a
+lockfile-only install that never reads the packument. Only an answer sets the flag: a 5xx, a
+401/403 (`ErrUpstreamDenied` is an outage here) or a document that does not parse says
+nothing about the files, and the placed copy still serves. Retention removes a flagged row,
+and the version and package rows it empties, once it has been flagged longer than
+`worker.retention.proxyStaleAfter`; the collector reclaims the bytes later. Hosted rows are
+never flagged. A document whose versions were dropped as unservable (`Dropped`) lists only
+the versions the parser kept, so a placed file of a dropped version is flagged, which is the
+safe direction. A PyPI 200 is believed only if it is this project's index: a document with no
+`files` list, or whose `name` normalizes to another project, is refused as unavailable and
+flags nothing, as a packument with the wrong `name` is for npm. A missing `name` alone is
+accepted, and `files: []` is a real answer that upstream lists nothing. PyPI walks the same way: a proxy member whose index resolves owns the
+answer for its project's files, so a file it no longer lists is a 404 and a later member
+listing the same filename is not asked. A member whose project answers 404 still moves the
+walk on.
+
+Rejected: keeping a placed file serving until retention collects it, as this ADR first
+did. It is the more available choice, but it serves a version upstream pulled for a reason,
+including malware, for as long as the cache entry is renewed, and a virtual and a direct
+read disagreed about one file. The accepted cost is that a pinned install breaks after a
+left-pad style unpublish, until upstream lists the file again. A second cost: a placed file
+read past its TTL now waits on upstream before it serves, because the refresh decides whether
+the file is still listed. With an upstream that accepts connections and never answers, each
+such read can wait the whole upstream timeout (30 seconds by default) before the placed copy
+serves, and nothing backs off between reads. A backoff has its own ticket.
 
 **A hosted package row survives the deletion of its last file.** The claim is the `packages`
 row, so deleting a file removes the version when emptied and keeps the package, hidden from
@@ -244,6 +275,89 @@ rows present. It does drop `dist_tags`, `dist_tag_events`, and `versions.depreca
 **The preset stays `npm`.** It is what `presets.go` and ARCHITECTURE.md already say, and it
 matches `pypi`. The roadmap's `npmjs` changes.
 
+### Checked against installers (SIN-51)
+
+`scripts/npm-tarball-differential.sh` installs each tarball shape the parser accepts from a
+local file with the npm on PATH (10.9.9 in the recorded run) and pnpm 10.34.9 and yarn 1.22.22,
+which the script fetches at those exact versions. Installs use `--ignore-scripts` in temp
+directories. The installed `package.json` is compared with what `inspectManifest` read. The
+harness is `internal/proto/npm/tarball_differential_test.go`, behind the `differential`
+build tag. Each tarball holds the real manifest and placeholder files. Shapes a client could misread
+also hold a decoy, a second `package.json` with a different name, version and description,
+where the misreading would land: a whole `package/package.json` entry inside the body of an
+entry that could be misframed (the slash-ended, `..`-cut and split-character names, the pax
+size, tar-stream's `PaxHeader`), or a name that a reader ignoring the ustar prefix or a pax
+path would take as the manifest. The shapes of real tools' forms (npm pack, no owner, NUL
+typeflag, directories, zero blocks, pax keys, pax with no path) have no decoy: there is
+nothing in them for a reader to land on. Where a decoy is installed, a disagreement shows
+which document was read. The test fails if a shape's parser outcome differs from the expected one, if a
+client errors outside a named allowlist, or if no negative control shows a client
+installing the decoy.
+
+The recorded run had 59 candidate shapes (excluding controls): 40 accepted and compared, 19
+refused and so skipped. Of the 120 client rows, 119 agree, none disagree, and one is a
+client error: yarn 1.22.22 cannot extract a tarball with 7 stray zero bytes after the end
+marker ("Unexpected end of data"). Sindri accepts that tarball. yarn reads no manifest from it,
+so it is not manifest confusion; it is tracked as SIN-59. Every agree row installed the
+name, version and description the parser read, not the decoy's.
+
+| Shape | npm | pnpm | yarn |
+|---|---|---|---|
+| npm pack, pax path | agree | agree | agree |
+| npm pack, ustar prefix | agree | agree | agree |
+| tar-stream form | agree | agree | agree |
+| npm form with no owner | agree | agree | agree |
+| NUL typeflag | agree | agree | agree |
+| directories with and without a slash | agree | agree | agree |
+| manifest after other files | agree | agree | agree |
+| extra zero blocks | agree | agree | agree |
+| zero bytes short of a block | agree | agree | client error (SIN-59) |
+| manifest split over prefix and name | agree | agree | agree |
+| manifest named by a pax path over a short name | agree | agree | agree |
+| pax with every allowed key | agree | agree | agree |
+| pax with no path | agree | agree | agree |
+| pax size repeating the header's | agree | agree | agree |
+| pax path over a name ending in a slash | agree | agree | agree |
+| pax path over a name cut after a parent segment | agree | agree | agree |
+| pax path over a name cut inside a character | agree | agree | agree |
+| ustar prefix naming a nested package.json | agree | agree | agree |
+| decoy manifest as a plain second file | agree | agree | agree |
+| decoy manifest one directory down | agree | agree | agree |
+| decoy manifest two directories down | agree | agree | agree |
+| decoy manifest under the NTFS short-name lookalike | agree | agree | agree |
+| pax path replacing PaxHeader | agree | agree | agree |
+| pax path replacing package/cut-short/ | agree | agree | agree |
+| pax path replacing package/cut-short. | agree | agree | agree |
+| pax path replacing package/cut-short | agree | agree | agree |
+| pax path replacing package/c: | agree | agree | agree |
+| pax path replacing package/foo:bar.js | agree | agree | agree |
+| pax path replacing package/nested/package.json | agree | agree | agree |
+| pax path replacing package/nested/c:/package.json | agree | agree | agree |
+| pax path replacing package/c:/nested/package.json | agree | agree | agree |
+| pax path replacing //server/share/package/nested/package.json | agree | agree | agree |
+| pax path replacing //?/c:/package/nested/package.json | agree | agree | agree |
+| pax path replacing ab:/package/nested/package.json | agree | agree | agree |
+| pax path replacing package/1:/package.json | agree | agree | agree |
+| pax path replacing package/package.jso | agree | agree | agree |
+| pax path replacing package/package.json.js | agree | agree | agree |
+| pax path replacing package/nested/PACKAG~1.JSO | agree | agree | agree |
+| pax path replacing package/PACKAG~1.JSON | agree | agree | agree |
+| pax path replacing package/README~1.JSO | agree | agree | agree |
+
+Negative controls check that the comparison can see a disagreement. They are shapes the
+parser refuses, because an installer takes the decoy, sent to the clients anyway:
+
+| Negative control (refused by the parser, sent anyway) | npm | pnpm | yarn |
+|---|---|---|---|
+| second manifest | DISAGREE | DISAGREE | DISAGREE |
+| manifest under another top directory | DISAGREE | DISAGREE | DISAGREE |
+| manifest in upper case | DISAGREE | agree | DISAGREE |
+
+Not tested (SIN-58): Windows name handling. Drive roots, 8.3 short names, trailing dots and spaces,
+UNC roots and backslashes cannot be exercised on this platform, so those refusals rest on
+reasoning and Unix reproductions only. The "upper case" control also depends on the
+filesystem: this run was on macOS, whose default filesystem folds case.
+
 ## Consequences
 
 - A third protocol did need a schema change, and it also needed per-protocol normalization
@@ -266,15 +380,25 @@ matches `pypi`. The roadmap's `npmjs` changes.
 - Tag moves are recorded and OCI tag moves still are not. Bringing OCI in line is separate
   work.
 - A name claim now survives deleting a package's last file, as section 4 says "ever
-  published" means. A deleted version number can still be published again, because the
-  version row goes with the file. That gap stays open under SIN-52 and should close before
-  v1.1.0.
+  published" means. A deleted version number is now refused too (SIN-52): deleting a
+  hosted file records its version in `retired_files` in the same transaction, and a
+  publish checks that table after its exclusive insert, so the insert's wait for an
+  in-flight delete makes the tombstone visible. The refusal is `ErrVersionExists`, the
+  same 409 as a live version, and it applies to identical bytes as well: this is a
+  behaviour change, because republishing a deleted version used to succeed. Versions
+  deleted before migration 00009 are not remembered and can still be published again.
+  Only hosted npm and PyPI repositories retire anything: a proxy
+  and a hosted OCI-protocol repository do not.
 - A proxy cannot see `time` or the readme, so `npm install --before` and pnpm's release-age
   setting do not work through one.
+- Neither hosted nor proxied packuments carry `time`, so yarn 4.18's default age gate fails
+  on both. Installing needs `npmMinimalAgeGate: 0`, which also disables that safeguard.
+  SIN-60 tracks real publish times; the M9 gate asserts the failure so it notices the fix.
 - A proxy takes only tarballs on its own host under its base path, with no off-origin
   redirects. Registries that write `%2f` into a tarball URL, or redirect downloads to a CDN,
   get a 502 or are left out. Bearer credentials and private upstreams are SIN-53.
-- A refused credential on a proxy member lets the walk fall to the next one (SIN-55).
+- A refused credential on a proxy member fails the walk with a 502 rather than letting it
+  fall to the next member (SIN-55).
 
 ## Rejected
 
@@ -300,7 +424,8 @@ matches `pypi`. The roadmap's `npmjs` changes.
 - **Refusing a same-origin redirect outside the base path.** It would break registries that
   move tarballs on their own host. Stopping the credentials closes the same risk.
 - **Failing the walk on a refusal for npm only.** Smaller, since npm resolves through its own
-  closures, but it would leave the protocols different. SIN-55 chose all three.
+  closures, but it would leave the protocols different. SIN-55 chose all three, with Docker
+  Hub, quay.io and ghcr.io's refusals of unknown names kept as misses (ADR 14).
 - **Merging packuments per version.** A hostile `99.0.0` can appear under a name it should
   never reach. ADR 14 already rejected merging, and I5 forbids it.
 - **Declaring scopes in config.** It closes the first-publish gap at the cost of a field

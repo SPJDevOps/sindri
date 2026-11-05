@@ -90,6 +90,14 @@ through ordinary reachability. `ttl: 0` means fresh forever and is never
 evicted. The stale allowance is what still serves a cached copy through an
 upstream outage.
 
+A cached file that a refresh showed upstream no longer lists is flagged
+(`files.upstream_gone_at`, SIN-54) and stops serving at once, whatever its cache entry
+says. Retention removes the flagged row, and the version and package rows it empties,
+once the flag is older than the same stale allowance, even when the repository's `ttl`
+is `0`. Rows only: the collector reclaims the bytes through ordinary reachability. The
+flag is never set on a hosted row, and the deletion joins on repository type like the
+rest of eviction.
+
 **Interfaces.** `sindri gc` talks HTTP to a running server, as `apply` does.
 `GET /api/v1/gc/candidates` is the dry run, `POST /api/v1/gc` queues a
 collection, and `GET /api/v1/jobs/{id}` reports on it. All three are

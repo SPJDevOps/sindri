@@ -13,10 +13,14 @@ import (
 // pushProvenance reads the publisher's provenance claim for a manifest push.
 // The standard OCI annotations are the push-time metadata a build already
 // stamps; the X-Sindri-* headers override them for a pipeline that wants to
-// state its build reference explicitly. Neither is verified (ADR 16).
-func pushProvenance(header http.Header, body []byte) model.Provenance {
+// state its build reference explicitly. Neither is verified (ADR 16). A header
+// the database cannot store is an error, returned before the manifest is read.
+func pushProvenance(header http.Header, body []byte) (model.Provenance, error) {
 	prov := model.Provenance{SourceType: model.ProvenanceOCIPush}
-	claimed := model.HeaderProvenance(model.ProvenanceOCIPush, header.Get)
+	claimed, err := model.HeaderProvenance(model.ProvenanceOCIPush, header.Get)
+	if err != nil {
+		return model.Provenance{}, err
+	}
 
 	var doc struct {
 		Annotations map[string]string `json:"annotations"`
@@ -31,5 +35,5 @@ func pushProvenance(header http.Header, body []byte) model.Provenance {
 	if claimed.BuildRef != "" {
 		prov.BuildRef = claimed.BuildRef
 	}
-	return prov
+	return prov, nil
 }

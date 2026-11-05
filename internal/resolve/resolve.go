@@ -65,13 +65,16 @@ var ErrNotFound = registry.ErrNotFound
 var ErrUpstreamUnavailable = remote.ErrUpstreamUnavailable
 
 // absent reports whether err means "this member does not have it", which moves
-// a virtual walk on to the next member rather than failing it.
+// a virtual walk on to the next member rather than failing it. A refusal of
+// Sindri's credential is not absence: it fails the walk, so a broken credential
+// on a private upstream cannot let a public one answer for the same name.
+// An OCI registry that hides names behind a refusal is the exception.
 func absent(err error) bool {
 	return errors.Is(err, registry.ErrNotFound) ||
 		errors.Is(err, registry.ErrNotPlaced) ||
 		errors.Is(err, remote.ErrUpstreamNotFound) ||
 		errors.Is(err, remote.ErrNegativeCached) ||
-		errors.Is(err, remote.ErrUpstreamDenied)
+		errors.Is(err, remote.ErrUpstreamHidden)
 }
 
 // SplitOCIPath finds the longest repository name prefix of path and returns
@@ -358,6 +361,13 @@ func (r *Resolver) GetPyPIFile(ctx context.Context, repoName, project, filename 
 			case model.RepoTypeProxy:
 				f, reader, err := r.getProxyPyPIFile(ctx, m.Name, normalized, filename)
 				if err != nil {
+					// A proxy whose index resolves owns this answer. It counts as
+					// a hit with no reader rather than as ErrNotFound, because a
+					// walk over a nested virtual repository moves on when it sees
+					// ErrNotFound. A package-level miss still moves on.
+					if errors.Is(err, errNotListed) {
+						return true, nil
+					}
 					if absent(err) {
 						return false, nil
 					}
@@ -372,25 +382,37 @@ func (r *Resolver) GetPyPIFile(ctx context.Context, repoName, project, filename 
 		if err != nil {
 			return registry.PackageFile{}, nil, err
 		}
+		if rc == nil {
+			return registry.PackageFile{}, nil, ErrNotFound
+		}
 		return file, rc, nil
 	default:
 		return registry.PackageFile{}, nil, fmt.Errorf("unknown repository type %s", repo.Type)
 	}
 }
 
+// errNotListed means a proxy's index resolved and the member cannot supply the
+// file: the index does not list it, or lists it and upstream answers that the
+// file is absent. It is a refusal by the member that owns the project, not the
+// member lacking it, so a walk must not ask a later member for the same file
+// (SIN-54, as for npm in ADR 24). An outage or a refusal is not this error.
+var errNotListed = fmt.Errorf("%w: the index does not list the file", ErrNotFound)
+
 func (r *Resolver) getProxyPyPIFile(ctx context.Context, repoName, project, filename string) (registry.PackageFile, io.ReadCloser, error) {
+	// The index first, so a stale entry refreshes and a file upstream dropped
+	// is flagged before the placed copy is looked up (SIN-54). Only an
+	// unavailable upstream lets a placed copy serve without it.
+	idx, idxErr := r.remote.FetchPyPIIndex(ctx, repoName, project)
+	if idxErr != nil && absent(idxErr) {
+		return registry.PackageFile{}, nil, ErrNotFound
+	}
 	if file, rc, err := r.reg.GetFileByFilename(ctx, repoName, project, filename); err == nil {
 		return file, rc, nil
 	} else if !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrNotPlaced) {
 		return registry.PackageFile{}, nil, err
 	}
-
-	idx, err := r.remote.FetchPyPIIndex(ctx, repoName, project)
-	if err != nil {
-		if absent(err) {
-			return registry.PackageFile{}, nil, ErrNotFound
-		}
-		return registry.PackageFile{}, nil, err
+	if idxErr != nil {
+		return registry.PackageFile{}, nil, idxErr
 	}
 	remoteCfg, err := r.reg.GetRemote(ctx, repoName)
 	if err != nil {
@@ -413,9 +435,15 @@ func (r *Resolver) getProxyPyPIFile(ctx context.Context, repoName, project, file
 			}
 		}
 		version := versionFromFilename(filename)
-		return r.remote.FetchPyPIFile(ctx, repoName, project, version, filename, fileURL, expect, f.Size)
+		file, rc, err := r.remote.FetchPyPIFile(ctx, repoName, project, version, filename, fileURL, expect, f.Size)
+		if err != nil && absent(err) {
+			// The index listed it and the file is not there: this member has the
+			// project, so the walk must not ask another for the same filename.
+			return registry.PackageFile{}, nil, errNotListed
+		}
+		return file, rc, err
 	}
-	return registry.PackageFile{}, nil, ErrNotFound
+	return registry.PackageFile{}, nil, errNotListed
 }
 
 func versionFromFilename(filename string) string {

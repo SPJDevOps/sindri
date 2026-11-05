@@ -1,6 +1,7 @@
 package oci
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 
@@ -51,8 +52,24 @@ func TestPushProvenance(t *testing.T) {
 			for k, v := range tc.headers {
 				h.Set(k, v)
 			}
-			if got := pushProvenance(h, tc.body); got != tc.want {
+			got, err := pushProvenance(h, tc.body)
+			if err != nil {
+				t.Fatalf("pushProvenance: %v", err)
+			}
+			if got != tc.want {
 				t.Fatalf("pushProvenance = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPushProvenance_MalformedHeaderIsRefused(t *testing.T) {
+	for _, name := range []string{model.HeaderSourceRef, model.HeaderBuildRef} {
+		t.Run(name, func(t *testing.T) {
+			h := http.Header{}
+			h[name] = []string{"a\x00b"}
+			if _, err := pushProvenance(h, []byte(`{}`)); !errors.Is(err, model.ErrInvalidProvenance) {
+				t.Fatalf("err = %v, want ErrInvalidProvenance", err)
 			}
 		})
 	}

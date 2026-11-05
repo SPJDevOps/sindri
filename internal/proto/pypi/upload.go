@@ -85,6 +85,14 @@ func (h *handler) handleUpload(w http.ResponseWriter, r *http.Request, repo stri
 		return
 	}
 
+	// Checked before the bytes are hashed or stored (ADR 16: claims are recorded,
+	// but one the database cannot hold is refused up front).
+	provenance, err := model.HeaderProvenance(model.ProvenancePyPIUpload, r.Header.Get)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	filename := header.Filename
 	if err := validateFilename(filename); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid filename: "+err.Error())
@@ -146,7 +154,7 @@ func (h *handler) handleUpload(w http.ResponseWriter, r *http.Request, repo stri
 		Size:         header.Size,
 		ExpectDigest: digest,
 		Immutable:    true,
-		Provenance:   model.HeaderProvenance(model.ProvenancePyPIUpload, r.Header.Get),
+		Provenance:   provenance,
 	})
 	if err != nil {
 		mapRegistryError(w, err)

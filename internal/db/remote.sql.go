@@ -26,6 +26,59 @@ func (q *Queries) DeleteFilesByVersion(ctx context.Context, versionID uuid.UUID)
 	return result.RowsAffected(), nil
 }
 
+const deleteGoneProxyFiles = `-- name: DeleteGoneProxyFiles :many
+WITH gone AS (
+    DELETE FROM files f
+    WHERE f.id IN (
+            SELECT g.id FROM files g
+            JOIN versions gv ON gv.id = g.version_id
+            JOIN packages gp ON gp.id = gv.package_id
+            JOIN repositories gr ON gr.id = gp.repo_id AND gr.type = 'proxy'
+            WHERE g.upstream_gone_at < now() - ($1::bigint * interval '1 second')
+            ORDER BY g.upstream_gone_at, g.id
+            LIMIT $2)
+      AND f.upstream_gone_at < now() - ($1::bigint * interval '1 second')
+    RETURNING f.version_id
+)
+SELECT gone.version_id, v.package_id
+FROM gone
+JOIN versions v ON v.id = gone.version_id
+`
+
+type DeleteGoneProxyFilesParams struct {
+	StaleSeconds int64 `json:"stale_seconds"`
+	PageLimit    int32 `json:"page_limit"`
+}
+
+type DeleteGoneProxyFilesRow struct {
+	VersionID uuid.UUID `json:"version_id"`
+	PackageID uuid.UUID `json:"package_id"`
+}
+
+// Removes one page of cached files flagged longer than the stale allowance ago,
+// and returns where each was, so the emptied versions and packages can follow.
+// The flag is re-checked in the DELETE, so a refresh that listed the file again
+// first wins.
+func (q *Queries) DeleteGoneProxyFiles(ctx context.Context, arg DeleteGoneProxyFilesParams) ([]DeleteGoneProxyFilesRow, error) {
+	rows, err := q.db.Query(ctx, deleteGoneProxyFiles, arg.StaleSeconds, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeleteGoneProxyFilesRow{}
+	for rows.Next() {
+		var i DeleteGoneProxyFilesRow
+		if err := rows.Scan(&i.VersionID, &i.PackageID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteProxyTag = `-- name: DeleteProxyTag :execrows
 DELETE FROM tags t
 USING repositories r, packages p
@@ -481,6 +534,42 @@ func (q *Queries) PackageExistsInRepo(ctx context.Context, arg PackageExistsInRe
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const syncProxyFiles = `-- name: SyncProxyFiles :execrows
+UPDATE files f
+SET upstream_gone_at = CASE
+        WHEN f.filename = ANY($1::text[]) THEN NULL
+        ELSE COALESCE(f.upstream_gone_at, now())
+    END
+FROM versions v, packages p, repositories r
+WHERE f.version_id = v.id
+  AND v.package_id = p.id
+  AND p.repo_id = r.id
+  AND r.name = $2
+  AND r.type = 'proxy'
+  AND p.normalized_name = $3
+  AND ((f.filename = ANY($1::text[]) AND f.upstream_gone_at IS NOT NULL)
+    OR (NOT f.filename = ANY($1::text[]) AND f.upstream_gone_at IS NULL))
+`
+
+type SyncProxyFilesParams struct {
+	Listed         []string `json:"listed"`
+	RepoName       string   `json:"repo_name"`
+	NormalizedName string   `json:"normalized_name"`
+}
+
+// Records what a refresh of one package's upstream document showed (SIN-54).
+// A cached file the document no longer lists is flagged, keeping the time it
+// was first seen missing; one it lists is unflagged. Rows already in the right
+// state are not rewritten. The join on repository type keeps hosted rows, and
+// their name claims, out of reach.
+func (q *Queries) SyncProxyFiles(ctx context.Context, arg SyncProxyFilesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, syncProxyFiles, arg.Listed, arg.RepoName, arg.NormalizedName)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertRemote = `-- name: UpsertRemote :one

@@ -585,9 +585,13 @@ func (h *handler) putManifest(w http.ResponseWriter, r *http.Request, repo model
 		writeError(w, http.StatusBadRequest, CodeManifestInvalid, "could not read body")
 		return
 	}
+	provenance, err := pushProvenance(r.Header, body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, CodeManifestInvalid, err.Error())
+		return
+	}
 	mediaType := r.Header.Get("Content-Type")
-	man, err := h.reg.PutManifest(r.Context(), writeRepo, writeImage, ref, mediaType, body,
-		pushProvenance(r.Header, body))
+	man, err := h.reg.PutManifest(r.Context(), writeRepo, writeImage, ref, mediaType, body, provenance)
 	if err != nil {
 		mapManifestReadError(w, err)
 		return

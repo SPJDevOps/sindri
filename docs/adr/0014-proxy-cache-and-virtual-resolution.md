@@ -26,9 +26,51 @@ write paths still auto-create a hosted repository for the full name.
 `miss`. Only an upstream 404 writes `miss`. A 5xx, timeout, or truncated body
 leaves the row unchanged and never replaces a previous hit. Fresh `miss` skips
 upstream; expired `hit` refetches and falls back to the stale hit when upstream
-is down. An upstream 401/403 that survives the bearer challenge is *denied*:
-resolution treats it as not found (Docker Hub answers unknown names this way),
-but it is never negatively cached, so a corrected credential works at once.
+is down. An upstream 401/403 is a *refusal*, and what it means depends on the protocol (amended by
+SIN-55, 2026-11-04). Sindri's own credential failing is not evidence the name is absent, and
+treating it as absence lets a later member answer for a name the refusing one exists to serve
+(dependency confusion), so a refusal fails the walk. `ErrUpstreamDenied` wraps
+`ErrUpstreamUnavailable`: a virtual answers 502, a direct proxy read answers 502, a stale
+copy still serves, and it is never negatively cached, so a corrected credential works at
+once. Docker Hub and quay.io answer 401 for a name they do not have even to a valid token,
+and ghcr.io answers 403 at the token endpoint to an anonymous caller asking for an unknown
+name (both checked 2026-11-04). Those stay misses (`ErrUpstreamHidden`, also never
+negatively cached), or a virtual such as `[dockerhub, ghcr]` could never reach its second
+member.
+
+| Case | Result |
+|---|---|
+| npm or PyPI 401/403, with or without credentials | Denied |
+| OCI 401/403 where the request carried a Bearer token, no credentials configured | Hidden |
+| OCI 401/403 where the request carried a Bearer token, credentials configured | Denied |
+| OCI token endpoint 401/403, no credentials configured | Hidden |
+| OCI token endpoint 401/403, credentials configured | Denied |
+| OCI 401 with no bearer challenge, or 401/403 with Basic | Denied |
+
+The credentialed Bearer row is a user decision of 2026-11-04: a login that still gets a
+token but has lost access to a private image must not fall through to a public member. The
+cost is that Docker Hub answers 401 for an unknown name even to a valid login, and the two
+cases cannot be told apart. In a virtual such as `[hosted, dockerhub-with-login, ghcr]`, an
+image that exists only on ghcr therefore gets a 502, unless the logged-in proxy is last or
+runs anonymously. A cached bearer token counts as a Bearer request. A request redirected off-origin has lost
+its Authorization header, so its 401 is Denied, not Hidden. The ghcr.io caveat: Sindri cannot
+tell an anonymous refusal for a name that does not exist from one for a private name, so a
+ghcr.io proxy without credentials reads both as a miss. The credentialed ghcr.io case was not
+verified live (no credential was available).
+
+Verified live on 2026-11-05 against Docker Hub and ghcr.io, at the head of the M9 gate branch
+(`m9-gate-v1.1.0`), through a real `sindri serve` with anonymous `dockerhub` and `ghcr`
+preset proxies and the virtual repositories `[dockerhub, ghcr]` and `[ghcr, dockerhub]`.
+Manifest GETs with the bootstrap token gave the same result in both orders: `library/alpine`
+answered 200, an unknown name (`no-such-org-zz/no-such-image-zz`) answered 404, and
+`dexidp/dex:v2.46.1`, which exists only on ghcr, answered 200. Only the credentialed ghcr.io
+case remains unverified.
+
+**A dropped upstream file is not enforced on OCI (SIN-54).** The 404-at-once rule for files
+upstream drops covers npm and PyPI. An OCI manifest or layer fetched by digest keeps serving
+from placement after upstream removes it, since the caller names the hash and the bytes
+cannot change. An image pulled upstream as malicious therefore keeps serving by digest until
+its tag is evicted and the collector reclaims it.
 
 **Mutable names go through the TTL; immutable ones do not.** An OCI digest
 reference, once placed, is served locally forever. An OCI tag and a PyPI
@@ -89,12 +131,14 @@ index may link files on any host, and a credential must not follow those links.
 another port, from http to https, and to a subdomain. Credentials now stop at any redirect
 off the first request's origin (scheme and host, port included), for every protocol. On PyPI
 and OCI, a configured `http://` upstream that upgrades to https, or a credentialed upstream
-that redirects to a `cdn.` subdomain, therefore gets a 401 on the second request, which a
-virtual treats as a miss. npm refuses such a redirect outright, which is a 502 that fails the
-walk (ADR 24).)
+that redirects to a `cdn.` subdomain, therefore gets a 401 on the second request. That request no longer carries a Bearer token, so on
+PyPI and OCI it is a refusal that fails the walk, as npm's refused redirect already does
+(ADR 24).)
 A bearer challenge's realm comes from the upstream and receives the credential
 only over https or on the upstream's own origin. Bearer tokens are cached per
-registry host and image, the scope a pull token covers. Nothing supplies secrets
+registry host, credentials reference and image, the scope a pull token covers. The
+reference is part of the key so that a token fetched with one login never answers for a
+proxy on the same upstream that has another login or none (SIN-55 review). Nothing supplies secrets
 yet, so the API rejects a `credentials_ref` until M7;
 [ADR 15](0015-upstream-credentials-source-deferred-to-m7.md) decides the source.
 

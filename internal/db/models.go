@@ -48,12 +48,13 @@ type Evidence struct {
 }
 
 type File struct {
-	ID         uuid.UUID `json:"id"`
-	VersionID  uuid.UUID `json:"version_id"`
-	BlobDigest string    `json:"blob_digest"`
-	Filename   string    `json:"filename"`
-	MediaType  string    `json:"media_type"`
-	Metadata   []byte    `json:"metadata"`
+	ID             uuid.UUID          `json:"id"`
+	VersionID      uuid.UUID          `json:"version_id"`
+	BlobDigest     string             `json:"blob_digest"`
+	Filename       string             `json:"filename"`
+	MediaType      string             `json:"media_type"`
+	Metadata       []byte             `json:"metadata"`
+	UpstreamGoneAt pgtype.Timestamptz `json:"upstream_gone_at"`
 }
 
 type Job struct {
@@ -186,6 +187,13 @@ type RepositoryMember struct {
 	VirtualRepoID uuid.UUID `json:"virtual_repo_id"`
 	MemberRepoID  uuid.UUID `json:"member_repo_id"`
 	Position      int32     `json:"position"`
+}
+
+type RetiredFile struct {
+	PackageID uuid.UUID `json:"package_id"`
+	Version   string    `json:"version"`
+	Filename  string    `json:"filename"`
+	DeletedAt time.Time `json:"deleted_at"`
 }
 
 type SchemaOrigin struct {

@@ -46,6 +46,9 @@ type EvictResult struct {
 	// Skipped counts entries refreshed or locked by a concurrent fetch
 	// between the listing and the eviction, which wins.
 	Skipped int `json:"skipped"`
+	// GoneFiles counts cached files removed because upstream stopped listing
+	// them more than staleAfter ago (SIN-54).
+	GoneFiles int `json:"goneFiles"`
 }
 
 const evictPage = 500
@@ -54,7 +57,9 @@ const evictPage = 500
 // (ADR 19). A hit goes once it is older than its repository's TTL plus
 // staleAfter, together with the proxy tag or files it justified, so the
 // collector can then reclaim the bytes. A miss goes once its negative TTL has
-// run out. A TTL of zero means "fresh forever" and is never evicted.
+// run out. A TTL of zero means "fresh forever" and is never evicted. A cached
+// file that a refresh showed upstream no longer lists goes once it has been
+// flagged longer than staleAfter, whatever its cache entry says.
 //
 // Each entry is evicted in its own transaction that re-reads it under a row
 // lock, so a fetch that refreshed it in the meantime wins and it is kept.
@@ -63,6 +68,9 @@ const evictPage = 500
 func (r *Registry) EvictStaleCache(ctx context.Context, staleAfter time.Duration) (EvictResult, error) {
 	var res EvictResult
 	stale := int64(staleAfter / time.Second)
+	if err := r.evictGoneFiles(ctx, stale, &res); err != nil {
+		return res, err
+	}
 	seen := map[string]bool{}
 	for {
 		rows, err := r.q.ListEvictableCacheEntries(ctx, db.ListEvictableCacheEntriesParams{
@@ -99,6 +107,60 @@ func (r *Registry) EvictStaleCache(ctx context.Context, staleAfter time.Duration
 			return res, nil
 		}
 	}
+}
+
+// evictGoneFiles removes cached files that a refresh showed upstream no longer
+// lists, once they have been flagged longer than the stale allowance, and the
+// version and package rows that leaves empty. Rows only: the collector reclaims
+// the bytes (ADR 19). The allowance runs from the flag, not from the cache
+// entry, so a file is kept as long as an outage-length stale copy would be.
+func (r *Registry) evictGoneFiles(ctx context.Context, stale int64, res *EvictResult) error {
+	for {
+		tx, err := r.pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("beginning gone-file eviction: %w", err)
+		}
+		q := r.q.WithTx(tx)
+		rows, err := q.DeleteGoneProxyFiles(ctx, db.DeleteGoneProxyFilesParams{
+			StaleSeconds: stale, PageLimit: evictPage,
+		})
+		if err == nil {
+			err = pruneEmptied(ctx, q, rows)
+		}
+		if err == nil {
+			err = tx.Commit(ctx)
+		}
+		if err != nil {
+			_ = tx.Rollback(context.WithoutCancel(ctx))
+			return fmt.Errorf("removing files gone upstream: %w", err)
+		}
+		res.GoneFiles += len(rows)
+		if len(rows) < evictPage {
+			return nil
+		}
+	}
+}
+
+// pruneEmptied removes the versions, then the packages, that deleting files
+// left with nothing in them.
+func pruneEmptied(ctx context.Context, q *db.Queries, gone []db.DeleteGoneProxyFilesRow) error {
+	versions := map[uuid.UUID]bool{}
+	packages := map[uuid.UUID]bool{}
+	for _, g := range gone {
+		versions[g.VersionID] = true
+		packages[g.PackageID] = true
+	}
+	for id := range versions {
+		if _, err := q.DeleteVersionIfEmpty(ctx, id); err != nil {
+			return fmt.Errorf("deleting an emptied version: %w", err)
+		}
+	}
+	for id := range packages {
+		if _, err := q.DeletePackageIfEmpty(ctx, id); err != nil {
+			return fmt.Errorf("deleting an emptied package: %w", err)
+		}
+	}
+	return nil
 }
 
 // evictOne returns the status of the entry it evicted, or "" when a

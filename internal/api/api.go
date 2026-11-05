@@ -326,6 +326,11 @@ func (a *api) publishFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	provenance, err := model.HeaderProvenance(model.ProvenanceAPIPublish, r.Header.Get)
+	if err != nil {
+		a.writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
 	file, err := a.reg.Publish(r.Context(), registry.PublishParams{
 		Repo:       chi.URLParam(r, "repo"),
 		Package:    packageName(r),
@@ -334,7 +339,7 @@ func (a *api) publishFile(w http.ResponseWriter, r *http.Request) {
 		MediaType:  mediaType,
 		Body:       r.Body,
 		Size:       size,
-		Provenance: model.HeaderProvenance(model.ProvenanceAPIPublish, r.Header.Get),
+		Provenance: provenance,
 	})
 	if err != nil {
 		a.writeRegistryError(w, r, err)
@@ -415,6 +420,8 @@ func (a *api) writeRegistryError(w http.ResponseWriter, r *http.Request, err err
 		a.writeError(w, r, http.StatusNotFound, "NOT_FOUND", "resource not found")
 	case errors.Is(err, registry.ErrAlreadyExists):
 		a.writeError(w, r, http.StatusConflict, "ALREADY_EXISTS", "resource already exists")
+	case errors.Is(err, registry.ErrFileExists), errors.Is(err, registry.ErrVersionExists):
+		a.writeError(w, r, http.StatusConflict, "FILE_EXISTS", err.Error())
 	case errors.Is(err, registry.ErrHasHistory):
 		a.writeError(w, r, http.StatusConflict, "HAS_HISTORY", err.Error())
 	case errors.Is(err, registry.ErrConfigManaged):

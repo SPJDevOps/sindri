@@ -391,10 +391,10 @@ func TestProxyNPM_NotFoundIsCachedAndAnOutageIsNot(t *testing.T) {
 	e.mustGet(t, "flaky")
 }
 
-func TestProxyNPM_DeniedIsNotFoundAndNotCached(t *testing.T) {
+func TestProxyNPM_RefusalIsABadGatewayAndNotCached(t *testing.T) {
 	e := newNPMProxy(t, npmProxyConfig{ttl: 3600, negativeTTL: 300})
 	e.stub.setStatus(http.StatusForbidden)
-	e.wantStatus(t, "private", http.StatusNotFound)
+	e.wantStatus(t, "private", http.StatusBadGateway)
 	if n := e.cacheRows(t, registry.CacheKeyNPMPackument("private")); n != 0 {
 		t.Fatalf("a refusal wrote %d cache rows", n)
 	}

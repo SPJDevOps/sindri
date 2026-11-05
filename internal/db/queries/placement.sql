@@ -120,7 +120,8 @@ INSERT INTO files (version_id, blob_digest, filename, media_type, metadata)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (version_id, filename) DO UPDATE
 SET media_type = EXCLUDED.media_type,
-    metadata = EXCLUDED.metadata
+    metadata = EXCLUDED.metadata,
+    upstream_gone_at = NULL
 WHERE files.blob_digest = EXCLUDED.blob_digest
 RETURNING *;
 
@@ -153,6 +154,7 @@ JOIN blobs b ON b.digest = f.blob_digest
 WHERE r.name = $1
   AND p.normalized_name = $2
   AND f.filename = $3
+  AND f.upstream_gone_at IS NULL
 ORDER BY v.version, f.id
 LIMIT 1;
 
@@ -166,6 +168,7 @@ JOIN repositories r ON r.id = p.repo_id
 JOIN blobs b ON b.digest = f.blob_digest
 WHERE r.name = sqlc.arg('repo_name')
   AND p.normalized_name = sqlc.arg('normalized_name')
+  AND f.upstream_gone_at IS NULL
 ORDER BY v.version, f.filename;
 
 -- name: DeleteFile :execrows
@@ -264,6 +267,7 @@ SELECT EXISTS (
     JOIN repositories r ON r.id = p.repo_id
     WHERE r.name = sqlc.arg('repo_name')
       AND f.blob_digest = sqlc.arg('digest')
+      AND f.upstream_gone_at IS NULL
     UNION ALL
     SELECT 1
     FROM tags t
@@ -277,3 +281,24 @@ SELECT EXISTS (
     WHERE r.name = sqlc.arg('repo_name')
       AND rb.digest = sqlc.arg('digest')
 )::bool AS placed;
+
+-- name: InsertRetiredFile :exec
+-- Remembers that a hosted repository published and then deleted this file
+-- (SIN-52). Idempotent: a name retires once.
+INSERT INTO retired_files (package_id, version, filename)
+VALUES ($1, $2, $3)
+ON CONFLICT (package_id, version, filename) DO NOTHING;
+
+-- name: IsVersionRetired :one
+SELECT EXISTS (
+    SELECT 1 FROM retired_files
+    WHERE package_id = sqlc.arg('package_id') AND version = sqlc.arg('version')
+);
+
+-- name: IsFilenameRetired :one
+-- By filename within the package, whichever version it was under: the
+-- version-less PyPI download path resolves by filename alone.
+SELECT EXISTS (
+    SELECT 1 FROM retired_files
+    WHERE package_id = sqlc.arg('package_id') AND filename = sqlc.arg('filename')
+);

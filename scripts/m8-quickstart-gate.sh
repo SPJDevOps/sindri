@@ -15,16 +15,23 @@
 # SINDRI_GATE_IMAGE to test an image that is already built, such as one from
 # `goreleaser release --snapshot`.
 #
+# `npm` is defined as a pinned node image with the working directory mounted,
+# on the host network so localhost:8080 is Sindri.
+#
 # `open` has no browser to open here, so it is defined as what a browser
 # does: follow /auth/login through the identity provider and back, keeping
 # cookies, and fetch the UI. The gate passes when the signed-in page lists the
-# image the document pushed.
+# image the document pushed and the npm package the document published was
+# installed through the same server.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DOC="${ROOT}/docs/quickstart.md"
 DIND="sindri-quickstart-gate"
 DIND_IMAGE="docker:29-dind"
+# npm is not on a "nothing but Docker" machine, so the shim below runs it from
+# this pinned image, as `open` runs curl.
+NODE_IMAGE="node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914"
 IMAGE="${SINDRI_GATE_IMAGE:-}"
 
 cleanup() { docker rm -f "${DIND}" >/dev/null 2>&1 || true; }
@@ -67,7 +74,7 @@ docker cp "${WORK}/compose.yaml" "${DIND}:/quickstart/compose.yaml"
 docker cp "${WORK}/steps.sh" "${DIND}:/quickstart/steps.sh"
 
 echo "== running the quickstart's commands, verbatim"
-docker exec -i -w /quickstart "${DIND}" sh -eu <<'EOS'
+docker exec -i -w /quickstart -e NODE_IMAGE="${NODE_IMAGE}" "${DIND}" sh -eu <<'EOS'
 export SINDRI_IMAGE=sindri:gate
 # What a browser does with `open http://localhost:8080/ui/`: sign in through
 # the identity provider, keeping cookies, and fetch the page.
@@ -75,12 +82,21 @@ open() {
   docker run --rm --network host curlimages/curl:8.11.1 \
     -fsSL -c /tmp/jar -b /tmp/jar "http://localhost:8080/auth/login?next=${1#http://localhost:8080}" > /quickstart/ui.html
 }
+# What `npm` on the user's machine does, without installing it.
+npm() {
+  docker run --rm --network host -v "$PWD:$PWD" -w "$PWD" "${NODE_IMAGE}" npm "$@"
+}
 set -x
 . ./steps.sh
 set +x
 grep -q 'href="/ui/r/demo/app"' /quickstart/ui.html || { echo "the signed-in UI does not list demo/app" >&2; cat /quickstart/ui.html >&2; exit 1; }
 grep -q 'Signed in as user:' /quickstart/ui.html || { echo "the UI page is not a signed-in one" >&2; exit 1; }
 echo "the signed-in UI lists demo/app"
+test -f js-app/node_modules/@demo/hello/index.js || { echo "@demo/hello did not install from the js repository" >&2; exit 1; }
+grep -q 'hello from sindri' js-app/node_modules/@demo/hello/index.js || { echo "the installed @demo/hello is not the published file" >&2; exit 1; }
+grep -q '"version": "1.0.0"' js-app/node_modules/@demo/hello/package.json || { echo "the installed @demo/hello is not version 1.0.0" >&2; exit 1; }
+grep -q 'localhost:8080/npm/js/' js-app/package-lock.json || { echo "the lockfile does not resolve through the js repository" >&2; exit 1; }
+echo "@demo/hello 1.0.0 published to js and installed from it"
 docker compose ps --format '{{.Service}}: {{.State}} {{.Health}}'
 EOS
 

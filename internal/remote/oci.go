@@ -48,11 +48,14 @@ func ociUpstream(remote registry.Remote, repoName, image, method, suffix, accept
 	path := upstreamImagePath(remote, repoName, image)
 	u := strings.TrimRight(remote.UpstreamURL, "/") + "/v2/" + path + "/" + suffix
 	return upstreamRequest{
-		method:   method,
-		url:      u,
-		accept:   accept,
-		remote:   remote,
-		tokenKey: upstreamHost(remote.UpstreamURL) + "|" + path,
+		method: method,
+		url:    u,
+		accept: accept,
+		remote: remote,
+		repo:   repoName,
+		// The credential is part of the key: a token obtained with one login
+		// must never answer for a proxy that has none, or for another login.
+		tokenKey: upstreamHost(remote.UpstreamURL) + "|" + remote.CredentialsRef + "|" + path,
 	}
 }
 
@@ -94,7 +97,7 @@ func (c *Client) FetchOCIManifest(ctx context.Context, repoName, image, referenc
 	if err == nil {
 		return man, nil
 	}
-	if errors.Is(err, ErrUpstreamNotFound) || errors.Is(err, ErrUpstreamDenied) {
+	if errors.Is(err, ErrUpstreamNotFound) || errors.Is(err, ErrUpstreamHidden) {
 		return registry.Manifest{}, err
 	}
 	// Upstream is down: a tag cached earlier still serves.
@@ -116,7 +119,7 @@ func (c *Client) fetchAndCacheOCIManifest(ctx context.Context, repoName, image, 
 
 	key := registry.CacheKeyOCIManifest(image, reference)
 	if resp.StatusCode != http.StatusOK {
-		err := classify(resp.StatusCode)
+		err := c.classifyOCI(ctx, repoName, remote, resp)
 		if errors.Is(err, ErrUpstreamNotFound) {
 			if perr := c.reg.PutCacheEntry(ctx, repoName, key, registry.CacheMiss, ""); perr != nil {
 				return registry.Manifest{}, perr
@@ -182,7 +185,7 @@ func (c *Client) StatOCIBlob(ctx context.Context, repoName, image string, digest
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, classify(resp.StatusCode)
+		return 0, c.classifyOCI(ctx, repoName, remote, resp)
 	}
 	if resp.ContentLength >= 0 {
 		return resp.ContentLength, nil
@@ -218,7 +221,7 @@ func (c *Client) FetchOCIBlob(ctx context.Context, repoName, image string, diges
 		_ = resp.Body.Close()
 		idle.Stop()
 		cancel()
-		return nil, 0, classify(resp.StatusCode)
+		return nil, 0, c.classifyOCI(ctx, repoName, remote, resp)
 	}
 	body := c.newCachingBody(streamCtx, resp, cancel, idle, digest, func(ctx context.Context, info storage.BlobInfo) error {
 		return c.reg.LinkCachedBlob(ctx, repoName, info)
@@ -284,7 +287,14 @@ func (c *Client) fetchBearerToken(ctx context.Context, challenge string, ur upst
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return "", fmt.Errorf("%w: token endpoint status %d", ErrUpstreamDenied, resp.StatusCode)
+			// Without credentials the endpoint can only be saying the scope is
+			// not available to an anonymous caller: ghcr.io does this for names
+			// it does not have. With credentials it refused Sindri's own.
+			if ur.remote.CredentialsRef == "" {
+				return "", fmt.Errorf("%w: token endpoint status %d", ErrUpstreamHidden, resp.StatusCode)
+			}
+			c.logDenied(ctx, ur.repo, resp.StatusCode)
+			return "", deniedError(fmt.Sprintf("token endpoint status %d", resp.StatusCode))
 		}
 		return "", fmt.Errorf("%w: token endpoint status %d", ErrUpstreamUnavailable, resp.StatusCode)
 	}
@@ -340,4 +350,26 @@ func parseAuthChallenge(h string) (realm, service, scope string) {
 		}
 	}
 	return realm, service, scope
+}
+
+// classifyOCI maps a non-200 OCI response. Docker Hub and quay.io answer 401
+// for a name they do not have even to a caller holding a valid bearer token, and
+// ghcr.io answers 403 at the token endpoint to an anonymous caller. So on a proxy
+// with no credentials, a refusal of a request that carried a bearer token reads
+// as the name being hidden. With credentials configured every refusal is a
+// denial (user decision, SIN-55): a login that still gets a token but has lost
+// access to a private image must not fall through to a public member. Basic
+// credentials the registry rejected are a denial either way, and so is a request
+// redirected off the upstream's origin, which has lost its Authorization header
+// (ADR 14).
+func (c *Client) classifyOCI(ctx context.Context, repoName string, remote registry.Remote, resp *http.Response) error {
+	err := classify(resp.StatusCode)
+	if !errors.Is(err, ErrUpstreamDenied) {
+		return err
+	}
+	if remote.CredentialsRef == "" && resp.Request != nil &&
+		strings.HasPrefix(resp.Request.Header.Get("Authorization"), "Bearer ") {
+		return fmt.Errorf("%w: status %d", ErrUpstreamHidden, resp.StatusCode)
+	}
+	return c.refusal(ctx, repoName, resp.StatusCode, err)
 }

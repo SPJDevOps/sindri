@@ -14,6 +14,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/spj/sindri/internal/model"
 )
 
 // TestPyPI_UploadValidationAndImmutability covers the write-time rules: an
@@ -447,4 +449,32 @@ func mustDoWithHost(t *testing.T, h http.Handler, path, host, accept string) htt
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return httpResult{StatusCode: rec.Code, Body: rec.Body.String(), Header: rec.Header()}
+}
+
+func TestPublish_InvalidProvenanceHeaderIsRefused(t *testing.T) {
+	cases := []struct {
+		name   string
+		header string
+		value  string
+	}{
+		{name: "InvalidUTF8InSourceRef", header: model.HeaderSourceRef, value: "git\xff"},
+		{name: "NULInSourceRef", header: model.HeaderSourceRef, value: "git\x00"},
+		{name: "InvalidUTF8InBuildRef", header: model.HeaderBuildRef, value: "ci\xc3"},
+		{name: "NULInBuildRef", header: model.HeaderBuildRef, value: "ci\x00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newTestHandler(t)
+			createRepo(t, client, "internal", "pypi")
+			wheel := buildWheel(t, "prov-demo", "1.0.0", ">=3.9")
+
+			res := doMultipartWithHeaders(t, client, "/pypi/internal/upload", map[string]string{
+				"name": "prov-demo", "version": "1.0.0",
+			}, "prov_demo-1.0.0-py3-none-any.whl", wheel, true, map[string]string{tc.header: tc.value})
+			if res.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body %s", res.StatusCode, res.Body)
+			}
+			assertProjectAbsent(t, client, "prov-demo")
+		})
+	}
 }

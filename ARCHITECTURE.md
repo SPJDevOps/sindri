@@ -287,7 +287,11 @@ packages(id PK, repo_id FK, normalized_name, display_name,
          UNIQUE (repo_id, normalized_name))
 versions(id PK, package_id FK, version, deprecated NULL,   -- npm deprecation message
          UNIQUE (package_id, version))
-files(id PK, version_id FK, blob_digest FK, filename, media_type, metadata jsonb)
+files(id PK, version_id FK, blob_digest FK, filename, media_type, metadata jsonb,
+      upstream_gone_at NULL)               -- proxy only: upstream stopped listing it (SIN-54)
+retired_files(package_id FK, version, filename,   -- hosted: published, then deleted (SIN-52)
+              deleted_at,
+              PRIMARY KEY (package_id, version, filename))
 
 tags(repo_id FK, package_id FK, name, target_digest FK,
      PRIMARY KEY (repo_id, package_id, name))     -- mutable, OCI
@@ -337,7 +341,11 @@ and read only by the adapter that wrote it, so a proxy caching the same project 
 same keys rather than inventing a second spelling.
 
 A `files` row is immutable once placed: a re-publish of identical bytes is a no-op, and one
-with different bytes is refused. Consumers pin the hash an index advertised, so the bytes
+with different bytes is refused. A deleted file's version and filename stay in
+`retired_files`, so a hosted npm version or PyPI filename cannot be published again, even
+with identical bytes. On a proxy, `upstream_gone_at` marks a file upstream no longer lists:
+it is not served until upstream relists it, and retention removes the row after
+`worker.retention.proxyStaleAfter`. Consumers pin the hash an index advertised, so the bytes
 behind a filename are not something a later push may change. See ADR 13.
 
 `repository_blobs` records that a digest was uploaded (or written as a manifest) into a

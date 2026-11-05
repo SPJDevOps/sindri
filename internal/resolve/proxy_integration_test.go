@@ -667,3 +667,442 @@ func TestDependencyConfusion_OCIHostedImageIsNeverServedFromProxy(t *testing.T) 
 		t.Fatalf("a hosted-claimed image contacted upstream: before=%d after=%d", before, env.requests.Load())
 	}
 }
+
+// goneUpstream is a package index or packument whose listing a test changes
+// between reads: the versions it lists, and a status that replaces the answer.
+type goneUpstream struct {
+	mu       sync.Mutex
+	versions []string
+	status   int    // when non-zero, answers the document request
+	junk     bool   // when set, the document is not parseable
+	doc      string // when non-empty, the document request answers this JSON verbatim
+	// fileStatus, when non-zero, answers every file request (PyPI only).
+	fileStatus int
+}
+
+func (u *goneUpstream) answerFiles(status int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.fileStatus = status
+}
+
+func (u *goneUpstream) list(versions ...string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.versions, u.status, u.junk, u.doc = versions, 0, false, ""
+}
+
+func (u *goneUpstream) answer(status int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.status = status
+}
+
+func (u *goneUpstream) garble() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.status, u.junk = 0, true
+}
+
+// serveDoc makes the document request answer 200 with body, whatever it says.
+func (u *goneUpstream) serveDoc(body string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.status, u.junk, u.doc = 0, false, body
+}
+
+// goneProtocol describes one protocol's way of listing and fetching "demo".
+type goneProtocol struct {
+	name     string
+	protocol model.Protocol
+	prefix   string // URL prefix of a repository
+	// handler serves the upstream for the versions listed.
+	handler func(u *goneUpstream, base func() string) http.HandlerFunc
+	// filePath is the path, under a repository, of the file of a version.
+	filePath func(version string) string
+	// docPath is the path, under a repository, of the package document.
+	docPath string
+}
+
+func goneBody(version string) []byte { return []byte("bytes of demo " + version) }
+
+func goneProtocols() []goneProtocol {
+	return []goneProtocol{
+		{
+			name: "npm", protocol: model.ProtocolNPM, prefix: "/npm/",
+			docPath:  "demo",
+			filePath: func(v string) string { return "demo/-/demo-" + v + ".tgz" },
+			handler: func(u *goneUpstream, base func() string) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					u.mu.Lock()
+					defer u.mu.Unlock()
+					if r.URL.Path == "/demo" {
+						switch {
+						case u.status != 0:
+							w.WriteHeader(u.status)
+						case u.junk:
+							_, _ = w.Write([]byte("not json"))
+						case u.doc != "":
+							_, _ = w.Write([]byte(u.doc))
+						default:
+							versions := map[string]any{}
+							for _, v := range u.versions {
+								body := goneBody(v)
+								versions[v] = map[string]any{"name": "demo", "version": v, "dist": map[string]any{
+									"tarball": base() + "/demo/-/demo-" + v + ".tgz", "integrity": sri512(body)}}
+							}
+							_ = json.NewEncoder(w).Encode(map[string]any{"name": "demo", "versions": versions})
+						}
+						return
+					}
+					for _, v := range u.versions {
+						if r.URL.Path == "/demo/-/demo-"+v+".tgz" {
+							_, _ = w.Write(goneBody(v))
+							return
+						}
+					}
+					http.NotFound(w, r)
+				}
+			},
+		},
+		{
+			name: "pypi", protocol: model.ProtocolPyPI, prefix: "/pypi/",
+			docPath:  "simple/demo/",
+			filePath: func(v string) string { return "packages/demo/demo-" + v + "-py3-none-any.whl" },
+			handler: func(u *goneUpstream, _ func() string) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					u.mu.Lock()
+					defer u.mu.Unlock()
+					if r.URL.Path == "/simple/demo/" {
+						switch {
+						case u.status != 0:
+							w.WriteHeader(u.status)
+						case u.junk:
+							_, _ = w.Write([]byte("not json"))
+						case u.doc != "":
+							_, _ = w.Write([]byte(u.doc))
+						default:
+							var files []map[string]any
+							for _, v := range u.versions {
+								name := "demo-" + v + "-py3-none-any.whl"
+								files = append(files, map[string]any{"filename": name, "url": "/files/" + name,
+									"hashes": map[string]string{"sha256": shaHex(goneBody(v))}, "size": len(goneBody(v))})
+							}
+							_ = json.NewEncoder(w).Encode(map[string]any{"name": "demo", "files": files})
+						}
+						return
+					}
+					for _, v := range u.versions {
+						if r.URL.Path == "/files/demo-"+v+"-py3-none-any.whl" {
+							if u.fileStatus != 0 {
+								w.WriteHeader(u.fileStatus)
+								return
+							}
+							_, _ = w.Write(goneBody(v))
+							return
+						}
+					}
+					http.NotFound(w, r)
+				}
+			},
+		},
+	}
+}
+
+type goneEnv struct {
+	*testEnv
+	p  goneProtocol
+	up *goneUpstream
+}
+
+// newGoneEnv serves demo 1.0.0 and 2.0.0 through proxy "up" and virtual "all",
+// reads both files so they are placed, and returns with the cache still fresh.
+func newGoneEnv(t *testing.T, p goneProtocol) *goneEnv {
+	t.Helper()
+	up := &goneUpstream{versions: []string{"1.0.0", "2.0.0"}}
+	var env *testEnv
+	env = newEnv(t, p.handler(up, func() string { return env.upstream.URL }))
+	env.createProxyAt(t, "up", p.protocol, env.upstream.URL+upstreamBase(p), "")
+	env.createVirtualOf(t, "all", p.protocol, "up")
+	e := &goneEnv{testEnv: env, p: p, up: up}
+	for _, v := range []string{"1.0.0", "2.0.0"} {
+		if got := e.status(t, "up", p.filePath(v)); got != http.StatusOK {
+			t.Fatalf("priming %s = %d", v, got)
+		}
+	}
+	return e
+}
+
+func upstreamBase(p goneProtocol) string {
+	if p.protocol == model.ProtocolPyPI {
+		return "/simple"
+	}
+	return ""
+}
+
+func (e *goneEnv) status(t *testing.T, repo, path string) int {
+	t.Helper()
+	return e.do(t, http.MethodGet, e.p.prefix+repo+"/"+path, nil, "").Code
+}
+
+// age makes the cached document older than the repository's TTL.
+func (e *goneEnv) age(t *testing.T) {
+	t.Helper()
+	if _, err := e.db.Pool().Exec(t.Context(), `UPDATE remote_cache SET fetched_at = now() - interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (e *goneEnv) flagged(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := e.db.Pool().QueryRow(t.Context(), `SELECT count(*) FROM files WHERE upstream_gone_at IS NOT NULL`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func (e *goneEnv) setTTL(t *testing.T) {
+	t.Helper()
+	if _, err := e.db.Pool().Exec(t.Context(), `UPDATE remotes SET ttl_seconds = 60, negative_ttl_seconds = 60`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProxy_FileGoneUpstreamIsNotFound(t *testing.T) {
+	cases := []struct {
+		name    string
+		virtual bool
+		gone    func(u *goneUpstream)
+		// removed and kept are the versions that must answer 404 and 200.
+		removed, kept []string
+	}{
+		{"package gone, direct", false, func(u *goneUpstream) { u.answer(http.StatusNotFound) }, []string{"1.0.0", "2.0.0"}, nil},
+		{"package gone, through a virtual", true, func(u *goneUpstream) { u.answer(http.StatusNotFound) }, []string{"1.0.0", "2.0.0"}, nil},
+		{"one version gone, direct", false, func(u *goneUpstream) { u.list("2.0.0") }, []string{"1.0.0"}, []string{"2.0.0"}},
+		{"one version gone, through a virtual", true, func(u *goneUpstream) { u.list("2.0.0") }, []string{"1.0.0"}, []string{"2.0.0"}},
+	}
+	for _, p := range goneProtocols() {
+		for _, tc := range cases {
+			t.Run(p.name+"/"+tc.name, func(t *testing.T) {
+				e := newGoneEnv(t, p)
+				e.setTTL(t)
+				e.age(t)
+				tc.gone(e.up)
+				repo := "up"
+				if tc.virtual {
+					repo = "all"
+				}
+				for _, v := range tc.removed {
+					if got := e.status(t, repo, p.filePath(v)); got != http.StatusNotFound {
+						t.Errorf("GET %s %s = %d, want 404", repo, v, got)
+					}
+				}
+				for _, v := range tc.kept {
+					if got := e.status(t, repo, p.filePath(v)); got != http.StatusOK {
+						t.Errorf("GET %s %s = %d, want 200", repo, v, got)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestProxy_FileRelistedUpstreamServesAgain(t *testing.T) {
+	for _, p := range goneProtocols() {
+		t.Run(p.name, func(t *testing.T) {
+			e := newGoneEnv(t, p)
+			e.setTTL(t)
+			e.age(t)
+			e.up.list("2.0.0")
+			if got := e.status(t, "up", p.filePath("1.0.0")); got != http.StatusNotFound {
+				t.Fatalf("removed file = %d, want 404", got)
+			}
+			if e.flagged(t) != 1 {
+				t.Fatalf("%d files flagged, want 1", e.flagged(t))
+			}
+			e.up.list("1.0.0", "2.0.0")
+			e.age(t)
+			for _, repo := range []string{"up", "all"} {
+				if got := e.status(t, repo, p.filePath("1.0.0")); got != http.StatusOK {
+					t.Fatalf("relisted file through %s = %d, want 200", repo, got)
+				}
+			}
+			if e.flagged(t) != 0 {
+				t.Fatalf("%d files still flagged after relisting", e.flagged(t))
+			}
+		})
+	}
+}
+
+func TestProxy_OutageOrRefusalFlagsNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		do   func(u *goneUpstream)
+		only string // when set, the one protocol the case applies to
+	}{
+		{"server error", func(u *goneUpstream) { u.answer(http.StatusServiceUnavailable) }, ""},
+		{"refused credential", func(u *goneUpstream) { u.answer(http.StatusForbidden) }, ""},
+		{"unauthenticated", func(u *goneUpstream) { u.answer(http.StatusUnauthorized) }, ""},
+		{"unparsable document", func(u *goneUpstream) { u.garble() }, ""},
+		// A 200 that is not this project's document says nothing about its files.
+		{"empty object", func(u *goneUpstream) { u.serveDoc(`{}`) }, ""},
+		{"error message object", func(u *goneUpstream) { u.serveDoc(`{"message":"slow down"}`) }, ""},
+		{"another project's document", func(u *goneUpstream) { u.serveDoc(`{"name":"other","files":[]}`) }, ""},
+		// npm accepts a packument that lists no versions: it is a real answer.
+		{"name without files", func(u *goneUpstream) { u.serveDoc(`{"name":"demo"}`) }, "pypi"},
+	}
+	for _, p := range goneProtocols() {
+		for _, tc := range cases {
+			if tc.only != "" && tc.only != p.name {
+				continue
+			}
+			t.Run(p.name+"/"+tc.name, func(t *testing.T) {
+				e := newGoneEnv(t, p)
+				e.setTTL(t)
+				e.age(t)
+				tc.do(e.up)
+				for _, v := range []string{"1.0.0", "2.0.0"} {
+					if got := e.status(t, "up", p.filePath(v)); got != http.StatusOK {
+						t.Errorf("GET %s = %d, want the placed copy (200)", v, got)
+					}
+				}
+				if e.flagged(t) != 0 {
+					t.Errorf("%d files flagged by a non-answer", e.flagged(t))
+				}
+			})
+		}
+	}
+}
+
+// A document that is refused leaves the cached one serving: the project's
+// listing is still the last good answer.
+func TestProxy_RefusedDocumentKeepsServingTheStaleOne(t *testing.T) {
+	for _, p := range goneProtocols() {
+		t.Run(p.name, func(t *testing.T) {
+			e := newGoneEnv(t, p)
+			e.setTTL(t)
+			e.up.serveDoc(`{"message":"slow down"}`)
+			e.age(t)
+			rec := e.do(t, http.MethodGet, p.prefix+"up/"+p.docPath, nil, "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET document = %d, want the stale one (200)", rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), "1.0.0") || !strings.Contains(rec.Body.String(), "2.0.0") {
+				t.Fatalf("document = %s, want the stale listing of both versions", rec.Body.String())
+			}
+			if e.flagged(t) != 0 {
+				t.Fatalf("%d files flagged", e.flagged(t))
+			}
+		})
+	}
+}
+
+// A lockfile install never reads the package document, so the tarball read has
+// to be the one that notices.
+func TestProxy_LockfileOnlyReadNoticesARemoval(t *testing.T) {
+	for _, p := range goneProtocols() {
+		t.Run(p.name, func(t *testing.T) {
+			e := newGoneEnv(t, p)
+			e.setTTL(t)
+			e.age(t)
+			e.up.list("2.0.0")
+			if got := e.status(t, "up", p.filePath("1.0.0")); got != http.StatusNotFound {
+				t.Fatalf("tarball read past the TTL = %d, want 404", got)
+			}
+			if got := e.status(t, "up", p.filePath("2.0.0")); got != http.StatusOK {
+				t.Fatalf("the still-listed file = %d, want 200", got)
+			}
+		})
+	}
+}
+
+// pypiMember starts a second upstream for a virtual's later member, and counts
+// the file requests that reach it.
+func (e *goneEnv) secondMember(t *testing.T, name string, versions ...string) (*goneUpstream, *atomic.Int32) {
+	t.Helper()
+	up := &goneUpstream{versions: versions}
+	var files atomic.Int32
+	inner := e.p.handler(up, func() string { return "" })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/files/") {
+			files.Add(1)
+		}
+		inner(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	e.createProxyAt(t, name, e.p.protocol, srv.URL+upstreamBase(e.p), "")
+	return up, &files
+}
+
+// A member that has the project owns the answer for its files: when its live
+// index no longer lists one, a later member listing the same filename must not
+// supply it (SIN-54). A member that lacks the project still moves the walk on.
+func TestProxyPyPI_VirtualWalkStopsAtTheMemberThatDroppedTheFile(t *testing.T) {
+	pypi := goneProtocols()[1]
+	// How member A fails to supply 1.0.0, which B lists under the same name.
+	const (
+		dropped    = "index no longer lists the file"
+		project404 = "project answers 404"
+		file404    = "index lists it and the file URL answers 404"
+		file503    = "index lists it and the file URL answers 503"
+		file403    = "index lists it and the file URL answers 403"
+	)
+	cases := []struct {
+		name   string
+		mode   string
+		nested bool
+		want   int
+		bFiles int32
+		direct int // what a direct read of A answers
+	}{
+		{"dropped", dropped, false, http.StatusNotFound, 0, http.StatusNotFound},
+		{"dropped, nested", dropped, true, http.StatusNotFound, 0, http.StatusNotFound},
+		{"project 404 moves on to b", project404, false, http.StatusOK, 1, http.StatusNotFound},
+		{"project 404 moves on to b, nested", project404, true, http.StatusOK, 1, http.StatusNotFound},
+		{"file 404 is a's answer", file404, false, http.StatusNotFound, 0, http.StatusNotFound},
+		{"file 404 is a's answer, nested", file404, true, http.StatusNotFound, 0, http.StatusNotFound},
+		{"file outage fails the walk", file503, false, http.StatusBadGateway, 0, http.StatusBadGateway},
+		{"file outage fails the walk, nested", file503, true, http.StatusBadGateway, 0, http.StatusBadGateway},
+		{"file refusal fails the walk", file403, false, http.StatusBadGateway, 0, http.StatusBadGateway},
+		{"file refusal fails the walk, nested", file403, true, http.StatusBadGateway, 0, http.StatusBadGateway},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newGoneEnv(t, pypi)
+			e.setTTL(t)
+			_, bFiles := e.secondMember(t, "b", "1.0.0")
+			e.age(t)
+			switch tc.mode {
+			case dropped:
+				e.up.list("2.0.0")
+			case project404:
+				e.up.answer(http.StatusNotFound)
+			default:
+				e.up.answerFiles(map[string]int{file404: 404, file503: 503, file403: 403}[tc.mode])
+			}
+			if tc.mode != dropped {
+				// Nothing of A's may answer for the file from a placed copy.
+				if _, err := e.db.Pool().Exec(t.Context(), `DELETE FROM files WHERE blob_digest IN (SELECT digest FROM blobs)`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			target := "walk"
+			if tc.nested {
+				e.createVirtualOf(t, "inner", pypi.protocol, "up")
+				e.createVirtualOf(t, target, pypi.protocol, "inner", "b")
+			} else {
+				e.createVirtualOf(t, target, pypi.protocol, "up", "b")
+			}
+			if got := e.status(t, target, pypi.filePath("1.0.0")); got != tc.want {
+				t.Fatalf("GET through the virtual = %d, want %d", got, tc.want)
+			}
+			if got := bFiles.Load(); got != tc.bFiles {
+				t.Fatalf("%d file requests reached b, want %d", got, tc.bFiles)
+			}
+			if got := e.status(t, "up", pypi.filePath("1.0.0")); got != tc.direct {
+				t.Fatalf("direct read of a = %d, want %d", got, tc.direct)
+			}
+		})
+	}
+}

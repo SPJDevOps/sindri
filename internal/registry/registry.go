@@ -42,10 +42,12 @@ var (
 	// in the named repository. Serving it would break invariant I2.
 	ErrNotPlaced = errors.New("digest not placed in repository")
 
-	// ErrFileExists means an immutable publish would replace a filename that
-	// is already placed with different bytes. A published artifact is the
-	// thing consumers pinned a hash of, so it does not change under them.
-	ErrFileExists = errors.New("file already published with different content")
+	// ErrFileExists means an immutable publish would reuse a filename that is
+	// taken: placed with different bytes, placed under another version, or
+	// published once and since deleted. A published artifact is the thing
+	// consumers pinned a hash of, so its name does not change hands. The text
+	// must hold for all three, including a publisher who re-sent identical bytes.
+	ErrFileExists = errors.New("filename already taken in this package")
 
 	// ErrVersionExists means an exclusive publish named a version that is
 	// already published. npm versions are immutable even for identical bytes.
@@ -200,8 +202,10 @@ type PublishParams struct {
 	ExpectDigest model.Digest
 
 	// Immutable rejects a second publish of the same filename with different
-	// bytes (ErrFileExists), and a filename already used by another version
-	// of the same package. Re-publishing identical bytes stays idempotent.
+	// bytes (ErrFileExists), a filename already used by another version of the
+	// same package, and a filename that was published and deleted (even with
+	// identical bytes). Re-publishing identical bytes of a live file stays
+	// idempotent.
 	Immutable bool
 
 	// Provenance is the publisher's claim about where these bytes came from.
@@ -299,6 +303,18 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 			}
 			return model.File{}, fmt.Errorf("creating version %s: %w", p.Version, err)
 		}
+		// A deleted version stays taken (SIN-52). The insert above waited for
+		// any delete in flight on this version, so its tombstone is visible
+		// here. Returning rolls the new version row back; the bytes stay in
+		// the CAS unplaced for GC.
+		retired, err := q.IsVersionRetired(ctx, db.IsVersionRetiredParams{PackageID: pkg.ID, Version: p.Version})
+		if err != nil {
+			return model.File{}, fmt.Errorf("checking retired versions of %s: %w", p.Package, err)
+		}
+		if retired {
+			return model.File{}, fmt.Errorf("%w: %s %s was published and deleted; a version is never reused",
+				ErrVersionExists, p.Package, p.Version)
+		}
 	} else {
 		ver, err = q.GetOrCreateVersion(ctx, db.GetOrCreateVersionParams{
 			PackageID: pkg.ID,
@@ -347,6 +363,21 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		file, err = q.UpsertFile(ctx, placeParams)
 		if err != nil {
 			return model.File{}, fmt.Errorf("placing file %s: %w", p.Filename, err)
+		}
+	}
+
+	// A deleted PyPI filename stays taken, whichever version held it (SIN-52).
+	// npm is checked by version above; OCI-protocol repositories keep their
+	// v1.0 behaviour. This runs after the placement so the insert has waited
+	// for a delete in flight on the same file.
+	if model.Protocol(repo.Protocol) == model.ProtocolPyPI {
+		retired, err := q.IsFilenameRetired(ctx, db.IsFilenameRetiredParams{PackageID: pkg.ID, Filename: p.Filename})
+		if err != nil {
+			return model.File{}, fmt.Errorf("checking retired files of %s: %w", p.Package, err)
+		}
+		if retired {
+			return model.File{}, fmt.Errorf("%w: %s was published and deleted; a filename is never reused",
+				ErrFileExists, p.Filename)
 		}
 	}
 
@@ -534,6 +565,21 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 		strandedTags, err = q.ListDistTagsForVersion(ctx, versionID)
 		if err != nil {
 			return fmt.Errorf("listing dist-tags of version %s: %w", version, err)
+		}
+	}
+
+	// A hosted npm or PyPI repository's published names are immutable, so a
+	// deleted file keeps its version and filename taken (SIN-52). A proxy only
+	// mirrors upstream, and an OCI-protocol repository keeps its v1.0 behaviour;
+	// both must be able to place the file again.
+	if repoRow.Type == string(model.RepoTypeHosted) &&
+		(model.Protocol(repoRow.Protocol) == model.ProtocolNPM || model.Protocol(repoRow.Protocol) == model.ProtocolPyPI) {
+		if err := q.InsertRetiredFile(ctx, db.InsertRetiredFileParams{
+			PackageID: pkgRow.ID,
+			Version:   version,
+			Filename:  filename,
+		}); err != nil {
+			return fmt.Errorf("retiring %s: %w", filename, err)
 		}
 	}
 

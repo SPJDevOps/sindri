@@ -307,7 +307,8 @@ An upload must prove what it is before it is placed: the wheel `METADATA` or
 sdist `PKG-INFO`, the filename, and the form fields must agree on project and
 version, and a claimed `sha256_digest` is checked against the received bytes.
 A published file is immutable, so a re-upload of identical bytes is idempotent
-and one with different bytes is 409. Adapter path markers (`simple`, `packages`,
+and one with different bytes is 409 (a deleted file's name is later refused too, even with
+identical bytes; see [ADR 13](docs/adr/0013-pypi-write-time-validation-and-immutable-files.md)). Adapter path markers (`simple`, `packages`,
 `upload`, `blobs`, `manifests`, `tags`, `uploads`) are reserved repository name
 segments, which is what makes a slash-containing repository name unambiguous to
 route ([ADR 13](docs/adr/0013-pypi-write-time-validation-and-immutable-files.md)).
@@ -883,7 +884,7 @@ the claim that a third protocol is cheap.
 - [x] `npm` in `repos:` short form, `testdata/config/sindri.yaml`, and `testdata/manifests/`,
   so both golden tests cover it
 - [x] npm added to the anonymous-access test, the I2 placement tests, and the UI
-- [ ] Docs: a configuration reference page listing every field, the README "Not in v1"
+- [x] Docs: a configuration reference page listing every field, the README "Not in v1"
   list updated, and an npm example in the quickstart, which its gate script runs
 
 **Out of scope.** `npm unpublish` beyond the management API delete, the npm audit
@@ -904,6 +905,15 @@ make up && make build && ./scripts/npm-gate.sh
 # installs through the virtual repo; @acme/demo is never served from the proxy
 # even when registry.npmjs.org has a package of that name
 ```
+
+**Gate run, 2026-11-04.** `make build && ./scripts/npm-gate.sh` printed `M9 npm gate passed`
+against the Compose stack, with node 22.23.4, npm 10.9.9, pnpm 10.34.9, yarn 1.22.22 and
+yarn 4.18.1. Hosted publish, install through the virtual repository, identical installed
+bytes across all four clients, a proxy-only package, and the shadow guard
+(`is-number` and the `@types` scope through a proxy-first virtual) all held. yarn 4 needs
+`npmMinimalAgeGate: 0` in `.yarnrc.yml`: its 4.18 default gate wants the packument's `time`
+map, which Sindri does not serve yet (SIN-60), and the setting turns off yarn's age
+safeguard. The gate asserts the default still fails (YN0016) so it notices when SIN-60 lands.
 
 ---
 
