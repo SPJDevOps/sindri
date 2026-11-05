@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -459,6 +460,10 @@ func TestPublish_DeletedPyPIFilenameIsRefused(t *testing.T) {
 			err := f.publishPyPIAs("hosted", "Our_Lib", tc.version, filename, tc.body)
 			if !errors.Is(err, registry.ErrFileExists) {
 				t.Fatalf("re-upload of a deleted filename = %v, want ErrFileExists", err)
+			}
+			// The refusal is told to the publisher, who may have sent identical bytes.
+			if strings.Contains(err.Error(), "different content") {
+				t.Fatalf("refusal = %q, want no claim that the content differs", err)
 			}
 			if n := f.count(`SELECT count(*) FROM files`); n != 0 {
 				t.Fatalf("files = %d, want the refused upload to place nothing", n)

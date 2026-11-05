@@ -42,10 +42,12 @@ var (
 	// in the named repository. Serving it would break invariant I2.
 	ErrNotPlaced = errors.New("digest not placed in repository")
 
-	// ErrFileExists means an immutable publish would replace a filename that
-	// is already placed with different bytes. A published artifact is the
-	// thing consumers pinned a hash of, so it does not change under them.
-	ErrFileExists = errors.New("file already published with different content")
+	// ErrFileExists means an immutable publish would reuse a filename that is
+	// taken: placed with different bytes, placed under another version, or
+	// published once and since deleted. A published artifact is the thing
+	// consumers pinned a hash of, so its name does not change hands. The text
+	// must hold for all three, including a publisher who re-sent identical bytes.
+	ErrFileExists = errors.New("filename already taken in this package")
 
 	// ErrVersionExists means an exclusive publish named a version that is
 	// already published. npm versions are immutable even for identical bytes.
@@ -200,8 +202,10 @@ type PublishParams struct {
 	ExpectDigest model.Digest
 
 	// Immutable rejects a second publish of the same filename with different
-	// bytes (ErrFileExists), and a filename already used by another version
-	// of the same package. Re-publishing identical bytes stays idempotent.
+	// bytes (ErrFileExists), a filename already used by another version of the
+	// same package, and a filename that was published and deleted (even with
+	// identical bytes). Re-publishing identical bytes of a live file stays
+	// idempotent.
 	Immutable bool
 
 	// Provenance is the publisher's claim about where these bytes came from.
