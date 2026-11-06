@@ -825,14 +825,14 @@ publish is scanned, and promotion is refused above a severity.
 
 | Sprint (Mon–Sun) | Milestone | Tickets | Release |
 |---|---|---|---|
-| 5, Nov 9–15 | v1.1.1 | SIN-57, 59, 60, 61, 62, 63, 64, 66, 67 | v1.1.1 |
+| 5, Nov 5–15 | v1.1.1 ✅ | SIN-57, 59, 60, 61, 62, 63, 64, 66, 67 | v1.1.1 |
 | 6, Nov 16–22 | M10 docs site | SIN-22, 23, 29 | |
 | 7, Nov 23–29 | M10 migration | SIN-24, 25, 26, 53 | |
 | 8, Nov 30–Dec 6 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
 | 9, Dec 7–13 | M11a scan | SIN-30, 31, 32, 36 | |
 | 10, Dec 14–20 | M11a gate | SIN-34, 38, 39, 72 | v1.3.0, then announce |
 
-Not scheduled: SIN-56, 58, and 65 from the hardening epic.
+Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic.
 
 ---
 
@@ -938,24 +938,24 @@ published, with binaries and `ghcr.io/spjdevops/sindri:1.1.0` for amd64 and arm6
 
 ---
 
-### v1.1.1 — Hardening
+### v1.1.1 — Hardening ✅
 
 **Goal.** Close what an adopter or a security reader would hit first, before M10 invites
 anyone in, and ship it as a patch release.
 
 **Scope.**
-- [ ] yarn 4 installs on its default settings, because packuments carry real publish times
+- [x] yarn 4 installs on its default settings, because packuments carry real publish times
   (SIN-60). This amends ADR 24
-- [ ] A NUL in an OCI provenance annotation is a 400, not a 500 (SIN-63)
-- [ ] The delete-and-publish race on hosted files is closed, with tests that force the
+- [x] A NUL in an OCI provenance annotation is a 400, not a 500 (SIN-63)
+- [x] The delete-and-publish race on hosted files is closed, with tests that force the
   interleaving (SIN-64)
-- [ ] The npm tarball differential check compares the whole sanitized manifest, and the
+- [x] The npm tarball differential check compares the whole sanitized manifest, and the
   gate's clients are pinned (SIN-66)
-- [ ] An upstream outage does not stall every read past its TTL, and a fresh placed read does
+- [x] An upstream outage does not stall every read past its TTL, and a fresh placed read does
   not parse the document (SIN-61)
-- [ ] The S3 `PurgeUploads` flake is explained and the test is stable (SIN-67)
-- [ ] `internal/resolve` tests share one Postgres container (SIN-57)
-- [ ] Decided and recorded: stray zero bytes after a tarball's end marker (SIN-59, in ADR 24),
+- [x] The S3 `PurgeUploads` flake is explained and the test is stable (SIN-67)
+- [x] `internal/resolve` tests share one Postgres container (SIN-57)
+- [x] Decided and recorded: stray zero bytes after a tarball's end marker (SIN-59, in ADR 24),
   and whether an OCI proxy stops serving a digest upstream removed (SIN-62, in ADR 14)
 
 **Out of scope.** SIN-56, SIN-58, and SIN-65 stay unscheduled. SIN-53 runs with the migration
@@ -967,6 +967,31 @@ make ci && make test-integration
 make up && make build && ./scripts/npm-gate.sh   # yarn 4 passes on default settings
 git tag v1.1.1 && git push origin v1.1.1         # the release workflow is green
 ```
+
+**Gate run, 2026-11-05.** On main at e77c032, with Go 1.27.1: `make ci`, `make test-integration`,
+and `./scripts/npm-gate.sh` all passed, and so did CI on main and the release workflow.
+`./scripts/npm-tarball-differential.sh` passed at fb7ccc1, the same content. The gate ran node
+22.23.4, npm 10.9.9, pnpm 10.34.9, yarn 1.22.22 and yarn 4.18.1. yarn 4 on default settings
+refuses a version published seconds earlier (YN0016), installs it once it is older than the gate,
+and installs a proxied package. v1.1.1 is published, with binaries and
+`ghcr.io/spjdevops/sindri:1.1.1` for amd64 and arm64.
+
+**What the release did not prove.**
+- SIN-67: the harness returned while MinIO's throwaway setup instance was still up. Waiting for the
+  real server is proved to end the dropped connections, and full integration runs went from 6 of 20
+  failing to 10 of 10 passing. The missing upload coincided with that stop, but why a stop loses an
+  upload was not established, and restarts against `s3store` were not tested.
+- SIN-64: the 40P01 deadlock was never reproduced, so its test is a guard. The race tests cover one
+  pause point and don't show which lock prevents the race.
+- SIN-61: tests cut the connection quickly. A blackholed upstream was not reproduced end to end, and
+  the 500-package figure in ADR 24 is derived, not measured.
+
+**One change from the plan.** A 5xx does not start a backoff, because one package's 5xx would
+otherwise fail cold reads across its repository. Only connection failures and timeouts do.
+
+**Follow-ups, all unscheduled.** SIN-73 (evict one digest from an OCI proxy), SIN-74 (memory when
+parsing whole packuments), SIN-75 (a PyPI filename retired under one version and placed under
+another), SIN-76 (the Compose stack and MinIO's setup instance).
 
 ---
 
