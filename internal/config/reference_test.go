@@ -82,6 +82,69 @@ func TestReference_EveryFieldIsDocumented(t *testing.T) {
 	}
 }
 
+// statedDefaultChecks names, for every default a comment states, what keeps
+// it true. A new "Default:" sentence fails
+// TestReference_StatedDefaultsAreChecked until it is listed here.
+var statedDefaultChecks = map[string]func(t *testing.T){
+	"Storage.Region": func(t *testing.T) {
+		c, err := Parse([]byte("storage: s3://bucket\n"), "s3.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Storage.Region != "us-east-1" {
+			t.Errorf("an S3 storage section without region gets %q, the page says us-east-1", c.Storage.Region)
+		}
+	},
+	"Storage.Endpoint": func(t *testing.T) {
+		c, err := Parse([]byte("storage: s3://bucket\n"), "s3.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Storage.Endpoint != "" {
+			t.Errorf("an S3 storage section without endpoint gets %q, the page says unset", c.Storage.Endpoint)
+		}
+	},
+	// Applied by internal/auth when the browser login starts; checked there by
+	// TestSession_LoginRequestsOpenIDProfileAndEmailByDefault.
+	"OIDC.Scopes": func(*testing.T) {},
+}
+
+func TestReference_StatedDefaultsAreChecked(t *testing.T) {
+	docs := fieldDocs(t)
+	for _, sec := range serverSections() {
+		for _, r := range sectionRows(sec, docs) {
+			if !r.stated {
+				continue
+			}
+			check, ok := statedDefaultChecks[r.goField]
+			if !ok {
+				t.Errorf("%s states its default in a comment (%s), and statedDefaultChecks has no check for it", r.goField, r.def)
+				continue
+			}
+			t.Run(r.goField, check)
+		}
+	}
+}
+
+// The page's defaults come from Default(), and a loaded file gets its
+// defaults from each section's applyDefaults. The two must agree, or the page
+// describes a server with no file and not one whose file leaves a key out.
+func TestReference_DefaultMatchesWhatEmptySectionsLoadTo(t *testing.T) {
+	var doc strings.Builder
+	for _, sec := range serverSections() {
+		if sec.typ.Kind() == reflect.Struct {
+			doc.WriteString(sec.key + ": {}\n")
+		}
+	}
+	got, err := Parse([]byte(doc.String()), "empty-sections.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := Default(); !reflect.DeepEqual(*got, want) {
+		t.Errorf("empty sections load to\n %+v\nbut Default() is\n %+v", *got, want)
+	}
+}
+
 func TestReference_ShortFormsDesugarAsDocumented(t *testing.T) {
 	t.Setenv("SINDRI_TOKEN", "a-token")
 	for section, forms := range shortForms {
@@ -176,6 +239,8 @@ type row struct {
 	typ     string
 	meaning string
 	def     string
+	stated  bool   // the default came from a "Default:" sentence, not the code
+	problem string // why this row cannot be generated; renderReference refuses it
 }
 
 var durationType = reflect.TypeOf(Duration(0))
@@ -203,6 +268,9 @@ func structRows(prefix string, t reflect.Type, v reflect.Value, docs map[string]
 		}
 		return structRows(prefix, t.Elem(), elem.Elem(), docs)
 	case reflect.Map:
+		if t.Elem().Kind() != reflect.Struct {
+			return []row{{key: prefix, problem: "a map of " + t.Elem().Kind().String() + " is not supported by the generator"}}
+		}
 		return structRows(prefix+"<name>.", t.Elem(), reflect.New(t.Elem()).Elem(), docs)
 	}
 
@@ -215,6 +283,10 @@ func structRows(prefix string, t reflect.Type, v reflect.Value, docs map[string]
 		}
 		fv := v.Field(i)
 		goField := t.Name() + "." + f.Name
+		if strings.Contains(f.Tag.Get("yaml"), ",inline") {
+			out = append(out, row{key: prefix + key, goField: goField, problem: "an inline field is not supported by the generator"})
+			continue
+		}
 		switch {
 		case f.Type == durationType:
 			out = append(out, leafRow(prefix+key, goField, f.Type, fv, docs))
@@ -229,22 +301,38 @@ func structRows(prefix string, t reflect.Type, v reflect.Value, docs map[string]
 	return out
 }
 
-var statedDefault = regexp.MustCompile(`\s*Default: (.+?)\.?$`)
+// statedDefault is a comment's last sentence, "Default: <value>.", for a
+// default the code applies conditionally or outside this package.
+var statedDefault = regexp.MustCompile(`(?:^|\.\s+)Default: (.+?)\.?$`)
 
 func leafRow(key, goField string, t reflect.Type, v reflect.Value, docs map[string]string) row {
-	meaning := docs[goField]
-	def := formatDefault(t, v)
-	if m := statedDefault.FindStringSubmatchIndex(meaning); m != nil {
-		stated := meaning[m[2]:m[3]]
-		meaning = meaning[:m[0]]
-		if def != "unset" {
+	r := row{key: key, goField: goField, typ: typeName(t), meaning: docs[goField], def: formatDefault(t, v)}
+	switch t.Kind() {
+	case reflect.String, reflect.Bool, reflect.Int, reflect.Int32, reflect.Int64:
+	case reflect.Slice:
+		if t.Elem().Kind() != reflect.String {
+			r.problem = "a list of " + t.Elem().Kind().String() + " is not supported by the generator"
+		}
+	default:
+		r.problem = "a field of kind " + t.Kind().String() + " is not supported by the generator"
+	}
+	if m := statedDefault.FindStringSubmatchIndex(r.meaning); m != nil {
+		stated := r.meaning[m[2]:m[3]]
+		r.meaning = r.meaning[:m[0]]
+		if r.meaning != "" && !strings.HasSuffix(r.meaning, ".") {
+			r.meaning += "."
+		}
+		switch {
+		case strings.Contains(stated, ". "):
+			r.problem = "its \"Default:\" sentence must be the comment's last"
+		case r.def != "unset":
 			// Two sources for one default would drift; the code wins.
-			def = fmt.Sprintf("CONFLICT: the code defaults to %s and the comment says %s", def, stated)
-		} else {
-			def = stated
+			r.problem = fmt.Sprintf("the code defaults to %s and its comment says %s; drop the comment's", r.def, stated)
+		default:
+			r.def, r.stated = stated, true
 		}
 	}
-	return row{key: key, goField: goField, typ: typeName(t), meaning: meaning, def: def}
+	return r
 }
 
 func typeName(t reflect.Type) string {
@@ -382,6 +470,11 @@ func renderReference(page []byte) ([]byte, error) {
 		if !ok {
 			problems = append(problems, fmt.Sprintf("block %s names no section of Config", begin))
 			return block
+		}
+		for _, r := range sectionRows(sec, docs) {
+			if r.problem != "" {
+				problems = append(problems, fmt.Sprintf("%s %s (%s): %s", begin, r.key, r.goField, r.problem))
+			}
 		}
 		return []byte("<!-- BEGIN GENERATED: " + begin + " -->\n" + renderSection(sec, docs) + "<!-- END GENERATED: " + begin + " -->")
 	})

@@ -21,7 +21,7 @@ documents the server acts on, with every preset, inference, and default written 
 
 The server settings tables are generated from the structs in `internal/config` by
 `make reference`, and a test fails when the page and the code disagree. The tables for
-repositories, lifecycle, and manifests are written by hand, and a test checks that they
+repositories, lifecycle, defaults, and manifests are written by hand, and a test checks that they
 list exactly the keys the loader accepts. Where the code sets a default, the page states
 it; where it does not, the key is unset.
 
@@ -244,8 +244,8 @@ distinguished by what the entry contains, not by a flag.
 | `upstream` | preset name or mapping | Makes the repository a **proxy**. A preset name, or a mapping (below). | unset |
 | `members` | list of strings | Makes the repository **virtual**: an ordered list of repository names. Every member must share one protocol. | unset |
 | `type` | string | `hosted`, `proxy`, or `virtual`. Optional; if written it must agree with what `members` and `upstream` imply. | inferred |
-| `read` | list of strings | Groups that may read. Entries are group names as the identity provider reports them, or `authenticated` for any signed-in caller. | `defaults.<type>.read`, else administrators only |
-| `write` | list of strings | Groups that may write. Write implies read. | `defaults.<type>.write`, else administrators only |
+| `read` | list of strings | Groups that may read. Entries are group names as the identity provider reports them, or `authenticated` for any signed-in caller. | `defaults.<type>.read`, else administrators, and machine tokens scoped to it |
+| `write` | list of strings | Groups that may write. Write implies read. | `defaults.<type>.write`, else administrators, and machine tokens scoped to it |
 | `lifecycle` | list of strings, or mapping | Hosted repositories only: the stages artifacts may be promoted into, as a list, or as a mapping with `stages`. | `defaults.hosted.lifecycle`, else every stage |
 | `lifecycle.stages` | list of strings | The same list, in the mapping spelling. | every stage |
 
@@ -262,13 +262,13 @@ a prefix, such as `hosted/org/internal-py`.
 |---|---|---|---|
 | `preset` | string | A preset name, as above. | unset |
 | `url` | string | The upstream's URL. Needed when there is no preset. | the preset's |
-| `ttl` | duration | How long a cached answer is fresh. `0` never expires, so the cache is never refreshed and Sindri never notices upstream removing a file. Always set it for an explicit `url`. | the preset's, `1h` for every preset; `0` for an explicit `url` |
-| `negativeTtl` | duration | How long "not found" is remembered. `0` means it is not cached. | the preset's, `5m` for every preset; `0` for an explicit `url` |
+| `ttl` | duration | How long a cached answer is fresh. `0` never expires, so the cache is never refreshed and Sindri never notices upstream removing a file. Always set it for an explicit `url`. | the preset's, `1h` for every preset; else `defaults.proxy.ttl`; else `0` |
+| `negativeTtl` | duration | How long "not found" is remembered. `0` means it is not cached. | the preset's, `5m` for every preset; else `defaults.proxy.negativeTtl`; else `0` |
 | `credentials` | string | A key of the top-level `credentials:` map. | unset |
 
 Precedence, lowest first: the preset, then `defaults.proxy`, then what the repository
-writes. A mapping with an explicit `url` and no `ttl` or `negativeTtl` leaves both at
-`0`. An unset `ttl` of `0` never expires: a cached hit is always fresh and never
+writes. A mapping with an explicit `url`, and no `ttl` or `negativeTtl` here or in
+`defaults.proxy`, leaves both at `0`. An unset `ttl` of `0` never expires: a cached hit is always fresh and never
 revalidated, so that proxy never refreshes its cache, and since SIN-54 never notices
 upstream removing a file, because a refresh is what flags it. An unset `negativeTtl` of
 `0` means "not found" is not cached. Always set `ttl` for an explicit `url`.
@@ -331,8 +331,8 @@ A namespaced repository's full name is `namespace/name`.
 | `spec.upstream.negativeTtl` | duration | Proxy only. How long "not found" is remembered. Unset is `0`: not cached. | `0` |
 | `spec.upstream.credentials` | string | Proxy only. A key of the server's `credentials:` map. | unset |
 | `spec.members[].ref` | string | Virtual only. `<type>/<name>`, for example `hosted/internal-js`; `org/<name>` or `<team>/<name>` reaches across a namespace. | |
-| `spec.access.read` | list of strings | Groups that may read, or `authenticated`. | administrators only |
-| `spec.access.write` | list of strings | Groups that may write. | administrators only |
+| `spec.access.read` | list of strings | Groups that may read, or `authenticated`. | administrators, and machine tokens scoped to it |
+| `spec.access.write` | list of strings | Groups that may write. | administrators, and machine tokens scoped to it |
 | `spec.lifecycle.stages` | list of strings | Hosted only. The stages artifacts may be promoted into. | every stage |
 
 The long form has no presets and no inference: what is written is what the server acts

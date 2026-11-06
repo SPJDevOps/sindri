@@ -52,8 +52,12 @@ is the exception: nothing links to it by name, and GitHub shows it for the direc
 
 - A new page is not on the site until it is in `SUMMARY.md`. mdBook ignores a file it is
   not told about, and the docs tests fail on a page missing from `SUMMARY.md`.
-- One version of the docs is published: the latest release. Docs for older versions are in
-  the repository at their tag.
+- One version of the docs is published: the most recent release tag, pre-releases
+  excluded. A patch tagged on an older release line would publish that line's docs over
+  the newer ones; while there is one release line that cannot happen. Docs for older
+  versions are in the repository at their tag.
+- The `github-pages` environment GitHub creates deploys only from the default branch, so
+  it must be given a rule for `v*` tags when Pages is enabled.
 - The site looks plain. It works for reference documentation; a marketing site is out of
   scope for M10 anyway.
 

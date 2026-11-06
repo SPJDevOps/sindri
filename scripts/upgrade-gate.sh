@@ -32,7 +32,13 @@ DOC="${ROOT}/docs/upgrading.md"
 DIND="sindri-upgrade-gate"
 DIND_IMAGE="docker:29-dind"
 TOOLS_IMAGE="alpine:3.20"
-PREVIOUS="${SINDRI_GATE_PREVIOUS:-$(git -C "${ROOT}" describe --tags --abbrev=0)}"
+# On a release commit the latest tag is HEAD's own, so look from its parent.
+if git -C "${ROOT}" describe --tags --exact-match HEAD >/dev/null 2>&1; then
+  FROM="HEAD^"
+else
+  FROM="HEAD"
+fi
+PREVIOUS="${SINDRI_GATE_PREVIOUS:-$(git -C "${ROOT}" describe --tags --abbrev=0 "${FROM}")}"
 PREVIOUS="${PREVIOUS#v}"
 IMAGE="${SINDRI_GATE_IMAGE:-}"
 REPO_IMAGE="ghcr.io/spjdevops/sindri"
@@ -58,13 +64,16 @@ ARCHIVE="sindri_${PREVIOUS}_linux_amd64.tar.gz"
 BASE="https://github.com/SPJDevOps/sindri/releases/download/v${PREVIOUS}"
 curl -fsSL --retry 3 -o "${WORK}/${ARCHIVE}" "${BASE}/${ARCHIVE}"
 curl -fsSL --retry 3 -o "${WORK}/checksums.txt" "${BASE}/checksums.txt"
+# Only the stubbed systemctl writes to binary.out, so the check below proves
+# the page's last line ran the binary its install line put in place.
 docker run --rm --platform linux/amd64 -v "${WORK}:/work" -w /work "${TOOLS_IMAGE}" sh -euc '
-  grep " '"${ARCHIVE}"'\$" checksums.txt | sha256sum -c -
-  systemctl() { /usr/local/bin/sindri version; }
+  grep " '"${ARCHIVE}"'\$" checksums.txt | sha256sum -c - >&2
+  systemctl() { /usr/local/bin/sindri version > /work/binary.out; }
   set -x
   . ./binary.sh
-' | tee "${WORK}/binary.out"
-grep -q "${PREVIOUS}" "${WORK}/binary.out" || { echo "the installed binary is not ${PREVIOUS}" >&2; exit 1; }
+'
+cat "${WORK}/binary.out"
+grep -qF "sindri ${PREVIOUS} (" "${WORK}/binary.out" || { echo "the installed binary is not ${PREVIOUS}" >&2; exit 1; }
 echo "the page's install lines installed sindri ${PREVIOUS}"
 
 if [[ -z "${IMAGE}" ]]; then
@@ -86,7 +95,10 @@ docker save "${IMAGE}" | docker exec -i "${DIND}" docker load -q >/dev/null
 docker exec "${DIND}" docker tag "${IMAGE}" "${REPO_IMAGE}:gate"
 
 docker exec "${DIND}" mkdir -p /quickstart
-docker cp "${ROOT}/deploy/quickstart/compose.yaml" "${DIND}:/quickstart/compose.yaml"
+# A user upgrades by keeping the Compose file they have and changing the image,
+# so the gate starts from the release's own file, not this checkout's.
+git -C "${ROOT}" show "v${PREVIOUS}:deploy/quickstart/compose.yaml" > "${WORK}/compose.yaml"
+docker cp "${WORK}/compose.yaml" "${DIND}:/quickstart/compose.yaml"
 docker cp "${WORK}/compose.sh" "${DIND}:/quickstart/upgrade.sh"
 
 echo "== Compose: start ${PREVIOUS}, push an image, upgrade with the page's command"
