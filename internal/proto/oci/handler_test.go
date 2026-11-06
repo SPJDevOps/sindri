@@ -1,6 +1,9 @@
 package oci
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+)
 
 func TestParseContentRangeStart(t *testing.T) {
 	tests := []struct {
@@ -37,5 +40,55 @@ func TestSplitRepoPath(t *testing.T) {
 	name, rest, ok = splitRepoPath("a/b/c/manifests/latest")
 	if !ok || name != "a/b/c" || rest != "manifests/latest" {
 		t.Fatalf("got name=%q rest=%q ok=%v", name, rest, ok)
+	}
+}
+
+func TestAcceptHeader_JoinsEveryLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{"NoHeaderIsEmpty", nil, ""},
+		{"SingleLineIsUnchanged", []string{"application/vnd.oci.image.index.v1+json"}, "application/vnd.oci.image.index.v1+json"},
+		{"CommaJoinedLineIsUnchanged", []string{"a/x, b/y"}, "a/x, b/y"},
+		{"SeveralLinesAreAllKept", []string{"application/vnd.docker.distribution.manifest.list.v2+json", "application/vnd.oci.image.index.v1+json"},
+			"application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := http.Header{}
+			for _, l := range tc.lines {
+				h.Add("Accept", l)
+			}
+			if got := acceptHeader(h); got != tc.want {
+				t.Fatalf("acceptHeader = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseTagsPageSize_ClampsLargeAndRefusesNonPositive(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    int32
+		wantErr bool
+	}{
+		{"SmallIsKept", "10", 10, false},
+		{"CapIsKept", "200", 200, false},
+		{"OneThousandIsClamped", "1000", 200, false},
+		{"HugeIsClamped", "99999999999", 200, false},
+		{"ZeroIsRefused", "0", 0, true},
+		{"NegativeIsRefused", "-5", 0, true},
+		{"NonNumericIsRefused", "many", 0, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseTagsPageSize(tc.in)
+			if (err != nil) != tc.wantErr || got != tc.want {
+				t.Fatalf("parseTagsPageSize(%q) = %d, %v; want %d, err=%v", tc.in, got, err, tc.want, tc.wantErr)
+			}
+		})
 	}
 }

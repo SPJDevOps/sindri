@@ -577,7 +577,7 @@ func TestProxyPyPI_CredentialsStayOnUpstreamOrigin(t *testing.T) {
 		default:
 			http.NotFound(w, r)
 		}
-	}, withCredentials(remote.StaticCredentials{"mirror-cred": {"mirror", "s3cret"}}))
+	}, withCredentials(remote.StaticCredentials{"mirror-cred": {Username: "mirror", Password: "s3cret"}}))
 	// The management API refuses credentials_ref until M7 supplies secrets
 	// (ADR 15), so the repository is created below the API. What this guards,
 	// credentials never leaving the upstream's origin, is what M7 builds on.
@@ -1117,6 +1117,70 @@ func TestProxyPyPI_VirtualWalkStopsAtTheMemberThatDroppedTheFile(t *testing.T) {
 			}
 			if got := e.status(t, "up", pypi.filePath("1.0.0")); got != tc.direct {
 				t.Fatalf("direct read of a = %d, want %d", got, tc.direct)
+			}
+		})
+	}
+}
+
+// TestProxyPyPI_RelativeFileLinkResolvesAgainstTheProjectPage: PEP 503 resolves
+// a relative file link against the URL of the page it came from, which is the
+// URL that answered after redirects. devpi writes "../../+f/..." links, which
+// reach the wrong directory if they are resolved against the upstream's base.
+func TestProxyPyPI_RelativeFileLinkResolvesAgainstTheProjectPage(t *testing.T) {
+	wheel := []byte("relative-link-wheel")
+	const file = "rel_pkg-1.0.0-py3-none-any.whl"
+	cases := []struct {
+		name     string
+		pagePath string // where the index document lives
+		redirect bool   // /simple/rel-pkg/ redirects to pagePath
+		link     string // the file link the index carries
+		filePath string // where the file really is
+	}{
+		{"nested page with a parent-relative link", "/a/b/simple/rel-pkg/", false, "../../+f/ab/" + file, "/a/b/+f/ab/" + file},
+		{"root-relative link", "/a/b/simple/rel-pkg/", false, "/files/" + file, "/files/" + file},
+		{"page reached through a redirect", "/a/b/index/v2/rel-pkg/", true, "../../+f/ab/" + file, "/a/b/index/+f/ab/" + file},
+		{"absolute link is left unchanged", "/a/b/simple/rel-pkg/", false, "@UPSTREAM@/abs/" + file, "/abs/" + file},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var base string
+			env := newEnv(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/a/b/simple/rel-pkg/":
+					if tc.redirect {
+						http.Redirect(w, r, tc.pagePath, http.StatusFound)
+						return
+					}
+					fallthrough
+				case tc.pagePath:
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"name": "rel-pkg",
+						"files": []map[string]any{{
+							"filename": file,
+							"url":      strings.ReplaceAll(tc.link, "@UPSTREAM@", base),
+							"hashes":   map[string]string{"sha256": shaHex(wheel)},
+							"size":     len(wheel),
+						}},
+					})
+				case tc.filePath:
+					_, _ = w.Write(wheel)
+				default:
+					http.NotFound(w, r)
+				}
+			})
+			base = env.upstream.URL
+			if _, err := env.reg.CreateRepository(t.Context(), registry.CreateRepositoryParams{
+				Name: "proxy/rel", Type: model.RepoTypeProxy, Protocol: model.ProtocolPyPI,
+				UpstreamURL: env.upstream.URL + "/a/b/simple", TTLSeconds: 3600, NegativeTTL: 300,
+			}); err != nil {
+				t.Fatalf("create proxy: %v", err)
+			}
+			// The second pass reads the cached index, which must resolve alike.
+			for _, pass := range []string{"fresh index", "cached index"} {
+				rec := env.do(t, http.MethodGet, "/pypi/proxy/rel/packages/rel-pkg/"+file, nil, "")
+				if rec.Code != http.StatusOK || rec.Body.String() != string(wheel) {
+					t.Fatalf("%s: download = %d %q, want the wheel", pass, rec.Code, rec.Body.String())
+				}
 			}
 		})
 	}

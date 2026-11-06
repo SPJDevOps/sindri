@@ -272,13 +272,19 @@ func (c *Client) fetchBearerToken(ctx context.Context, challenge string, ur upst
 	}
 	req.URL.RawQuery = q.Encode()
 	if ur.remote.CredentialsRef != "" && (req.URL.Scheme == "https" || sameOrigin(realm, ur.remote.UpstreamURL)) {
-		user, pass, err := c.creds.Lookup(ctx, ur.remote.CredentialsRef)
+		cred, err := c.creds.Lookup(ctx, ur.remote.CredentialsRef)
 		if err != nil {
 			return "", fmt.Errorf("resolving credentials: %w", err)
 		}
-		if user != "" || pass != "" {
-			req.SetBasicAuth(user, pass)
+		if cred.Kind() == model.CredentialToken {
+			// Validation refuses this pairing; it can only arrive here if a
+			// reload changed the credential's kind under a stored repository.
+			// A static token means nothing to a token realm, and the realm
+			// must not be handed one.
+			return "", fmt.Errorf("%w: credentials %q is a token, but an OCI upstream needs username/password",
+				ErrUpstreamUnavailable, ur.remote.CredentialsRef)
 		}
+		cred.apply(req)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

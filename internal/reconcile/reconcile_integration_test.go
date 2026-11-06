@@ -42,14 +42,14 @@ func newRecEnv(t *testing.T, credentials ...string) *recEnv {
 	}
 	t.Cleanup(database.Close)
 	reg := registry.New(database, cas.New(memstore.New()), "memory")
-	known := map[string]struct{}{}
+	known := map[string]model.CredentialKind{}
 	for _, c := range credentials {
-		known[c] = struct{}{}
+		known[c] = model.CredentialBasic
 	}
 	return &recEnv{
 		database: database,
 		reg:      reg,
-		rec:      reconcile.New(database, reg, func() map[string]struct{} { return known }),
+		rec:      reconcile.New(database, reg, func() map[string]model.CredentialKind { return known }),
 	}
 }
 

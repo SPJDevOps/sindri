@@ -10,6 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/spj/sindri/internal/config"
+	"github.com/spj/sindri/internal/model"
 )
 
 // The guarantee of ADR 7, made executable: the short form has no
@@ -485,5 +486,41 @@ func TestParse_NpmRepositoryRequiresPublicUrl(t *testing.T) {
 	}
 	if _, err := config.Parse([]byte("repos:\n  a: { protocol: pypi }\n"), "sindri.yaml"); err != nil {
 		t.Errorf("a config with no npm repository needs no publicUrl: %v", err)
+	}
+}
+
+func TestCredentials_TokenAndPasswordAreExclusive(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantKind model.CredentialKind
+		wantErr  string
+	}{
+		{name: "UsernameAndPasswordIsBasic", input: "credentials:\n  c: { username: u, password: p }\n", wantKind: model.CredentialBasic},
+		{name: "PasswordAloneIsBasic", input: "credentials:\n  c: { password: p }\n", wantKind: model.CredentialBasic},
+		{name: "TokenAloneIsBearer", input: "credentials:\n  c: { token: t }\n", wantKind: model.CredentialToken},
+		{name: "TokenWithPasswordIsRefused", input: "credentials:\n  c: { token: t, password: p }\n", wantErr: "credentials.c"},
+		{name: "TokenWithUsernameIsRefused", input: "credentials:\n  c: { token: t, username: u }\n", wantErr: "credentials.c"},
+		{name: "NeitherIsRefused", input: "credentials:\n  c: { username: u }\n", wantErr: "credentials.c"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.Parse([]byte(tc.input), "sindri.yaml")
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Parse error = %v, want it to mention %q", err, tc.wantErr)
+				}
+				if strings.Contains(err.Error(), ": p") || strings.Contains(err.Error(), ": t ") {
+					t.Fatalf("error echoes a secret: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if got := cfg.Credentials.Names()["c"]; got != tc.wantKind {
+				t.Fatalf("Names()[c] = %q, want %q", got, tc.wantKind)
+			}
+		})
 	}
 }

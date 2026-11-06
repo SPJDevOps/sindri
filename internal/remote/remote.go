@@ -69,22 +69,53 @@ const maxRedirects = 10
 // Credentials looks up a secret by credentials_ref. The secret is never stored
 // in remotes and never logged.
 type Credentials interface {
-	Lookup(ctx context.Context, ref string) (username, password string, err error)
+	Lookup(ctx context.Context, ref string) (Credential, error)
+}
+
+// Credential is one upstream secret: a username and password (HTTP Basic) or a
+// token (HTTP Bearer), never both (ADR 27). Its zero value is "no credential".
+// It has no String method on purpose; keep it out of log lines and errors.
+type Credential struct {
+	Username string
+	Password string
+	Token    string
+}
+
+// Kind says which scheme the credential uses, or "" for the zero value.
+func (c Credential) Kind() model.CredentialKind {
+	switch {
+	case c.Token != "":
+		return model.CredentialToken
+	case c.Username != "" || c.Password != "":
+		return model.CredentialBasic
+	default:
+		return ""
+	}
+}
+
+// apply sets the Authorization header for the credential's scheme.
+func (c Credential) apply(req *http.Request) {
+	switch c.Kind() {
+	case model.CredentialToken:
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	case model.CredentialBasic:
+		req.SetBasicAuth(c.Username, c.Password)
+	}
 }
 
 // StaticCredentials is an in-memory credentials map for tests and early wiring.
-type StaticCredentials map[string][2]string
+type StaticCredentials map[string]Credential
 
 // Lookup implements Credentials.
-func (s StaticCredentials) Lookup(_ context.Context, ref string) (string, string, error) {
+func (s StaticCredentials) Lookup(_ context.Context, ref string) (Credential, error) {
 	if ref == "" {
-		return "", "", nil
+		return Credential{}, nil
 	}
-	pair, ok := s[ref]
+	cred, ok := s[ref]
 	if !ok {
-		return "", "", fmt.Errorf("unknown credentials_ref %q", ref)
+		return Credential{}, fmt.Errorf("unknown credentials_ref %q", ref)
 	}
-	return pair[0], pair[1], nil
+	return cred, nil
 }
 
 // Client talks to proxy upstreams.
@@ -264,7 +295,7 @@ func (c *Client) do(ctx context.Context, ur upstreamRequest) (*http.Response, er
 		}
 		if bearer != "" {
 			req.Header.Set("Authorization", "Bearer "+bearer)
-		} else if err := c.applyCredentials(ctx, req, ur.remote); err != nil {
+		} else if err := c.applyCredentials(ctx, req, ur.remote, ur.tokenKey != ""); err != nil {
 			return nil, err
 		}
 		client := c.http
@@ -328,20 +359,27 @@ func classify(status int) error {
 	}
 }
 
-// applyCredentials attaches the remote's credentials, but only to the host
-// the operator configured. Upstream documents name other hosts (a PyPI index
+// applyCredentials attaches the remote's credentials (Basic, or Bearer for a
+// token), but only to the host the operator configured. Upstream documents name other hosts (a PyPI index
 // may link files anywhere), and a credential must not follow those links.
-func (c *Client) applyCredentials(ctx context.Context, req *http.Request, remote registry.Remote) error {
+//
+// oci is true for an OCI registry request (the ones that carry a tokenKey). An
+// OCI upstream authenticates with username/password through its token realm,
+// so a token-kind credential is refused there rather than sent (ADR 27). The
+// error names the credential reference, never the secret.
+func (c *Client) applyCredentials(ctx context.Context, req *http.Request, remote registry.Remote, oci bool) error {
 	if remote.CredentialsRef == "" || !sameOrigin(req.URL.String(), remote.UpstreamURL) {
 		return nil
 	}
-	user, pass, err := c.creds.Lookup(ctx, remote.CredentialsRef)
+	cred, err := c.creds.Lookup(ctx, remote.CredentialsRef)
 	if err != nil {
 		return fmt.Errorf("resolving credentials: %w", err)
 	}
-	if user != "" || pass != "" {
-		req.SetBasicAuth(user, pass)
+	if oci && cred.Kind() == model.CredentialToken {
+		return fmt.Errorf("%w: credentials %q is a token, but an OCI upstream needs username/password",
+			ErrUpstreamUnavailable, remote.CredentialsRef)
 	}
+	cred.apply(req)
 	return nil
 }
 

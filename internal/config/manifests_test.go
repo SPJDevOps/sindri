@@ -270,19 +270,30 @@ credentials:
   mirror:
     username: robot
     password: ${M7_SECRET}
+  npm-private:
+    token: npm-token-abc
 `)
 	raw, err := config.MarshalServer(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := string(raw)
-	for _, secret := range []string{"hunter2-upstream", "dbpass-123", "bootstrap-secret-xyz", "oidc-secret-abc", "robot"} {
+	for _, secret := range []string{"hunter2-upstream", "dbpass-123", "bootstrap-secret-xyz", "oidc-secret-abc", "robot", "npm-token-abc"} {
 		if strings.Contains(out, secret) {
 			t.Errorf("config show printed %q:\n%s", secret, out)
 		}
 	}
 	if !strings.Contains(out, "mirror") {
 		t.Errorf("config show hid the credential's name, which is not a secret:\n%s", out)
+	}
+	if !strings.Contains(out, "npm-private") {
+		t.Errorf("config show hid the token credential's name:\n%s", out)
+	}
+	if cfg.Credentials["npm-private"].Token != "npm-token-abc" || cfg.Credentials["npm-private"].Password != "" {
+		t.Error("redacting for display changed the loaded token credential")
+	}
+	if strings.Count(out, "\n    token: <redacted>") != 1 || strings.Count(out, "password: <redacted>") != 1 {
+		t.Errorf("config show should redact one token and one password:\n%s", out)
 	}
 	if cfg.Credentials["mirror"].Password != "hunter2-upstream" {
 		t.Error("redacting for display changed the loaded configuration")

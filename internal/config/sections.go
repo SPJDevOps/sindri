@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/spj/sindri/internal/model"
 )
 
 // Listen describes the HTTP listener.
@@ -498,8 +500,20 @@ func isLoopback(host string) bool {
 type Credential struct {
 	// Upstream user name. Redacted by `config show`.
 	Username string `yaml:"username"`
-	// Upstream password or token. Required. Redacted by `config show`.
+	// Upstream password, sent as HTTP Basic with `username`. Set it, or `token`,
+	// never both. Redacted by `config show`.
 	Password string `yaml:"password"`
+	// Upstream token, sent as HTTP Bearer. Set it instead of `username` and
+	// `password`. An OCI proxy cannot use one. Redacted by `config show`.
+	Token string `yaml:"token"`
+}
+
+// Kind says how the credential authenticates.
+func (c Credential) Kind() model.CredentialKind {
+	if c.Token != "" {
+		return model.CredentialToken
+	}
+	return model.CredentialBasic
 }
 
 // UnmarshalYAML decodes the mapping, rejecting unknown keys.
@@ -511,11 +525,12 @@ func (c *Credential) UnmarshalYAML(node *yaml.Node) error {
 // Credentials maps a reference name to its secret.
 type Credentials map[string]Credential
 
-// Names lists the defined references, which is all the reconciler may see.
-func (cs Credentials) Names() map[string]struct{} {
-	out := make(map[string]struct{}, len(cs))
-	for k := range cs {
-		out[k] = struct{}{}
+// Names maps each defined reference to how it authenticates. A kind is not a
+// secret, so this is all the reconciler may see.
+func (cs Credentials) Names() map[string]model.CredentialKind {
+	out := make(map[string]model.CredentialKind, len(cs))
+	for k, c := range cs {
+		out[k] = c.Kind()
 	}
 	return out
 }
@@ -525,8 +540,11 @@ func (cs Credentials) validate() error {
 		if !validRefName(name) {
 			return fmt.Errorf("credentials.%s: names are lowercase letters, digits, '-', and '_'", name)
 		}
-		if c.Password == "" {
-			return fmt.Errorf("credentials.%s.password: required", name)
+		if c.Token != "" && (c.Password != "" || c.Username != "") {
+			return fmt.Errorf("credentials.%s: set token, or username and password, not both", name)
+		}
+		if c.Token == "" && c.Password == "" {
+			return fmt.Errorf("credentials.%s: set token, or username and password", name)
 		}
 	}
 	return nil

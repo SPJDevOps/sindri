@@ -39,7 +39,12 @@ func (c *Config) RedactedCopy() Config {
 			if cred.Username != "" {
 				cred.Username = Redacted
 			}
-			cred.Password = Redacted
+			if cred.Password != "" {
+				cred.Password = Redacted
+			}
+			if cred.Token != "" {
+				cred.Token = Redacted
+			}
 			out.Credentials[name] = cred
 		}
 	}

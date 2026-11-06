@@ -55,7 +55,7 @@ func newRedirectFixture(t *testing.T) *redirectFixture {
 	t.Cleanup(f.upstream.Close)
 	f.client = New(Options{
 		Registry:    &registry.Registry{},
-		Credentials: StaticCredentials{"mirror": {"user", "s3cret"}},
+		Credentials: StaticCredentials{"mirror": {Username: "user", Password: "s3cret"}},
 	})
 	f.remote = registry.Remote{UpstreamURL: f.upstream.URL, CredentialsRef: "mirror"}
 	return f
@@ -188,7 +188,7 @@ func TestDo_PinnedRedirectOutsideTheBasePathCarriesNoCredentials(t *testing.T) {
 			t.Cleanup(upstream.Close)
 			client := New(Options{
 				Registry:    &registry.Registry{},
-				Credentials: StaticCredentials{"mirror": {"user", "s3cret"}},
+				Credentials: StaticCredentials{"mirror": {Username: "user", Password: "s3cret"}},
 			})
 			resp, err := client.do(t.Context(), upstreamRequest{
 				method:    http.MethodGet,

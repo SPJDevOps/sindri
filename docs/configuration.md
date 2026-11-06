@@ -184,7 +184,8 @@ credentials:
 | Key | Type | Meaning | Default |
 |---|---|---|---|
 | `<name>.username` | string | Upstream user name. Redacted by `config show`. | unset |
-| `<name>.password` | string | Upstream password or token. Required. Redacted by `config show`. | unset |
+| `<name>.password` | string | Upstream password, sent as HTTP Basic with `username`. Set it, or `token`, never both. Redacted by `config show`. | unset |
+| `<name>.token` | string | Upstream token, sent as HTTP Bearer. Set it instead of `username` and `password`. An OCI proxy cannot use one. Redacted by `config show`. | unset |
 <!-- END GENERATED: credentials -->
 
 A repository refers to a credential with `upstream.credentials: <name>`. Naming a
@@ -193,8 +194,21 @@ the file with `SIGHUP` swaps the secrets atomically.
 
 A proxy that has credentials fails a virtual repository's walk when its upstream refuses
 them, instead of reading the refusal as "no such name". See
-[ADR 14](adr/0014-proxy-cache-and-virtual-resolution.md). Token-authenticated
-private npm upstreams are not supported yet (SIN-53).
+[ADR 14](adr/0014-proxy-cache-and-virtual-resolution.md).
+
+A credential is either `username` and `password` (sent as HTTP Basic) or `token` (sent as
+HTTP Bearer), never both. A private npm registry that wants a token takes the second form.
+Both are sent only to the upstream's own origin, with one exception (ADR 14): an OCI
+proxy's username and password also go to the registry's token realm, but only over https
+or on the upstream's own origin. An OCI proxy cannot use a token, because
+OCI registries exchange username and password at their token realm; naming one is refused
+when the repository is written. See [ADR 27](adr/0027-upstream-credentials-may-be-a-bearer-token.md).
+
+```yaml
+credentials:
+  npm-private:
+    token: ${NPM_TOKEN}
+```
 
 ### `worker`
 

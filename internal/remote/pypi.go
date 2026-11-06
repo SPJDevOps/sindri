@@ -145,6 +145,19 @@ func (c *Client) fetchAndCachePyPIIndex(ctx context.Context, repoName, project s
 	if err != nil {
 		return PyPIIndex{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, err)
 	}
+	// PEP 503: a relative link resolves against the page it came from, which is
+	// the URL that answered after any redirect. The cached copy keeps absolute
+	// links, so a cache hit resolves exactly as this fetch does.
+	if resp.Request != nil && resp.Request.URL != nil {
+		abs, rerr := absolutizePyPIFileURLs(body, resp.Request.URL)
+		if rerr != nil {
+			return PyPIIndex{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, rerr)
+		}
+		body = abs
+		if idx, err = parsePyPIIndex(body); err != nil {
+			return PyPIIndex{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, err)
+		}
+	}
 	digest, err := c.reg.StoreMetadataBlob(ctx, body)
 	if err != nil {
 		return PyPIIndex{}, err
@@ -182,6 +195,44 @@ func checkPyPIIndex(body []byte, project string) error {
 		return fmt.Errorf("simple JSON is for project %q, not %q", *raw.Name, project)
 	}
 	return nil
+}
+
+// absolutizePyPIFileURLs returns body with every file "url" resolved against
+// page, the URL the index document was served from. An absolute link is left
+// as it is. Fields it does not know are kept.
+func absolutizePyPIFileURLs(body []byte, page *url.URL) ([]byte, error) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil, fmt.Errorf("decoding simple JSON: %w", err)
+	}
+	var files []map[string]json.RawMessage
+	if err := json.Unmarshal(doc["files"], &files); err != nil {
+		return nil, fmt.Errorf("decoding simple JSON files: %w", err)
+	}
+	for _, f := range files {
+		var raw string
+		if err := json.Unmarshal(f["url"], &raw); err != nil || raw == "" {
+			continue // parsePyPIIndex and the download refuse an empty link
+		}
+		ref, err := url.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parsing file URL %q: %w", raw, err)
+		}
+		abs, err := json.Marshal(page.ResolveReference(ref).String())
+		if err != nil {
+			return nil, fmt.Errorf("encoding file URL: %w", err)
+		}
+		f["url"] = abs
+	}
+	var err error
+	if doc["files"], err = json.Marshal(files); err != nil {
+		return nil, fmt.Errorf("encoding simple JSON files: %w", err)
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("encoding simple JSON: %w", err)
+	}
+	return out, nil
 }
 
 func parsePyPIIndex(body []byte) (PyPIIndex, error) {

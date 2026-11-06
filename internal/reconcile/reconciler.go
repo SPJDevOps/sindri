@@ -75,17 +75,17 @@ func (r Result) Drift() bool {
 type Reconciler struct {
 	db          *db.DB
 	reg         *registry.Registry
-	credentials func() map[string]struct{}
+	credentials func() map[string]model.CredentialKind
 }
 
 // New wires a Reconciler. credentials returns the server's defined
 // credentials references; it is a function because SIGHUP can change them.
-func New(database *db.DB, reg *registry.Registry, credentials func() map[string]struct{}) *Reconciler {
+func New(database *db.DB, reg *registry.Registry, credentials func() map[string]model.CredentialKind) *Reconciler {
 	if database == nil || reg == nil {
 		panic("reconcile.New: nil dependency")
 	}
 	if credentials == nil {
-		credentials = func() map[string]struct{} { return map[string]struct{}{} }
+		credentials = func() map[string]model.CredentialKind { return map[string]model.CredentialKind{} }
 	}
 	return &Reconciler{db: database, reg: reg, credentials: credentials}
 }

@@ -1,6 +1,7 @@
 # 15. Upstream credentials: source decided, wiring deferred to M7
 
 - **Status:** Accepted
+- **Amended by:** [ADR 27](0027-upstream-credentials-may-be-a-bearer-token.md) (a credential may be a Bearer token)
 - **Completed by:** [ADR 17](0017-config-kinds-namespaces-and-reconciliation.md) (the `credentials:` section and reference validation) and [ADR 18](0018-authentication-and-rbac-in-v1.md) (no anonymous reads)
 - **Date:** 2026-09-30
 - **Relates to:** [ADR 7](0007-config-surface-short-and-long-form.md),

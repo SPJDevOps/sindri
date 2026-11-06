@@ -8,6 +8,12 @@
 - [Configuration reference](configuration.md)
 - [Upgrading](upgrading.md)
 
+# Migrating
+
+- [From Verdaccio](migrate/verdaccio.md)
+- [From devpi](migrate/devpi.md)
+- [From Harbor](migrate/harbor.md)
+
 # Decisions
 
 - [Architecture decision records](adr/index.md)
@@ -37,3 +43,4 @@
   - [24. The npm packument is derived, dist-tags are pointers, and virtual repositories do not merge](adr/0024-npm-packument-and-dist-tags.md)
   - [25. The announcement requires M10, a Helm chart, and the first half of M11](adr/0025-what-the-announcement-requires.md)
   - [26. The docs site is built by mdBook from plain markdown, and lychee checks its links](adr/0026-docs-site-generator.md)
+  - [27. Upstream credentials may be a Bearer token](adr/0027-upstream-credentials-may-be-a-bearer-token.md)

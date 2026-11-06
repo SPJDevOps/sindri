@@ -61,7 +61,7 @@ func (e *testEnv) cacheRowCount(t *testing.T) int {
 	return n
 }
 
-var refusalCredentials = remote.StaticCredentials{"cred": {"user", "pass"}}
+var refusalCredentials = remote.StaticCredentials{"cred": {Username: "user", Password: "pass"}}
 
 // bearerChallenge answers 401 with a challenge naming this stub's token endpoint.
 func bearerChallenge(w http.ResponseWriter, r *http.Request) {

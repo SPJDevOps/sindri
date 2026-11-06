@@ -39,7 +39,7 @@ func TestValidateRepository_LifecycleOnlyOnHosted(t *testing.T) {
 // ADR 15: an unknown credentials reference is refused when the repository is
 // written, never discovered at pull time. A known one is accepted.
 func TestValidateRepository_CredentialsMustExist(t *testing.T) {
-	known := map[string]struct{}{"mirror": {}}
+	known := map[string]model.CredentialKind{"mirror": model.CredentialBasic}
 	proxy := reconcile.RepositorySpec{
 		Name: "p", Type: model.RepoTypeProxy, Protocol: model.ProtocolOCI,
 		UpstreamURL: "https://registry.example.com",
@@ -147,7 +147,7 @@ spec:
   protocol: oci
   upstream: { url: https://r.example.com, ttl: 1h, negativeTtl: 1m, credentials: fancysecret }
 `,
-			opts:  reconcile.ValidateOptions{Credentials: map[string]struct{}{}},
+			opts:  reconcile.ValidateOptions{Credentials: map[string]model.CredentialKind{}},
 			wants: []string{"upstream.credentials", "fancysecret", "not defined"},
 		},
 		{
@@ -289,5 +289,64 @@ spec: { type: virtual, protocol: oci }
 		if e.File != "m.yaml" || e.Line == 0 {
 			t.Errorf("unlocated error: %#v", e)
 		}
+	}
+}
+
+// A token is a static Bearer value. An OCI registry wants Basic credentials at
+// its token realm, where a static token has no meaning, so the pairing is
+// refused when the repository is written (ADR 27).
+func TestValidateRepository_OCIProxyRefusesTokenCredential(t *testing.T) {
+	known := map[string]model.CredentialKind{"basic": model.CredentialBasic, "bearer": model.CredentialToken}
+	tests := []struct {
+		name     string
+		protocol model.Protocol
+		ref      string
+		wantErr  []string
+	}{
+		{name: "OCIWithPasswordIsAccepted", protocol: model.ProtocolOCI, ref: "basic"},
+		{name: "NPMWithTokenIsAccepted", protocol: model.ProtocolNPM, ref: "bearer"},
+		{name: "PyPIWithTokenIsAccepted", protocol: model.ProtocolPyPI, ref: "bearer"},
+		{name: "OCIWithTokenIsRefused", protocol: model.ProtocolOCI, ref: "bearer", wantErr: []string{`"bearer"`, "username/password"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := reconcile.RepositorySpec{
+				Name: "p", Type: model.RepoTypeProxy, Protocol: tc.protocol,
+				UpstreamURL: "https://registry.example.com", CredentialsRef: tc.ref,
+			}
+			err := reconcile.ValidateRepository(spec, known)
+			if len(tc.wantErr) == 0 {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, reconcile.ErrCredentialKind) {
+				t.Fatalf("want ErrCredentialKind, got %v", err)
+			}
+			for _, w := range tc.wantErr {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("error %q does not mention %q", err, w)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateSet_OCIProxyRefusesTokenCredential(t *testing.T) {
+	m, err := config.ParseManifests([]byte(`
+kind: Repository
+metadata: { name: p }
+spec:
+  type: proxy
+  protocol: oci
+  upstream: { url: https://r.example.com, ttl: 1h, negativeTtl: 1m, credentials: bearer }
+`), "m.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = reconcile.ValidateSet(m, reconcile.ValidateOptions{Credentials: map[string]model.CredentialKind{"bearer": model.CredentialToken}})
+	if err == nil || !strings.Contains(err.Error(), "username/password") {
+		t.Fatalf("want a username/password refusal, got %v", err)
 	}
 }
