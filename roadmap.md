@@ -1010,7 +1010,7 @@ reading the source.
   promise, which is about the runtime
 - [x] A configuration reference **generated from the config structs**, with a test that
   fails when the page and the code disagree, in the same spirit as the golden tests
-- [ ] Migration guides from **Verdaccio, devpi, and Harbor**. The method: put a Sindri
+- [x] Migration guides from **Verdaccio, devpi, and Harbor**. The method: put a Sindri
   proxy in front of the old registry, switch clients over, and let the cache fill, then
   publish new versions to hosted. No import tool yet; build one if users ask for it
 - [ ] A deployment and operations guide: Docker Compose and Helm deployments, TLS behind a
@@ -1019,7 +1019,7 @@ reading the source.
 - [ ] A Helm chart, chosen by ADR for its location and publishing, running **one replica**:
   upload sessions live in process memory, so a chunked push would break across replicas
   (SIN-71). Moved here from Later by [ADR 25](docs/adr/0025-what-the-announcement-requires.md)
-- [ ] Private npm upstreams, if the Verdaccio guide needs them: Bearer credentials and a real
+- [x] Private npm upstreams, if the Verdaccio guide needs them: Bearer credentials and a real
   private registry tried end to end (SIN-53)
 - [ ] A README rewritten for the polyglot team: what it replaces, a two-minute start, and
   links into the docs site
@@ -1048,6 +1048,25 @@ configuration page's commands. The server settings tables are generated from the
 The repository, lifecycle, and manifest tables are hand-written, because the loader reads
 them node by node, and a test checks that they list exactly the keys the loader accepts.
 The Pages deploy runs on the next release tag.
+
+**Migration slice, Sprint 7, 2026-11-06.** `make test`, `make lint`, `make test-integration`,
+`make docs`, and `./scripts/m10-docs-gate.sh` passed on `m10-migration`, with Go 1.27.3 (lint
+under 1.27.1), Docker 29.8.0, npm 10.9.9 on Node 22, Verdaccio 6.11.1, devpi-server 6.21.0
+with pip 26.3 and twine 7.0.0, the Distribution registry 2.8.3 with `cesanta/docker_auth`
+1.14.0 behind nginx 1.28, and `crane` v0.21.0. SIN-53 gave an upstream credential a `token:`
+form that Sindri sends as a Bearer token ([ADR 27](docs/adr/0027-upstream-credentials-may-be-a-bearer-token.md)),
+and an OCI proxy refuses one before sending anything. SIN-24, SIN-25, and SIN-26 are the
+Verdaccio, devpi, and Harbor guides. Each has a gate that runs the page's own blocks, and each
+page imports a scope, project, or image's whole history before any client is switched or
+anything is published to hosted, so the name claim never hides an unimported name from a
+client. The Verdaccio import orders versions by semver, publishes them under a throwaway tag,
+and copies Verdaccio's dist-tags afterwards, so `latest` matches. The gates found three bugs
+in Sindri, all fixed: SIN-77 (a PyPI file URL relative to the project page), SIN-78 (an OCI
+manifest read honoured only the first `Accept` line), and SIN-79 (a tags list refused a large
+`n` instead of capping the page). **The Harbor gate runs against a stand-in**, a Distribution
+registry with a token server that reproduces Harbor's robot-account flow, not against Harbor
+itself, and the page says so. **Still open, for a person:** the gate line "a person who has not
+used Sindri follows one migration guide end to end" has not been done.
 
 ---
 
