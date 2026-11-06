@@ -826,11 +826,14 @@ publish is scanned, and promotion is refused above a severity.
 | Sprint (Mon–Sun) | Milestone | Tickets | Release |
 |---|---|---|---|
 | 5, Nov 5–15 | v1.1.1 ✅ | SIN-57, 59, 60, 61, 62, 63, 64, 66, 67 | v1.1.1 |
-| 6, Nov 16–22 | M10 docs site | SIN-22, 23, 29 | |
-| 7, Nov 23–29 | M10 migration | SIN-24, 25, 26, 53 | |
-| 8, Nov 30–Dec 6 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
-| 9, Dec 7–13 | M11a scan | SIN-30, 31, 32, 36 | |
-| 10, Dec 14–20 | M11a gate | SIN-34, 38, 39, 72 | v1.3.0, then announce |
+| 6, Nov 6–15 | M10 docs site | SIN-22, 23, 29 | |
+| 7, Nov 16–22 | M10 migration | SIN-24, 25, 26, 53 | |
+| 8, Nov 23–29 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
+| 9, Nov 30–Dec 6 | M11a scan | SIN-30, 31, 32, 36 | |
+| 10, Dec 7–13 | M11a gate | SIN-34, 38, 39, 72 | v1.3.0, then announce |
+
+Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
+week, and Sprints 7 to 10 each moved up one week.
 
 Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic.
 
