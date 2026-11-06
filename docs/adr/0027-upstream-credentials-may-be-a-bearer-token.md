@@ -31,7 +31,8 @@ credentials:
 same place in `internal/remote`. `remote.Credentials.Lookup` returns a typed
 `remote.Credential` instead of a username and password, so no caller can ignore the kind.
 
-**Both are sent only to the upstream's own origin,** exactly as in ADR 14. The redirect
+**Both are sent only to the upstream's own origin,** exactly as in ADR 14 (whose one
+exception is an OCI proxy's username and password reaching its token realm over https). The redirect
 rules that strip `Authorization` when a redirect leaves the origin already cover a Bearer
 header, and a test now proves it. An upstream document that names another host (an npm
 tarball URL) never receives the token.
@@ -43,7 +44,8 @@ sending one to a realm would be guessing. The error names the credential and say
 needs username and password. To enforce this, `Credentials.Names()` becomes a map from name
 to kind (`basic` or `token`). A kind is not a secret, so the rule that the reconciler sees
 no secrets still holds. If a reload changes a credential's kind under a stored OCI
-repository, the token request fails and the token is not sent.
+repository, every OCI request to that upstream fails with an error naming the credential
+reference, and the token is sent neither to the registry nor to its token realm.
 
 ## Rejected
 

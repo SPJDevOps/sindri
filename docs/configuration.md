@@ -198,7 +198,9 @@ them, instead of reading the refusal as "no such name". See
 
 A credential is either `username` and `password` (sent as HTTP Basic) or `token` (sent as
 HTTP Bearer), never both. A private npm registry that wants a token takes the second form.
-Both are sent only to the upstream's own origin. An OCI proxy cannot use a token, because
+Both are sent only to the upstream's own origin, with one exception (ADR 14): an OCI
+proxy's username and password also go to the registry's token realm, but only over https
+or on the upstream's own origin. An OCI proxy cannot use a token, because
 OCI registries exchange username and password at their token realm; naming one is refused
 when the repository is written. See [ADR 27](adr/0027-upstream-credentials-may-be-a-bearer-token.md).
 

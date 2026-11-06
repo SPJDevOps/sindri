@@ -3,6 +3,7 @@ package remote
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -35,7 +36,7 @@ func TestApplyCredentials_TokenSendsBearerOnUpstreamOriginOnly(t *testing.T) {
 				t.Fatal(err)
 			}
 			rem := registry.Remote{UpstreamURL: "https://registry.example.com", CredentialsRef: "mirror"}
-			if err := c.applyCredentials(t.Context(), req, rem); err != nil {
+			if err := c.applyCredentials(t.Context(), req, rem, false); err != nil {
 				t.Fatalf("applyCredentials: %v", err)
 			}
 			if got := req.Header.Get("Authorization"); got != tc.wantAuth {
@@ -85,5 +86,56 @@ func TestRedirect_DropsBearerAcrossOrigins(t *testing.T) {
 	get("/here")
 	if got, _ := onsiteAuth.Load().(string); got != "Bearer npm_tok3n" {
 		t.Fatalf("a same-origin redirect lost the token: Authorization = %q", got)
+	}
+}
+
+func TestDo_OCIRequestNeverCarriesATokenCredential(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		cred      Credential
+		oci       bool
+		wantErr   bool
+		wantAuth  string
+		wantReach bool
+	}{
+		{name: "OCIRefusesATokenBeforeSending", cred: Credential{Token: "s3cret-tok"}, oci: true, wantErr: true},
+		{name: "OCIStillSendsBasic", cred: Credential{Username: "u", Password: "p"}, oci: true, wantAuth: "Basic dTpw", wantReach: true},
+		{name: "NonOCISendsTheToken", cred: Credential{Token: "s3cret-tok"}, oci: false, wantAuth: "Bearer s3cret-tok", wantReach: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var reached atomic.Bool
+			var auth atomic.Value
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached.Store(true)
+				auth.Store(r.Header.Get("Authorization"))
+			}))
+			t.Cleanup(srv.Close)
+			c := New(Options{Registry: &registry.Registry{}, Credentials: StaticCredentials{"mirror": tc.cred}})
+			ur := upstreamRequest{method: http.MethodGet, url: srv.URL + "/v2/x", remote: registry.Remote{UpstreamURL: srv.URL, CredentialsRef: "mirror"}}
+			if tc.oci {
+				ur.tokenKey = "host|mirror|x"
+			}
+			resp, err := c.do(t.Context(), ur)
+			if err == nil {
+				_ = resp.Body.Close()
+			}
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("do error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				if !strings.Contains(err.Error(), `"mirror"`) || strings.Contains(err.Error(), "s3cret-tok") {
+					t.Fatalf("error must name the reference and never the secret: %v", err)
+				}
+			}
+			if reached.Load() != tc.wantReach {
+				t.Fatalf("upstream reached = %v, want %v", reached.Load(), tc.wantReach)
+			}
+			if got, _ := auth.Load().(string); got != tc.wantAuth {
+				t.Fatalf("Authorization = %q, want %q", got, tc.wantAuth)
+			}
+		})
 	}
 }

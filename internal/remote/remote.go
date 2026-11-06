@@ -295,7 +295,7 @@ func (c *Client) do(ctx context.Context, ur upstreamRequest) (*http.Response, er
 		}
 		if bearer != "" {
 			req.Header.Set("Authorization", "Bearer "+bearer)
-		} else if err := c.applyCredentials(ctx, req, ur.remote); err != nil {
+		} else if err := c.applyCredentials(ctx, req, ur.remote, ur.tokenKey != ""); err != nil {
 			return nil, err
 		}
 		client := c.http
@@ -362,13 +362,22 @@ func classify(status int) error {
 // applyCredentials attaches the remote's credentials (Basic, or Bearer for a
 // token), but only to the host the operator configured. Upstream documents name other hosts (a PyPI index
 // may link files anywhere), and a credential must not follow those links.
-func (c *Client) applyCredentials(ctx context.Context, req *http.Request, remote registry.Remote) error {
+//
+// oci is true for an OCI registry request (the ones that carry a tokenKey). An
+// OCI upstream authenticates with username/password through its token realm,
+// so a token-kind credential is refused there rather than sent (ADR 27). The
+// error names the credential reference, never the secret.
+func (c *Client) applyCredentials(ctx context.Context, req *http.Request, remote registry.Remote, oci bool) error {
 	if remote.CredentialsRef == "" || !sameOrigin(req.URL.String(), remote.UpstreamURL) {
 		return nil
 	}
 	cred, err := c.creds.Lookup(ctx, remote.CredentialsRef)
 	if err != nil {
 		return fmt.Errorf("resolving credentials: %w", err)
+	}
+	if oci && cred.Kind() == model.CredentialToken {
+		return fmt.Errorf("%w: credentials %q is a token, but an OCI upstream needs username/password",
+			ErrUpstreamUnavailable, remote.CredentialsRef)
 	}
 	cred.apply(req)
 	return nil
