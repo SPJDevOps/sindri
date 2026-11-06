@@ -40,3 +40,31 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The docs site, published to GitHub Pages once the release itself is out,
+  # so the site never describes a version that failed to publish (ADR 26).
+  # Pages must be set to "GitHub Actions" in the repository settings.
+  pages:
+    name: Docs site
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write      # deploy to Pages
+      id-token: write   # the OIDC token deploy-pages verifies the deployment with
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install docs tools
+        run: |
+          ./scripts/install-docs-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Build the site and check its links
+        run: make docs
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v5

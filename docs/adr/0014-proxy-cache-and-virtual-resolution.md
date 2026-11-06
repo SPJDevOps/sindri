@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-30
-- **Relates to:** [ARCHITECTURE.md](../../ARCHITECTURE.md) sections 2 (I4, I5) and 4,
+- **Relates to:** [ARCHITECTURE.md](https://github.com/SPJDevOps/sindri/blob/main/ARCHITECTURE.md) sections 2 (I4, I5) and 4,
   [ADR 3](0003-content-addressable-store-with-placement.md),
   [ADR 12](0012-pypi-hosted-adapter.md)
 

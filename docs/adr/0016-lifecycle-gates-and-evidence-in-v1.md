@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-01
-- **Relates to:** [ARCHITECTURE.md](../../ARCHITECTURE.md) sections 2 (I3, I4) and 5,
+- **Relates to:** [ARCHITECTURE.md](https://github.com/SPJDevOps/sindri/blob/main/ARCHITECTURE.md) sections 2 (I3, I4) and 5,
   [ADR 4](0004-lifecycle-as-append-only-ledger.md), roadmap M6 and M7
 
 ## Context

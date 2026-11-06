@@ -186,7 +186,7 @@ scheduled garbage collection. Short form: `worker: false` turns it off and
 These three sections describe desired state. `serve` reconciles them against the
 database on start and on `SIGHUP`. `sindri apply` converges the same documents from CI.
 A file with none of these sections leaves repositories API-managed. See
-[ARCHITECTURE.md section 8](../ARCHITECTURE.md#8-configuration-as-code) and
+[ARCHITECTURE.md section 8](https://github.com/SPJDevOps/sindri/blob/main/ARCHITECTURE.md#8-configuration-as-code) and
 [ADR 17](adr/0017-config-kinds-namespaces-and-reconciliation.md).
 
 The short form below desugars into the long form (enveloped manifests) one way and

@@ -89,6 +89,19 @@ jobs:
       - name: Test
         run: make test-integration
 
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Pinned mdBook and lychee, checked against the sums in the script.
+      - name: Install docs tools
+        run: |
+          ./scripts/install-docs-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Build the site and check its links
+        run: make docs
+
   build:
     name: Build
     runs-on: ubuntu-latest

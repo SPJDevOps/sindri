@@ -5,7 +5,7 @@
 - **Relates to:** [ADR 16](0016-lifecycle-gates-and-evidence-in-v1.md),
   [ADR 20](0020-queue-table-and-background-worker.md),
   [ADR 22](0022-post-v1-direction-polyglot-teams-first.md),
-  [pitch.md](../../pitch.md) section 6, roadmap M11
+  [pitch.md](https://github.com/SPJDevOps/sindri/blob/main/pitch.md) section 6, roadmap M11
 
 ## Context
 

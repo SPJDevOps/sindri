@@ -1,0 +1,20 @@
+# The docs site, built by `make docs` (ADR 26). Every page is a plain markdown
+# file in this directory, so it reads the same on GitHub as on the site.
+
+[book]
+title = "Sindri"
+description = "An artifact repository where an artifact keeps one identity as it matures"
+authors = ["Sindri contributors"]
+language = "en"
+src = "."
+
+[build]
+build-dir = "../site"
+# A page listed in SUMMARY.md that does not exist is an error, not an empty page.
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/SPJDevOps/sindri"
+edit-url-template = "https://github.com/SPJDevOps/sindri/edit/main/docs/{path}"
+site-url = "/sindri/"
+no-section-label = true
