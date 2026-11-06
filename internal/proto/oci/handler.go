@@ -555,8 +555,16 @@ func (h *handler) handleManifest(w http.ResponseWriter, r *http.Request, repo mo
 	}
 }
 
+// acceptHeader returns the Accept header as one value. Clients such as the
+// Docker daemon send one Accept line per media type, and Header.Get returns
+// only the first, which a proxy would then forward upstream as the only type
+// the client takes.
+func acceptHeader(h http.Header) string {
+	return strings.Join(h.Values("Accept"), ", ")
+}
+
 func (h *handler) getManifest(w http.ResponseWriter, r *http.Request, repo model.Repository, image, ref string) {
-	accept := r.Header.Get("Accept")
+	accept := acceptHeader(r.Header)
 	man, err := h.res.GetOCIManifest(r.Context(), repo.Name, image, ref, accept)
 	if err != nil {
 		mapManifestReadError(w, err)
