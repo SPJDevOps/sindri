@@ -67,3 +67,28 @@ func TestAcceptHeader_JoinsEveryLine(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTagsPageSize_ClampsLargeAndRefusesNonPositive(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    int32
+		wantErr bool
+	}{
+		{"SmallIsKept", "10", 10, false},
+		{"CapIsKept", "200", 200, false},
+		{"OneThousandIsClamped", "1000", 200, false},
+		{"HugeIsClamped", "99999999999", 200, false},
+		{"ZeroIsRefused", "0", 0, true},
+		{"NegativeIsRefused", "-5", 0, true},
+		{"NonNumericIsRefused", "many", 0, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseTagsPageSize(tc.in)
+			if (err != nil) != tc.wantErr || got != tc.want {
+				t.Fatalf("parseTagsPageSize(%q) = %d, %v; want %d, err=%v", tc.in, got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+}

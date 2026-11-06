@@ -330,3 +330,66 @@ func TestPushManifest_InvalidProvenanceIsRefused(t *testing.T) {
 		t.Fatalf("tags after refusals = %s, want none placed", tags.Body)
 	}
 }
+
+// TestOCI_TagsList_LargeNIsClampedWithLink: Distribution clamps an n above its
+// maximum and pages with a Link header, and so does Sindri. Zero and negative
+// n are still refused.
+func TestOCI_TagsList_LargeNIsClampedWithLink(t *testing.T) {
+	client := newOCIClient(t)
+	createRepo(t, client, "demo/many", "oci")
+
+	config := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
+	configDigest := digestOf(config)
+	pushBlob(t, client, "demo/many", config, configDigest)
+	body, err := json.Marshal(ocispec.Manifest{
+		Versioned: specs.Versioned{SchemaVersion: 2},
+		MediaType: ocispec.MediaTypeImageManifest,
+		Config:    ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig, Digest: digest.Digest(configDigest), Size: int64(len(config))},
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	for i := 0; i < 201; i++ {
+		put := mustDo(t, client, http.MethodPut, fmt.Sprintf("/v2/demo/many/manifests/t%03d", i), body, ocispec.MediaTypeImageManifest)
+		if put.StatusCode != http.StatusCreated {
+			t.Fatalf("PUT t%03d: %d %s", i, put.StatusCode, put.Body)
+		}
+	}
+
+	tests := []struct {
+		name     string
+		query    string
+		wantCode int
+		wantTags int
+		wantLink bool
+	}{
+		{"LargeNIsClampedToTheCapWithALink", "?n=1000", http.StatusOK, 200, true},
+		{"NAtTheCapGetsALink", "?n=200", http.StatusOK, 200, true},
+		{"SmallNIsHonoured", "?n=5", http.StatusOK, 5, true},
+		{"ZeroNIsRefused", "?n=0", http.StatusBadRequest, 0, false},
+		{"NegativeNIsRefused", "?n=-1", http.StatusBadRequest, 0, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := mustDo(t, client, http.MethodGet, "/v2/demo/many/tags/list"+tc.query, nil, "")
+			if resp.StatusCode != tc.wantCode {
+				t.Fatalf("status %d, want %d: %s", resp.StatusCode, tc.wantCode, resp.Body)
+			}
+			if tc.wantCode != http.StatusOK {
+				return
+			}
+			var list struct {
+				Tags []string `json:"tags"`
+			}
+			if err := json.Unmarshal([]byte(resp.Body), &list); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(list.Tags) != tc.wantTags {
+				t.Fatalf("%d tags, want %d", len(list.Tags), tc.wantTags)
+			}
+			if got := resp.Header.Get("Link") != ""; got != tc.wantLink {
+				t.Fatalf("Link present = %v, want %v", got, tc.wantLink)
+			}
+		})
+	}
+}

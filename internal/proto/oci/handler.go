@@ -624,15 +624,30 @@ func (h *handler) deleteManifest(w http.ResponseWriter, r *http.Request, repo mo
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// maxTagsPage is the most tags one page of a tag list holds. It matches the
+// registry's page cap, which stays strict for the management API.
+const maxTagsPage = 200
+
+// parseTagsPageSize reads the n query parameter. A larger n is clamped, as
+// Distribution does: the response then carries a Link header for the rest.
+// Zero, negative, and non-numeric values are refused.
+func parseTagsPageSize(v string) (int32, error) {
+	parsed, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || parsed < 1 {
+		return 0, fmt.Errorf("invalid n %q", v)
+	}
+	return int32(min(parsed, maxTagsPage)), nil
+}
+
 func (h *handler) listTags(w http.ResponseWriter, r *http.Request, repo model.Repository, image, clientPath string) {
 	n := int32(100)
 	if v := r.URL.Query().Get("n"); v != "" {
-		parsed, err := strconv.ParseInt(v, 10, 32)
-		if err != nil || parsed < 1 {
+		parsed, err := parseTagsPageSize(v)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, CodeUnsupported, "invalid n parameter")
 			return
 		}
-		n = int32(parsed)
+		n = parsed
 	}
 	last := r.URL.Query().Get("last")
 	page, err := h.res.ListOCITags(r.Context(), repo.Name, image, last, n)
