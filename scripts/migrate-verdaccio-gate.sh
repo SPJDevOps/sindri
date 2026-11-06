@@ -283,7 +283,10 @@ page_block verify-tags > "${WORK}/verify-tags.sh"
 # The page's import-npmrc block: the Verdaccio token line the import needs.
 { printf '%s\n' "${SINDRI_USER_NPMRC}"; page_block import-npmrc; } > "${npm_config_userconfig}"
 # run_import: the page's inventory, import, and tag copy, in that order.
+# PAGE_SIZE=2 makes the page's inventory ask for two hits at a time, so a scope of
+# three packages crosses a page boundary (the second run, in step 8).
 run_import() {
+  export PAGE_SIZE=2
   (cd "${IMPORT}" && bash -e "${WORK}/inventory-run.sh") || fail "the page's inventory commands failed"
   (cd "${IMPORT}" && bash -e "${WORK}/import.sh" >/dev/null) || fail "the page's import commands failed"
   (cd "${IMPORT}" && bash -e "${WORK}/import-tags.sh" >/dev/null) || fail "the page's tag copy failed"
@@ -486,6 +489,11 @@ cat > "${WORK}/inventory.want2" <<'LIST'
 @acme/other 1.0.0
 LIST
 diff "${WORK}/inventory.want2" "${IMPORT}/inventory.txt" >&2 || fail "the second inventory is not what Verdaccio holds now"
+# The control: one search page holds fewer than the three packages, so the listing
+# above could only be complete by going on to the next page.
+[ "$(curl -fsS -H "Authorization: Bearer ${VERDACCIO_TOKEN}" "${VURL}/-/v1/search?text=%40acme&size=2&from=0" |
+  python3 -c 'import json,sys; print(len(json.load(sys.stdin)["objects"]))')" -lt 3 ] ||
+  fail "control: a search page of two held all three packages, so no page boundary was crossed"
 tags_match
 if grep -q 'sindri-import' "${WORK}/tags.sindri"; then fail "the throwaway import tag is still on Sindri after the second run"; fi
 echo "  @acme/late: 200 through javascript once imported; the second run imported only what was new"

@@ -118,7 +118,9 @@ only:
 <!-- /migrate:import-npmrc -->
 
 First list what there is. This script asks Verdaccio's search for every package of
-the scope, then for each one's document, and prints one `name version`
+the scope, then for each one's document (it asks for 250 hits at a time, and goes on by what
+comes back, so a server that caps the page lower is still read to the end; it fails if
+the count falls short of the total the search reports), and prints one `name version`
 line per version, oldest first by semantic-version order, so `1.10.0` follows
 `1.2.0`. It uses only Node's own `fetch`. Save it as `inventory.mjs`:
 
@@ -158,12 +160,20 @@ function compare(a, b) {
   return comparePre(pa, pb);
 }
 
+const size = Number(process.env.PAGE_SIZE || 250);
 const found = new Set();
-for (let from = 0; ; from += 250) {
-  const page = await get(`/-/v1/search?text=${encodeURIComponent(scope)}&size=250&from=${from}`);
+let total;
+for (let from = 0; ; ) {
+  const page = await get(`/-/v1/search?text=${encodeURIComponent(scope)}&size=${size}&from=${from}`);
+  if (typeof page.total === "number") total = page.total;
   const before = found.size;
   for (const hit of page.objects) found.add(hit.package.name);
-  if (page.objects.length < 250 || found.size === before) break;
+  // The server may return fewer than asked, so go on by what came back.
+  if (page.objects.length === 0 || found.size === before) break;
+  from += page.objects.length;
+}
+if (total !== undefined && found.size < total) {
+  throw new Error(`search listed ${found.size} packages but reports ${total}`);
 }
 const names = [...found].filter((n) => n.startsWith(scope + "/")).sort();
 for (const name of names) {
