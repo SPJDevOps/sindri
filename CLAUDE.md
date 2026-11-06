@@ -155,10 +155,12 @@ make build             # ./bin/sindri
 make test              # unit tests, race detector
 make test-integration  # needs Docker
 make lint              # gofmt check, go vet, golangci-lint
+make docs              # build the docs site into ./site; fails on a broken link
+make reference         # regenerate docs/configuration.md's server tables from internal/config
 make up / make down    # local Postgres, MinIO, and Dex
 make run               # build and serve against them, UI sign-in included
 make ci                # what CI runs
-make tools             # install golangci-lint v2
+make tools             # install golangci-lint v2, sqlc, goreleaser, mdbook, lychee
 ```
 
 ## Local development ports

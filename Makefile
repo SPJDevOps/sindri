@@ -96,6 +96,11 @@ tools:
 	go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 	./scripts/install-docs-tools.sh $(TOOLS_BIN)
 
+## reference: Regenerate the server settings tables of docs/configuration.md from internal/config.
+.PHONY: reference
+reference:
+	go test ./internal/config -run TestReference_PageMatchesStructs -update -count=1
+
 ## docs: Build the docs site into ./site and fail on a broken internal link or anchor.
 # Offline, so the gate does not depend on other people's servers; docs-links-external
 # checks those. 404.html is excluded because its <base> is the deployed /sindri/ path.

@@ -41,10 +41,15 @@ type Config struct {
 	Auth     Auth     `yaml:"auth"`
 	Worker   Worker   `yaml:"worker"`
 
-	// PublicURL is the origin clients reach this server at. npm packuments
-	// carry absolute tarball URLs, which cannot be derived from a request
-	// whose Host header is not trusted (ADR 24). Empty when unset; no trailing
-	// slash after loading.
+	// The origin clients reach this server at, for example
+	// `https://sindri.example.com`. Required when the file declares any npm
+	// repository. Must be `https`, or `http` for a loopback address, and an
+	// origin only: no credentials, path, query, or fragment. A trailing slash
+	// is removed.
+	//
+	// npm packuments carry absolute tarball URLs, which cannot be derived from
+	// a request whose Host header is not trusted (ADR 24). Empty when unset;
+	// no trailing slash after loading.
 	PublicURL string `yaml:"publicUrl,omitempty"`
 
 	// Credentials holds upstream secrets that proxy repositories name by key.
