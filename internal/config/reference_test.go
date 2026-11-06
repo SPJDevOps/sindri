@@ -466,6 +466,9 @@ func renderReference(page []byte) ([]byte, error) {
 			problems = append(problems, fmt.Sprintf("block %s ends as %s", begin, end))
 			return block
 		}
+		if begin == presetsBlock {
+			return []byte("<!-- BEGIN GENERATED: " + begin + " -->\n" + renderPresets() + "<!-- END GENERATED: " + begin + " -->")
+		}
 		sec, ok := bySection[begin]
 		if !ok {
 			problems = append(problems, fmt.Sprintf("block %s names no section of Config", begin))
@@ -482,6 +485,9 @@ func renderReference(page []byte) ([]byte, error) {
 		if seen[key] != 1 {
 			problems = append(problems, fmt.Sprintf("section %s has %d generated blocks in the page, want 1", key, seen[key]))
 		}
+	}
+	if seen[presetsBlock] != 1 {
+		problems = append(problems, fmt.Sprintf("the presets have %d generated blocks in the page, want 1", seen[presetsBlock]))
 	}
 	if len(problems) > 0 {
 		sort.Strings(problems)
@@ -503,6 +509,28 @@ func renderSection(sec section, docs map[string]string) string {
 			key = r.key
 		}
 		fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", key, r.typ, r.meaning, r.def)
+	}
+	return b.String()
+}
+
+// presetsBlock is the one generated block that is not a server section: the
+// upstream presets, rendered from the presets map so that a changed URL or TTL
+// changes the page.
+const presetsBlock = "presets"
+
+func renderPresets() string {
+	var b strings.Builder
+	b.WriteString("<!-- Generated from internal/config/presets.go by `make reference`. Edit the presets, not this table. -->\n\n")
+	b.WriteString("| Preset | Protocol | URL | `ttl` | `negativeTtl` |\n|---|---|---|---|---|\n")
+	for _, name := range PresetNames() {
+		p := presets[name]
+		protocol := "`" + string(p.Protocol) + "`"
+		if !servedProtocol(p.Protocol) {
+			protocol += ", reserved: this build does not serve it"
+		}
+		fmt.Fprintf(&b, "| `%s` | %s | `%s` | %s | %s |\n", name, protocol, p.URL,
+			formatDefault(durationType, reflect.ValueOf(Duration(p.TTL))),
+			formatDefault(durationType, reflect.ValueOf(Duration(p.NegativeTTL))))
 	}
 	return b.String()
 }
