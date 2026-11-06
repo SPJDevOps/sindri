@@ -1,5 +1,7 @@
 # Quickstart
 
+<!-- commands checked by: scripts/m8-quickstart-gate.sh -->
+
 A registry with a web UI on one machine, in about two minutes, with nothing
 installed but Docker for the image steps. You push an image, sign in, and look at
 it. The npm steps also publish and install a package, and those need Node.js and
@@ -189,10 +191,12 @@ Sindri as well, add a proxy and a virtual repository; see
 
 ## 3. Stop it
 
+<!-- quickstart:stop -->
 ```bash
 docker compose down        # keeps the data volumes
 docker compose down -v     # deletes them too
 ```
+<!-- /quickstart:stop -->
 
 ## Going further
 

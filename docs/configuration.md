@@ -1,5 +1,8 @@
 # Configuration reference
 
+<!-- commands checked by: TestDocs_ConfigurationCommandsRun -->
+<!-- commands checked by: TestDocs_ConfigurationExamplesLoad -->
+
 Sindri reads one file, `sindri.yaml`. `sindri serve --config <file>` names it; with
 no flag, `serve` reads `./sindri.yaml` if it exists and runs on the defaults below if
 it does not. A file you name that is missing is an error. An empty file means

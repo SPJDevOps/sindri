@@ -43,7 +43,9 @@ WORK="$(mktemp -d)"
 awk '/<!-- quickstart:compose -->/{f=1;next}/<!-- \/quickstart:compose -->/{f=0}f' "${DOC}" | sed '1d;$d' > "${WORK}/compose.yaml"
 awk '/<!-- quickstart:begin -->/{f=1;next}/<!-- quickstart:end -->/{f=0}f' "${DOC}" | sed '1d;$d' > "${WORK}/steps.sh"
 test -s "${WORK}/compose.yaml" || { echo "no compose block in the quickstart" >&2; exit 1; }
+awk '/<!-- quickstart:stop -->/{f=1;next}/<!-- \/quickstart:stop -->/{f=0}f' "${DOC}" | sed '1d;$d' > "${WORK}/stop.sh"
 test -s "${WORK}/steps.sh" || { echo "no command block in the quickstart" >&2; exit 1; }
+test -s "${WORK}/stop.sh" || { echo "no stop block in the quickstart" >&2; exit 1; }
 diff -u "${ROOT}/deploy/quickstart/compose.yaml" "${WORK}/compose.yaml" \
   || { echo "docs/quickstart.md and deploy/quickstart/compose.yaml have drifted apart" >&2; exit 1; }
 echo "the document's Compose file matches deploy/quickstart/compose.yaml"
@@ -72,6 +74,7 @@ fi
 docker exec "${DIND}" mkdir -p /quickstart
 docker cp "${WORK}/compose.yaml" "${DIND}:/quickstart/compose.yaml"
 docker cp "${WORK}/steps.sh" "${DIND}:/quickstart/steps.sh"
+docker cp "${WORK}/stop.sh" "${DIND}:/quickstart/stop.sh"
 
 echo "== running the quickstart's commands, verbatim"
 docker exec -i -w /quickstart -e NODE_IMAGE="${NODE_IMAGE}" "${DIND}" sh -eu <<'EOS'
@@ -98,6 +101,16 @@ grep -q '"version": "1.0.0"' js-app/node_modules/@demo/hello/package.json || { e
 grep -q 'localhost:8080/npm/js/' js-app/package-lock.json || { echo "the lockfile does not resolve through the js repository" >&2; exit 1; }
 echo "@demo/hello 1.0.0 published to js and installed from it"
 docker compose ps --format '{{.Service}}: {{.State}} {{.Health}}'
+
+echo "== stopping it, as the quickstart's last step writes"
+set -x
+. ./stop.sh
+set +x
+test -z "$(docker compose ps -aq)" || { echo "containers are left after the stop step" >&2; docker compose ps -a >&2; exit 1; }
+# The daemon started clean, so any volume left is one the stop step missed.
+test -z "$(docker volume ls -q)" \
+  || { echo "volumes are left after docker compose down -v" >&2; docker volume ls >&2; exit 1; }
+echo "the stop step removed the containers and the volumes"
 EOS
 
 echo "M8b quickstart gate passed: docs/quickstart.md works on a clean Docker daemon"
