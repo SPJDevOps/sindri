@@ -11,6 +11,7 @@
 # Migrating
 
 - [From Verdaccio](migrate/verdaccio.md)
+- [From devpi](migrate/devpi.md)
 
 # Decisions
 
