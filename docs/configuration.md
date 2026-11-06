@@ -267,8 +267,26 @@ An entry with neither `members` nor `upstream` is hosted. An entry with both is 
 error: declare two repositories. A member written in another namespace needs its type as
 a prefix, such as `hosted/org/internal-py`.
 
-`upstream` takes a preset name, which is one of `pypi`, `dockerhub`, `ghcr`, `npm`, or
-`maven-central` (reserved; this build does not serve Maven). Or it takes a mapping:
+`upstream` takes a preset name or a mapping. A preset is an upstream built into the
+binary, so nobody hand-types the URL, and it sets these values:
+
+<!-- BEGIN GENERATED: presets -->
+<!-- Generated from internal/config/presets.go by `make reference`. Edit the presets, not this table. -->
+
+| Preset | Protocol | URL | `ttl` | `negativeTtl` |
+|---|---|---|---|---|
+| `dockerhub` | `oci` | `https://registry-1.docker.io` | `1h` | `5m` |
+| `ghcr` | `oci` | `https://ghcr.io` | `1h` | `5m` |
+| `maven-central` | `maven`, reserved: this build does not serve it | `https://repo.maven.apache.org/maven2` | `1h` | `5m` |
+| `npm` | `npm` | `https://registry.npmjs.org` | `1h` | `5m` |
+| `pypi` | `pypi` | `https://pypi.org/simple` | `1h` | `5m` |
+<!-- END GENERATED: presets -->
+
+A preset names an upstream, not a repository: the repository's name is its key under
+`repos:`, so `public-js: { upstream: npm }` is as valid as `npm: { upstream: npm }`.
+`sindri config show --expanded` prints what each preset became.
+
+The mapping takes these keys:
 
 <!-- keys checked against the loader: repos.upstream -->
 
@@ -276,8 +294,8 @@ a prefix, such as `hosted/org/internal-py`.
 |---|---|---|---|
 | `preset` | string | A preset name, as above. | unset |
 | `url` | string | The upstream's URL. Needed when there is no preset. | the preset's |
-| `ttl` | duration | How long a cached answer is fresh. `0` never expires, so the cache is never refreshed and Sindri never notices upstream removing a file. Always set it for an explicit `url`. | the preset's, `1h` for every preset; else `defaults.proxy.ttl`; else `0` |
-| `negativeTtl` | duration | How long "not found" is remembered. `0` means it is not cached. | the preset's, `5m` for every preset; else `defaults.proxy.negativeTtl`; else `0` |
+| `ttl` | duration | How long a cached answer is fresh. `0` never expires, so the cache is never refreshed and Sindri never notices upstream removing a file. Always set it for an explicit `url`. | the preset's; else `defaults.proxy.ttl`; else `0` |
+| `negativeTtl` | duration | How long "not found" is remembered. `0` means it is not cached. | the preset's; else `defaults.proxy.negativeTtl`; else `0` |
 | `credentials` | string | A key of the top-level `credentials:` map. | unset |
 
 Precedence, lowest first: the preset, then `defaults.proxy`, then what the repository
@@ -286,10 +304,6 @@ writes. A mapping with an explicit `url`, and no `ttl` or `negativeTtl` here or 
 revalidated, so that proxy never refreshes its cache, and since SIN-54 never notices
 upstream removing a file, because a refresh is what flags it. An unset `negativeTtl` of
 `0` means "not found" is not cached. Always set `ttl` for an explicit `url`.
-
-The presets expand to these URLs: `pypi` is `https://pypi.org/simple`, `dockerhub` is
-`https://registry-1.docker.io`, `ghcr` is `https://ghcr.io`, and `npm` is
-`https://registry.npmjs.org`.
 
 ### `lifecycle`
 
