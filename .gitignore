@@ -2,6 +2,7 @@
 /bin/
 /dist/
 /sindri
+/site/
 
 # Local development state
 /.data/

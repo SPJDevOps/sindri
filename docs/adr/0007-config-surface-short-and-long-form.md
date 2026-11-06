@@ -47,8 +47,8 @@ repositories. Adopting governance is adding a file, never migrating a format.
 
 ### One reconciler, two triggers
 
-`sindri serve --config sindri.yaml` reconciles on boot and on `SIGHUP`. `sindri apply -f
-<dir>` reconciles from CI against a running server. The reconciler is identical; only the
+`sindri serve --config sindri.yaml` reconciles on boot and on `SIGHUP`.
+`sindri apply -f <dir>` reconciles from CI against a running server. The reconciler is identical; only the
 invocation differs. This removes the apply step entirely for single-node installations and
 is the larger half of making the configuration feel native to Compose.
 

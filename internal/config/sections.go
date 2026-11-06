@@ -13,10 +13,17 @@ import (
 //
 // Short form: `listen: :8080`. Long form: a mapping with any of the fields
 // below. Both produce the same struct.
+//
+// A field's first comment paragraph is its meaning in docs/configuration.md,
+// which TestReference_PageMatchesStructs keeps in step with these structs. It
+// is written for an operator; later paragraphs are for the code's readers.
 type Listen struct {
-	Address           string   `yaml:"address"`
+	// Address the HTTP server binds. Must not be empty.
+	Address string `yaml:"address"`
+	// How long a client may take to send request headers.
 	ReadHeaderTimeout Duration `yaml:"readHeaderTimeout"`
-	ShutdownTimeout   Duration `yaml:"shutdownTimeout"`
+	// How long shutdown waits for requests in flight.
+	ShutdownTimeout Duration `yaml:"shutdownTimeout"`
 }
 
 func defaultListen() Listen {
@@ -77,20 +84,33 @@ const (
 // of the file entirely, in which case the S3 backend uses the ambient AWS
 // credential chain.
 type Storage struct {
+	// `filesystem` or `s3`.
 	Backend Backend `yaml:"backend"`
 
-	// Filesystem
+	// Directory for blobs. Filesystem only, and required there. A relative
+	// path is resolved against the configuration file's directory.
 	Path string `yaml:"path,omitempty"`
 
-	// S3
-	Bucket          string `yaml:"bucket,omitempty"`
-	Prefix          string `yaml:"prefix,omitempty"`
-	Region          string `yaml:"region,omitempty"`
-	Endpoint        string `yaml:"endpoint,omitempty"`
-	PathStyle       bool   `yaml:"pathStyle,omitempty"`
-	AccessKeyID     string `yaml:"accessKeyId,omitempty"`
+	// Bucket name. S3 only, and required there.
+	Bucket string `yaml:"bucket,omitempty"`
+	// Key prefix inside the bucket. S3 only.
+	Prefix string `yaml:"prefix,omitempty"`
+	// S3 region. Compatible stores ignore it, but the SDK needs one.
+	// Default: `us-east-1` on S3.
+	Region string `yaml:"region,omitempty"`
+	// URL of an S3-compatible store such as MinIO. S3 only. Default: unset,
+	// which is AWS.
+	Endpoint string `yaml:"endpoint,omitempty"`
+	// Use path-style addressing, which most S3-compatible stores need. S3
+	// only.
+	PathStyle bool `yaml:"pathStyle,omitempty"`
+	// Static access key. Set it together with `secretAccessKey`, or leave
+	// both out to use the ambient AWS credential chain.
+	AccessKeyID string `yaml:"accessKeyId,omitempty"`
+	// Static secret key. Redacted by `config show`.
 	SecretAccessKey string `yaml:"secretAccessKey,omitempty"`
-	SessionToken    string `yaml:"sessionToken,omitempty"`
+	// Session token for temporary credentials. Redacted by `config show`.
+	SessionToken string `yaml:"sessionToken,omitempty"`
 }
 
 func defaultStorage() Storage {
@@ -190,9 +210,16 @@ func (s *Storage) validate() error {
 // Short form: `database: postgres://...`. Long form: a mapping with the URL and
 // pool settings. Postgres is the only supported store; see ADR 2.
 type Database struct {
-	URL            string   `yaml:"url"`
-	MaxConns       int32    `yaml:"maxConns"`
-	MinConns       int32    `yaml:"minConns"`
+	// Connection URL. The scheme must be `postgres` or `postgresql`. The
+	// password is redacted in logs and by `config show`. The default is the
+	// development stack's, with a development-only credential: never deploy
+	// it.
+	URL string `yaml:"url"`
+	// Pool size. At least 1.
+	MaxConns int32 `yaml:"maxConns"`
+	// Connections kept open. Between 0 and `maxConns`.
+	MinConns int32 `yaml:"minConns"`
+	// How long to wait for a connection.
 	ConnectTimeout Duration `yaml:"connectTimeout"`
 }
 
@@ -265,7 +292,9 @@ func (d Database) Redacted() string {
 
 // Log describes the structured logger.
 type Log struct {
-	Level  string `yaml:"level"`
+	// `debug`, `info`, `warn`, or `error`.
+	Level string `yaml:"level"`
+	// `json` or `text`.
 	Format string `yaml:"format"`
 }
 
@@ -311,14 +340,17 @@ func (l *Log) validate() error {
 // Short form: `auth: ${SINDRI_TOKEN}`, which sets only the bootstrap token.
 // Long form: a mapping. See ADR 18.
 type Auth struct {
-	// StaticToken is the bootstrap administrator credential: what `apply` uses
-	// before an identity provider is configured, and the break-glass path
-	// after. It is checked in constant time and never logged.
+	// The bootstrap administrator credential: what `sindri apply` uses before
+	// an identity provider is configured, and the break-glass path after.
+	// Compared in constant time, never logged, and redacted by `config show`.
+	// The default logs a warning while it is in use.
 	StaticToken string `yaml:"static_token"`
 
-	// Admins lists identity-provider groups whose members administer the
-	// server. Membership is read from the caller's token on every request and
-	// never stored (ADR 5).
+	// Identity-provider groups whose members administer the server. Entries
+	// must not be empty. Membership is read from the caller's token on each
+	// request and never stored.
+	//
+	// See ADR 5.
 	Admins []string `yaml:"admins,omitempty"`
 
 	// OIDC configures the identity provider. Absent means only the bootstrap
@@ -375,18 +407,29 @@ func (a *Auth) validate() error {
 // OIDC configures token validation against an OpenID Connect provider, and
 // the browser login flow when RedirectURL is set.
 type OIDC struct {
-	Issuer       string `yaml:"issuer"`
-	ClientID     string `yaml:"clientId"`
+	// The provider's issuer URL. Required. Must be `https`, or `http` for a
+	// loopback address.
+	Issuer string `yaml:"issuer"`
+	// OAuth client id. Required.
+	ClientID string `yaml:"clientId"`
+	// OAuth client secret. Redacted by `config show`.
 	ClientSecret string `yaml:"clientSecret"`
-	RedirectURL  string `yaml:"redirectUrl"`
+	// The browser login callback, for example
+	// `https://sindri.example.com/auth/callback`. Setting it enables UI
+	// sign-in. Same scheme rule as `issuer`. The session cookie is `Secure`
+	// exactly when this is `https`.
+	RedirectURL string `yaml:"redirectUrl"`
 
-	// GroupsClaim names the token claim listing the caller's groups.
+	// Token claim listing the caller's groups.
 	GroupsClaim string `yaml:"groupsClaim"`
-	// UsernameClaim names the claim recorded as the actor in the ledger.
+	// Token claim recorded as the actor in the audit ledger.
 	UsernameClaim string `yaml:"usernameClaim"`
-	// Scopes requested by the browser login. Default: openid, profile,
-	// email. Providers that release groups only on request (Dex: "groups")
-	// need it added here.
+	// Scopes the browser login requests. Providers that release groups only
+	// on request, such as Dex, need `groups` added. Default: `openid`,
+	// `profile`, `email`.
+	//
+	// The default is applied by internal/auth, not here, so `config show`
+	// prints only what the file wrote.
 	Scopes []string `yaml:"scopes,omitempty"`
 }
 
@@ -453,7 +496,9 @@ func isLoopback(host string) bool {
 
 // Credential is one upstream secret.
 type Credential struct {
+	// Upstream user name. Redacted by `config show`.
 	Username string `yaml:"username"`
+	// Upstream password or token. Required. Redacted by `config show`.
 	Password string `yaml:"password"`
 }
 
@@ -507,8 +552,9 @@ func validRefName(name string) bool {
 // Short form: `worker: false` turns it off, `worker: true` is the default.
 // Long form: a mapping with any of the fields below.
 type Worker struct {
-	// Enabled runs a worker inside `serve`. A server with it off still
-	// enqueues work, such as `sindri gc`, for a worker elsewhere to claim.
+	// Run a worker inside `serve`. With it off, the server still enqueues
+	// work, such as `sindri gc`, for a worker elsewhere to claim. An absent
+	// `enabled` in the mapping means `true`.
 	Enabled   bool            `yaml:"enabled"`
 	GC        WorkerGC        `yaml:"gc"`
 	Retention WorkerRetention `yaml:"retention"`
@@ -516,23 +562,24 @@ type Worker struct {
 
 // WorkerGC configures garbage collection (ADR 19).
 type WorkerGC struct {
-	// Interval schedules collection. Zero, the default, never schedules it:
+	// How often to schedule garbage collection. Unset never schedules it:
 	// "untagged and unpromoted is garbage" is a policy to adopt after a dry
 	// run, not one to inherit by upgrading. `sindri gc` works either way.
 	Interval Duration `yaml:"interval"`
-	// Grace protects every blob seen more recently than this, whatever
-	// references it.
+	// Blobs seen more recently than this are kept, whatever references them.
 	Grace Duration `yaml:"grace"`
 }
 
 // WorkerRetention configures the cleanup jobs.
 type WorkerRetention struct {
+	// How often the cleanup jobs run.
 	Interval Duration `yaml:"interval"`
-	// UploadMaxIdle is how long a staged upload may go unwritten before it
-	// is discarded.
+	// How long a staged upload may go unwritten before it is discarded. At
+	// least `1m`.
 	UploadMaxIdle Duration `yaml:"uploadMaxIdle"`
-	// ProxyStaleAfter is how long past its TTL a proxy cache entry is kept to
-	// serve through an upstream outage before retention evicts it.
+	// How long past its TTL a proxy cache entry is kept to serve through an
+	// upstream outage, before retention evicts it. Also how long a cached
+	// file that upstream no longer lists is kept before its row is removed.
 	ProxyStaleAfter Duration `yaml:"proxyStaleAfter"`
 }
 

@@ -826,11 +826,14 @@ publish is scanned, and promotion is refused above a severity.
 | Sprint (Mon–Sun) | Milestone | Tickets | Release |
 |---|---|---|---|
 | 5, Nov 5–15 | v1.1.1 ✅ | SIN-57, 59, 60, 61, 62, 63, 64, 66, 67 | v1.1.1 |
-| 6, Nov 16–22 | M10 docs site | SIN-22, 23, 29 | |
-| 7, Nov 23–29 | M10 migration | SIN-24, 25, 26, 53 | |
-| 8, Nov 30–Dec 6 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
-| 9, Dec 7–13 | M11a scan | SIN-30, 31, 32, 36 | |
-| 10, Dec 14–20 | M11a gate | SIN-34, 38, 39, 72 | v1.3.0, then announce |
+| 6, Nov 6–15 | M10 docs site | SIN-22, 23, 29 | |
+| 7, Nov 16–22 | M10 migration | SIN-24, 25, 26, 53 | |
+| 8, Nov 23–29 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
+| 9, Nov 30–Dec 6 | M11a scan | SIN-30, 31, 32, 36 | |
+| 10, Dec 7–13 | M11a gate | SIN-34, 38, 39, 72 | v1.3.0, then announce |
+
+Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
+week, and Sprints 7 to 10 each moved up one week.
 
 Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic.
 
@@ -1002,10 +1005,10 @@ run today, and deploy and operate it in production, on Compose or Kubernetes, wi
 reading the source.
 
 **Scope.**
-- [ ] A docs site built from `docs/` and published to GitHub Pages on every release. The
-  generator is chosen by ADR. It is build tooling, so it does not touch the single-binary
+- [x] A docs site built from `docs/` and published to GitHub Pages on every release. The
+  generator is chosen by ADR ([ADR 26](docs/adr/0026-docs-site-generator.md): mdBook, with lychee checking links). It is build tooling, so it does not touch the single-binary
   promise, which is about the runtime
-- [ ] A configuration reference **generated from the config structs**, with a test that
+- [x] A configuration reference **generated from the config structs**, with a test that
   fails when the page and the code disagree, in the same spirit as the golden tests
 - [ ] Migration guides from **Verdaccio, devpi, and Harbor**. The method: put a Sindri
   proxy in front of the old registry, switch clients over, and let the cache fill, then
@@ -1020,7 +1023,7 @@ reading the source.
   private registry tried end to end (SIN-53)
 - [ ] A README rewritten for the polyglot team: what it replaces, a two-minute start, and
   links into the docs site
-- [ ] Every page's commands run in CI or in a gate script, as the quickstart's already do
+- [x] Every page's commands run in CI or in a gate script, as the quickstart's already do
 
 **Out of scope.** A GitHub wiki: docs live in the repository so they are versioned and
 reviewed with the code. Video, a website beyond the docs site, and the announcement itself,
@@ -1034,6 +1037,17 @@ go test ./internal/config/ -run TestReference_   # the reference matches the str
 ./scripts/helm-gate.sh          # the chart installs, serves, and upgrades in kind
 # a person who has not used Sindri follows one migration guide end to end
 ```
+
+**Docs slice, Sprint 6, 2026-11-06.** `make ci`, `make test-integration`, and
+`./scripts/m10-docs-gate.sh` passed on `m10-docs-site`, with Go 1.27.3 (lint under 1.27.1),
+Docker 29.8.0, mdBook v0.5.4, and lychee v0.24.2. The docs gate builds the site with no
+broken internal link or anchor, runs the `TestReference_` and `TestDocs_` tests, and runs
+every check the pages name: the quickstart gate, which now also runs the stop step, the new
+upgrade gate, which upgrades 1.1.1 to the checkout by the page's own commands, and the
+configuration page's commands. The server settings tables are generated from the structs.
+The repository, lifecycle, and manifest tables are hand-written, because the loader reads
+them node by node, and a test checks that they list exactly the keys the loader accepts.
+The Pages deploy runs on the next release tag.
 
 ---
 

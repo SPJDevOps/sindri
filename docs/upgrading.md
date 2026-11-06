@@ -1,5 +1,7 @@
 # Upgrading Sindri
 
+<!-- commands checked by: scripts/upgrade-gate.sh -->
+
 An upgrade is replacing one binary or one image. There is no separate migrate
 step and no upgrade tool.
 
@@ -20,6 +22,7 @@ does not change between releases.
    makes any mistake recoverable.
 2. Replace the binary, or change the image tag:
 
+   <!-- upgrade:steps -->
    ```bash
    # Compose quickstart
    SINDRI_IMAGE=ghcr.io/spjdevops/sindri:<version> docker compose up -d
@@ -29,6 +32,7 @@ does not change between releases.
    install -m 0755 sindri /usr/local/bin/sindri
    systemctl restart sindri
    ```
+   <!-- /upgrade:steps -->
 
 3. Check the log for `database schema is up to date`. Its `applied` field
    counts the migrations this start ran.

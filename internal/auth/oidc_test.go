@@ -333,3 +333,25 @@ func TestSession_LogoutFromTheUIRedirectsWithHtmx(t *testing.T) {
 		t.Fatalf("logout did not clear the session: %q", rec.Header().Get("Set-Cookie"))
 	}
 }
+
+// docs/configuration.md states this default for auth.oidc.scopes, and
+// TestReference_StatedDefaultsAreChecked names this test as what keeps it true.
+func TestSession_LoginRequestsOpenIDProfileAndEmailByDefault(t *testing.T) {
+	idp := oidctest.New(t)
+	o := newOIDC(t, idp)
+	h := auth.NewSessions(auth.SessionConfig{ClientID: oidctest.ClientID, RedirectURL: "http://127.0.0.1/auth/callback"}, o,
+		auth.NewChain("boot", nil, o, nil)).Handler()
+
+	login := httptest.NewRecorder()
+	h.ServeHTTP(login, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/auth/login", nil))
+	if login.Code != http.StatusFound {
+		t.Fatalf("login: %d", login.Code)
+	}
+	loc, err := url.Parse(login.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loc.Query().Get("scope"), "openid profile email"; got != want {
+		t.Errorf("scope = %q, want %q", got, want)
+	}
+}

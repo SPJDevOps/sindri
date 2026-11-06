@@ -22,6 +22,8 @@ COMPOSE_FILE     := deploy/compose/docker-compose.yml
 TOOLS_BIN     := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)
 GOLANGCI_LINT := $(or $(wildcard $(TOOLS_BIN)/golangci-lint),$(shell command -v golangci-lint 2>/dev/null))
 SQLC          := $(or $(wildcard $(TOOLS_BIN)/sqlc),$(shell command -v sqlc 2>/dev/null))
+MDBOOK        := $(or $(wildcard $(TOOLS_BIN)/mdbook),$(shell command -v mdbook 2>/dev/null))
+LYCHEE        := $(or $(wildcard $(TOOLS_BIN)/lychee),$(shell command -v lychee 2>/dev/null))
 
 .DEFAULT_GOAL := help
 
@@ -92,6 +94,28 @@ tools:
 	GOTOOLCHAIN=go1.27.1 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 	go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
+	./scripts/install-docs-tools.sh $(TOOLS_BIN)
+
+## reference: Regenerate the server settings tables of docs/configuration.md from internal/config.
+.PHONY: reference
+reference:
+	go test ./internal/config -run TestReference_PageMatchesStructs -update -count=1
+
+## docs: Build the docs site into ./site and fail on a broken internal link or anchor.
+# Offline, so the gate does not depend on other people's servers; docs-links-external
+# checks those. 404.html is excluded because its <base> is the deployed /sindri/ path.
+.PHONY: docs
+docs:
+	@test -n "$(MDBOOK)" || { echo "mdbook not found in $(TOOLS_BIN) or PATH. Install it with: make tools"; exit 1; }
+	@test -n "$(LYCHEE)" || { echo "lychee not found in $(TOOLS_BIN) or PATH. Install it with: make tools"; exit 1; }
+	rm -rf site
+	$(MDBOOK) build docs
+	$(LYCHEE) --offline --include-fragments --no-progress --root-dir "$(CURDIR)/site" --exclude-path site/404.html 'site/**/*.html'
+
+## docs-links-external: Check the docs' links to other sites. Not part of the gate.
+.PHONY: docs-links-external
+docs-links-external: docs
+	$(LYCHEE) --no-progress --exclude-path site/404.html --exclude '^https://github\.com/SPJDevOps/sindri/edit/' 'site/**/*.html'
 
 ## run: Build and serve against the `make up` stack, with UI sign-in through Dex.
 .PHONY: run
@@ -116,7 +140,7 @@ logs:
 ## clean: Remove build and coverage output.
 .PHONY: clean
 clean:
-	rm -rf $(BIN_DIR) dist coverage.out coverage.html
+	rm -rf $(BIN_DIR) dist site coverage.out coverage.html
 
 ## ci: Everything CI runs, in order.
 .PHONY: ci

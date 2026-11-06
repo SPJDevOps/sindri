@@ -1,5 +1,7 @@
 # Quickstart
 
+<!-- commands checked by: scripts/m8-quickstart-gate.sh -->
+
 A registry with a web UI on one machine, in about two minutes, with nothing
 installed but Docker for the image steps. You push an image, sign in, and look at
 it. The npm steps also publish and install a package, and those need Node.js and
@@ -12,7 +14,7 @@ see [Going further](#going-further).
 ## 1. Save the Compose file
 
 Save this as `compose.yaml` in an empty directory. It is the same file as
-[`deploy/quickstart/compose.yaml`](../deploy/quickstart/compose.yaml), so
+[`deploy/quickstart/compose.yaml`](https://github.com/SPJDevOps/sindri/blob/main/deploy/quickstart/compose.yaml), so
 `curl -fsSLO https://raw.githubusercontent.com/SPJDevOps/sindri/main/deploy/quickstart/compose.yaml`
 fetches it too.
 
@@ -185,20 +187,22 @@ packuments carry absolute tarball URLs, so Sindri refuses to start with an npm
 repository and no `publicUrl`. Both keys, and every other one, are in the
 [configuration reference](configuration.md). To install from npmjs through
 Sindri as well, add a proxy and a virtual repository; see
-[Using Sindri as an npm registry](../README.md#using-sindri-as-an-npm-registry).
+[Using Sindri as an npm registry](https://github.com/SPJDevOps/sindri/blob/main/README.md#using-sindri-as-an-npm-registry).
 
 ## 3. Stop it
 
+<!-- quickstart:stop -->
 ```bash
 docker compose down        # keeps the data volumes
 docker compose down -v     # deletes them too
 ```
+<!-- /quickstart:stop -->
 
 ## Going further
 
 - **Configuration as code.** Repositories, access, and lifecycle stages
   belong in `sindri.yaml`, reconciled on every start. See
-  [ARCHITECTURE.md section 8](../ARCHITECTURE.md#8-configuration-as-code), and
+  [ARCHITECTURE.md section 8](https://github.com/SPJDevOps/sindri/blob/main/ARCHITECTURE.md#8-configuration-as-code), and
   every key is in the [configuration reference](configuration.md).
 - **Your identity provider.** Point `auth.oidc` at it and set `auth.admins`
   to a group of yours. Then people use their ID token as the password for
@@ -206,7 +210,7 @@ docker compose down -v     # deletes them too
   [ADR 18](adr/0018-authentication-and-rbac-in-v1.md).
 - **More repositories.** Add a proxy of registry.npmjs.org and a virtual
   repository in front of `js`, as
-  [the README](../README.md#using-sindri-as-an-npm-registry) shows, and the
+  [the README](https://github.com/SPJDevOps/sindri/blob/main/README.md#using-sindri-as-an-npm-registry) shows, and the
   same for pip.
 - **Storage.** `storage: s3://bucket/prefix` uses any S3-compatible store.
 - **Garbage collection.** `sindri gc --dry-run` lists what nothing
