@@ -27,8 +27,8 @@ not a preference. An image name that hosted has ever held is **claimed**: the pr
 is never asked for its manifests. The claim is per image name (the whole path after
 the repository name, such as `acme/app`), it covers every tag and digest of that
 name, and it applies to manifests, not to blobs. The consequence is described in
-[Move the history before you push](#6-move-the-history-before-you-push) and matters
-for the order of the steps.
+[Move the history before you switch anything](#5-move-the-history-before-you-switch-anything)
+and decides the order of the steps: copy first, then switch clients, then push.
 
 You need a Sindri server that can reach your Harbor over HTTPS, a Harbor robot account
 that can pull from the projects you are moving, and Docker on the clients. Examples
@@ -40,7 +40,7 @@ write the two servers as `https://harbor.example.com` and
 | In Harbor | In Sindri |
 |---|---|
 | Project `acme`, repository `app` | The image name `acme/app`. The project is the first part of the name, and passes through the `harbor` proxy unchanged. |
-| A robot account `robot$acme+sindri` | For Sindri's own reads of Harbor: a `username` and `password` credential on the `harbor` proxy. For your clients and CI: [machine tokens](#3-switch-the-clients), which are Sindri's own. |
+| A robot account `robot$acme+sindri` | For Sindri's own reads of Harbor: a `username` and `password` credential on the `harbor` proxy. For your clients and CI: [machine tokens](#3-give-your-clients-and-ci-tokens), which are Sindri's own. |
 | A project's members and roles | `read` and `write` on a repository, by group; see below. |
 | Project quotas, retention rules, immutability rules | Not carried over; see [What Sindri does not do yet](#what-sindri-does-not-do-yet). |
 
@@ -114,20 +114,23 @@ prints it in `www-authenticate`.
 tag that moves in Harbor (`latest`) is therefore up to `ttl` stale through the proxy.
 Digests do not move. Replace `team:platform` with the group that pushes.
 
-## 3. Switch the clients
+## 3. Give your clients and CI tokens
 
-A client needs the registry name and a token. Sindri issues machine tokens through
+A client needs the registry name and a token, and the copy in step 5 needs the push
+token, so make the tokens first. Sindri issues machine tokens through
 its API, which only an administrator may call. A puller needs `read` on everything it
 pulls. A pusher needs `write` on `internal`:
 
 <!-- migrate:tokens -->
 ```bash
-curl -fsS -X POST https://sindri.example.com/api/v1/tokens \
-  -H "Authorization: Bearer $SINDRI_ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"ci-pull","role":"read"}'
-curl -fsS -X POST https://sindri.example.com/api/v1/tokens \
-  -H "Authorization: Bearer $SINDRI_ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"ci-push","role":"write","repository":"internal"}'
+printf 'Authorization: Bearer %s\n' "$SINDRI_ADMIN_TOKEN" |
+  curl -fsS -X POST https://sindri.example.com/api/v1/tokens \
+    -H @- -H 'Content-Type: application/json' \
+    -d '{"name":"ci-pull","role":"read"}'
+printf 'Authorization: Bearer %s\n' "$SINDRI_ADMIN_TOKEN" |
+  curl -fsS -X POST https://sindri.example.com/api/v1/tokens \
+    -H @- -H 'Content-Type: application/json' \
+    -d '{"name":"ci-push","role":"write","repository":"internal"}'
 ```
 <!-- /migrate:tokens -->
 
@@ -138,32 +141,10 @@ your clients and CI: one token per use, revocable on its own. Give a puller an
 `images`, cannot pull through it, because a virtual repository answers from its
 members and the token is not scoped to them.
 
-Then change the registry name in image references, from `harbor.example.com/acme/app`
-to `sindri.example.com/images/acme/app`, in Dockerfiles, Compose files, and
-Kubernetes manifests. A client signs in with the token as the password; the user name
-is not checked:
+The header goes to curl on its standard input (`-H @-`), so the token never appears
+on a command line, where `ps` and shell history would show it.
 
-<!-- migrate:pull -->
-```bash
-printf '%s' "$SINDRI_PULL_TOKEN" | docker login sindri.example.com -u token --password-stdin
-docker pull sindri.example.com/images/acme/app:1.0
-```
-<!-- /migrate:pull -->
-
-Kubernetes `imagePullSecret`s and container runtime mirror settings were not checked.
-
-The pulled image has the digest Harbor had for the tag, because Sindri passed Harbor's
-manifest through unchanged. `docker pull` prints it on its `Digest:` line.
-
-## 4. Check the clients without Harbor's credential
-
-A client holds only the Sindri token. Sindri holds the robot, so a read that reaches
-Harbor comes from the robot account. In the check, the stand-in's request log shows the
-robot's login and no request from the client. Look at your Harbor's access logs the same
-way (not checked): a person's account still pulling the images you moved means that
-client still talks to Harbor.
-
-## 5. Take the inventory
+## 4. Take the inventory
 
 Before you copy anything, list what Harbor holds. A robot account can list repositories
 and tags over the registry API, with `crane`, a single static binary. The commands
@@ -206,35 +187,16 @@ An image is a manifest, and for a multi-architecture image the manifest is an in
 that points at one manifest per platform. The inventory lists tags, and a tag can be an
 index. The copy below handles both.
 
-## 6. Move the history before you push
+## 5. Move the history before you switch anything
 
+Do this before any client reads from Sindri and before the first push to `internal`.
 Pushing `acme/app` to `internal` claims `acme/app`. From then on, through `images`,
 Harbor's tags of `acme/app` are not served, even a tag you never pushed to Sindri:
 `images/acme/app:1.0` answers 404 while `harbor/acme/app:1.0` still serves it. There is
 no merge of hosted and proxied tags for one name. Other image names are unaffected:
 the claim is per name, so a push to `acme/app` does not hide `acme/tools`. So copy
-what you keep, for every image, before the first push to it, or at least before
-clients upgrade. Here is how to see the claim:
-
-<!-- migrate:push -->
-```bash
-printf '%s' "$SINDRI_PUSH_TOKEN" | docker login sindri.example.com -u token --password-stdin
-docker tag acme-app:2.0 sindri.example.com/internal/acme/app:2.0
-docker push sindri.example.com/internal/acme/app:2.0
-```
-<!-- /migrate:push -->
-
-<!-- migrate:claim-check -->
-```bash
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H "Authorization: Bearer $SINDRI_PULL_TOKEN" \
-  -H 'Accept: application/vnd.oci.image.index.v1+json' \
-  https://sindri.example.com/v2/images/acme/app/manifests/1.0
-```
-<!-- /migrate:claim-check -->
-
-After the push the second command prints `404`. Pushes go to `internal`, never to
-`images`: a push to a virtual repository is refused.
+every image and every tag you keep first. Until you switch the clients in step 6 they
+keep reading Harbor, and nothing looks different to them while this runs.
 
 Copying is a registry-to-registry copy of the manifests and blobs, not a
 `docker pull`, `docker tag`, and `docker push`, because a docker round trip can
@@ -279,17 +241,77 @@ artifacts that refer to it. Copy signatures and SBOMs separately if you rely on 
 An imported image has Sindri's push time, and its blobs are shared with every other
 image that has the same layers.
 
-## 7. Push new images to Sindri
+An image first pushed to Harbor after your copy is not in `internal`, so through
+`images` it is still served by the `harbor` proxy. Run the copy again before the first
+push to that image: `--no-clobber` skips every tag already there.
 
-CI pushes to `internal`, with the push token, using the `docker push` shown in step 6.
-Clients that pull through `images` see the new tag beside the history, because both are
-in `internal` once the history is copied.
+## 6. Switch the clients
 
-## 8. Pull by digest, with Harbor off
+The history is in Sindri, so clients can change. Change the registry name in image references, from `harbor.example.com/acme/app`
+to `sindri.example.com/images/acme/app`, in Dockerfiles, Compose files, and
+Kubernetes manifests. A client signs in with the token as the password; the user name
+is not checked:
+
+<!-- migrate:pull -->
+```bash
+printf '%s' "$SINDRI_PULL_TOKEN" | docker login sindri.example.com -u token --password-stdin
+docker pull sindri.example.com/images/acme/app:1.0
+```
+<!-- /migrate:pull -->
+
+Kubernetes `imagePullSecret`s and container runtime mirror settings were not checked.
+
+The pulled image has the digest Harbor had for the tag, because Sindri passed Harbor's
+manifest through unchanged. `docker pull` prints it on its `Digest:` line.
+
+## 7. Check the clients without Harbor's credential
+
+A client holds only the Sindri token. Sindri holds the robot, so a read that reaches
+Harbor comes from the robot account. The images you copied are now Sindri's own, so
+pulling one does not reach Harbor at all. An image that only Harbor has, such as one
+pushed to Harbor after the copy, is read through the `harbor` proxy. In the check, the
+stand-in's request log shows the robot's login for such an image, no read of a copied
+one, and no request from the client. Look at your Harbor's access logs the same
+way (not checked): a person's account still pulling the images you moved means that
+client still talks to Harbor.
+
+## 8. Push new images to Sindri
+
+CI pushes to `internal`, with the push token. Clients that pull through `images` see
+the new tag beside the history, because both are in `internal` once the history is
+copied. Pushes go to `internal`, never to `images`: a push to a virtual repository
+is refused.
+
+<!-- migrate:push -->
+```bash
+printf '%s' "$SINDRI_PUSH_TOKEN" | docker login sindri.example.com -u token --password-stdin
+docker tag acme-app:2.0 sindri.example.com/internal/acme/late:2.0
+docker push sindri.example.com/internal/acme/late:2.0
+```
+<!-- /migrate:push -->
+
+The example pushes `acme/late`, an image first pushed to Harbor after the copy above,
+to show why the copy has to be complete. After the push, ask for its Harbor tag
+through `images`:
+
+<!-- migrate:claim-check -->
+```bash
+printf 'Authorization: Bearer %s\n' "$SINDRI_PULL_TOKEN" |
+  curl -s -o /dev/null -w '%{http_code}\n' -H @- \
+    -H 'Accept: application/vnd.oci.image.index.v1+json' \
+    https://sindri.example.com/v2/images/acme/late/manifests/1.0
+```
+<!-- /migrate:claim-check -->
+
+It prints `404`: the push claimed `acme/late`, and Harbor's `1.0` is no longer
+served, while `harbor/acme/late:1.0` still has it. Run the copy again, and `1.0` is
+in `internal` beside the new tag.
+
+## 9. Pull by digest, with Harbor off
 
 When nothing but Sindri reads Harbor, stop pushing to it, remove `harbor` from the
 `images` members, and then stop Harbor. Do not remove the proxy before the history is
-copied: the proxy is what keeps those tags pullable. Remove the robot account when the
+copied (step 5): until an image is copied, the proxy is what keeps its tags pullable. Remove the robot account when the
 server goes.
 
 Pulling by digest from `internal` is the proof that the history is Sindri's own:
@@ -340,27 +362,36 @@ token goes to `/v2/`. nginx serves the registry and the realm from one origin, a
 Harbor does, and the check fails if the stand-in lets an anonymous caller in. It has
 none of Harbor's API, projects, quotas, replication, scanner, audit log, or
 redirect-to-object-storage blob downloads, and a real Harbor can differ in ways this
-does not show. The robot-account listing through the API in step 5 was not run for that
+does not show. The robot-account listing through the API in step 4 was not run for that
 reason. Run the steps against a Harbor you can afford to read from before you trust
 them with a production one.
 
 The check ran Sindri from this repository's build, Docker Desktop's Docker 29 for the
 pulls and the push, and `crane` (go-containerregistry v0.21.0) from its published
-image for the copy. Every image is pinned by digest in the script. What it asserts:
+image for the copy. Every image is pinned by digest in the script. It reads the
+commands out of this page and makes only these substitutions: `harbor.example.com`
+becomes the stand-in and `sindri.example.com` becomes the server on `:8080`, each as
+the address the command runs against (this host for `curl`, the host's name for
+`docker` and `crane`); the page says HTTPS and the check speaks plain HTTP; and `crane`
+runs through a wrapper in a container that adds `--insecure` and nothing else. The
+check also seeds the stand-in itself, builds the local `acme-app:2.0` image, and
+pushes an extra image to the stand-in after the copy, as the page's step 8 describes. What it asserts:
 
 - The proxy authenticates to the stand-in with a `username` and `password` credential
   whose name contains a `$`, quoted as shown. A client with no Harbor credential pulls
-  `acme/app:1.0` through Sindri at Harbor's digest, and the stand-in's log shows
-  the robot's login at the realm and a read of the image, and no request from the
-  client.
+  `acme/app:1.0` through Sindri at Harbor's digest.
 - A token scoped to the `images` repository cannot pull through it.
-- One push to `internal/acme/app` makes `images/acme/app:1.0` and `:1.1` answer 404
-  while `harbor/acme/app:1.0` still answers, and `acme/tools:1.0` is unaffected.
 - The inventory lists exactly the tags of the `acme` project and leaves out the
   project the robot may not read.
 - After the copy, every tag has the digest Harbor reports (the images are
   multi-architecture indexes), the copy can be run again, and `images/acme/app` serves
-  all three tags.
+  its tags, all before any client is switched.
+- A pull of a copied image through `images` is served from `internal`, and the
+  stand-in never sees a request for it. An image pushed to the stand-in after the
+  copy is read through the proxy with the robot's login.
+- One push to `internal/acme/late`, an image not yet copied, makes
+  `images/acme/late:1.0` answer 404 while `harbor/acme/late:1.0` still answers, and
+  `acme/tools:1.0` is unaffected. Running the copy again serves it.
 - With the stand-in stopped, a pull of the image by digest through `images` succeeds
   from `internal`.
 - The robot's password and the machine tokens appear in no log.

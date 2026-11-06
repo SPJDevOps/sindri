@@ -27,6 +27,8 @@
 #     the Docker daemon reaches it) and sindri.example.com becomes the server on
 #     :8080 (http://localhost:8080 for curl, host.docker.internal:8080 for docker
 #     and crane). The page says https; the gate runs plain http.
+#   - the page's commands run in the page's order: the history is inventoried and
+#     copied before any client is switched or anything is pushed to hosted.
 #   - crane runs from a pinned image through a wrapper that adds --insecure,
 #     because both registries here speak http. No other crane flag is added.
 #
@@ -334,7 +336,6 @@ export SINDRI_DATA_DIR
 PIDS+=("$!")
 wait_ready "${BASE}" || { cat "${WORK}/sindri.log" >&2; exit 1; }
 echo "  serving the page's configuration"
-AUTH=(-H "Authorization: Bearer ${SINDRI_TOKEN}")
 
 echo "== 5. machine tokens from the page: a puller, and a pusher for internal"
 export SINDRI_ADMIN_TOKEN="${SINDRI_TOKEN}"
@@ -358,6 +359,7 @@ PULL_TOKEN="$(token_named ci-pull)"
 PUSH_TOKEN="$(token_named ci-push)"
 [ -n "${PULL_TOKEN}" ] && [ -n "${PUSH_TOKEN}" ] || fail "the page's token commands printed no token"
 rm -f "${WORK}/tokens.out"
+export SINDRI_PULL_TOKEN="${PULL_TOKEN}" SINDRI_PUSH_TOKEN="${PUSH_TOKEN}"
 
 # nlog: the stand-in's access log, which lags a request a little.
 nlog() { docker logs "${NC}" 2>&1; }
@@ -370,50 +372,23 @@ settle() { # a grep -E pattern the log must come to contain after MARK
   cat "${WORK}/nginx-after.log" >&2
   return 1
 }
-status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+# bearer_curl TOKEN CURL-ARGS...: the token goes to curl on stdin (-H @-), as the
+# page does, so it is never on a command line. printf is a builtin.
+bearer_curl() {
+  local tok="$1"
+  shift
+  printf 'Authorization: Bearer %s\n' "${tok}" | curl -H @- "$@"
+}
+# status TOKEN CURL-ARGS...: the HTTP status of a request made with a bearer token.
+status() {
+  local tok="$1"
+  shift
+  bearer_curl "${tok}" -s -o /dev/null -w '%{http_code}' "$@"
+}
 ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
-manifest_status() { status -H "Authorization: Bearer ${PULL_TOKEN}" -H "Accept: ${ACCEPT}" "${BASE}/v2/$1/manifests/$2"; }
+manifest_status() { status "${PULL_TOKEN}" -H "Accept: ${ACCEPT}" "${BASE}/v2/$1/manifests/$2"; }
 
-echo "== 6. the after: a client pulls through Sindri with no Harbor credential"
-MARK="$(nlog | wc -l | tr -d ' ')"
-LOGGED_IN=1
-export SINDRI_PULL_TOKEN="${PULL_TOKEN}" SINDRI_PUSH_TOKEN="${PUSH_TOKEN}"
-page_block pull > "${WORK}/pull.sh"
-docker rmi "${CSINDRI}/images/acme/app:1.0" >/dev/null 2>&1 || true
-bash -e "${WORK}/pull.sh" > "${WORK}/pull.out" 2>&1 || { cat "${WORK}/pull.out" >&2; fail "the page's docker pull through Sindri failed"; }
-grep -q "Digest: ${D_APP10}" "${WORK}/pull.out" || { cat "${WORK}/pull.out" >&2; fail "the image pulled through Sindri is not the digest Harbor holds"; }
-# The stand-in's log is the proof the bytes came through Sindri's robot login: it
-# saw the robot's Basic login at the token realm and a Bearer read of the image,
-# and it saw no request from the client, which has no credential for it. (This greps
-# the log_format defined above, which the gate owns: "who METHOD uri status".)
-settle "^robot GET /service/token 200$" || fail "the stand-in never logged the robot's token exchange"
-settle "^bearer GET /v2/acme/app/manifests/.* 200$" || fail "the stand-in never logged Sindri's read of acme/app"
-if grep -E '^(seed|other) ' "${WORK}/nginx-after.log" | grep -q .; then fail "an unexpected login reached the stand-in during the pull"; fi
-echo "  docker pulled acme/app:1.0 through Sindri at ${D_APP10:0:19}; the stand-in logged the robot's exchange"
-
-echo "== 7. a token scoped to one repository cannot read through a virtual repository"
-SCOPED="$(curl -fsS -X POST "${AUTH[@]}" -H 'Content-Type: application/json' -d '{"name":"gate-scoped","role":"read","repository":"images"}' "${BASE}/api/v1/tokens" |
-  python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
-code="$(status -H "Authorization: Bearer ${SCOPED}" -H "Accept: ${ACCEPT}" "${BASE}/v2/images/acme/app/manifests/1.0")"
-[ "${code}" = "404" ] || fail "a token scoped to images read acme/app/1.0 through members it is not scoped to: HTTP ${code}"
-echo "  scoped to images: HTTP ${code}"
-
-echo "== 8. the name claim: one push to hosted hides Harbor's tags of that image from images"
-docker build -q -t acme-app:2.0 "${ROOT}/testdata/demo" >/dev/null
-page_block push > "${WORK}/push.sh"
-bash -e "${WORK}/push.sh" >/dev/null 2>&1 || fail "the page's docker push to internal failed"
-# harbor is the control: the proxy alone still has the tags Harbor holds.
-[ "$(manifest_status harbor/acme/app 1.0)" = "200" ] || fail "control: the proxy alone does not serve acme/app:1.0"
-[ "$(manifest_status images/acme/app 2.0)" = "200" ] || fail "the pushed acme/app:2.0 is not served through images"
-page_block claim-check server > "${WORK}/claim.sh"
-claim="$(bash -e "${WORK}/claim.sh")"
-[ "${claim}" = "404" ] || fail "images/acme/app:1.0 answered ${claim}, want 404: the claim did not hide Harbor's tag"
-[ "$(manifest_status images/acme/app 1.1)" = "404" ] || fail "images/acme/app:1.1 is not hidden by the claim"
-# The claim is per image name: acme/tools was not touched.
-[ "$(manifest_status images/acme/tools 1.0)" = "200" ] || fail "an upload to acme/app changed acme/tools"
-echo "  acme/app:1.0 through images: ${claim}; the proxy alone: 200; acme/tools:1.0 unaffected: 200"
-
-echo "== 9. the inventory, from the page"
+echo "== 6. the inventory, from the page, before any client is switched"
 page_block login > "${WORK}/login.sh"
 PATH="${WORK}/bin/migrate:${PATH}" bash -e "${WORK}/login.sh" < /dev/null >/dev/null 2>&1 || fail "the page's crane logins failed"
 page_block inventory > "${WORK}/inventory.sh"
@@ -426,7 +401,7 @@ printf '%s\n' "acme/app 1.0" "acme/app 1.1" "acme/tools 1.0" > "${WORK}/inventor
 diff "${WORK}/inventory.want" "${WORK}/inventory.sorted" >&2 || fail "the inventory is not exactly what the acme project holds"
 echo "  3 tags in 2 repositories, and not other/secret"
 
-echo "== 10. copy the history into internal, from the page"
+echo "== 7. copy the history into internal, from the page"
 page_block copy > "${WORK}/copy.sh"
 PATH="${WORK}/bin/migrate:${PATH}" bash -e "${WORK}/copy.sh" < /dev/null >"${WORK}/copy.out" 2>&1 || { tail -15 "${WORK}/copy.out" >&2; fail "the page's copy failed"; }
 # Running it again must not fail: the page uses --no-clobber, so it is repeatable.
@@ -442,8 +417,66 @@ for ref in "acme/app:1.0 ${D_APP10}" "acme/app:1.1 ${D_APP11}" "acme/tools:1.0 $
 done
 [ "$(manifest_status images/acme/app 1.0)" = "200" ] || fail "images/acme/app:1.0 is still hidden after the copy"
 [ "$(manifest_status images/acme/app 1.1)" = "200" ] || fail "images/acme/app:1.1 is still hidden after the copy"
-[ "$(manifest_status images/acme/app 2.0)" = "200" ] || fail "the copy lost acme/app:2.0"
-echo "  every tag has Harbor's digest in internal, a second run changes nothing, and images serves all three tags again"
+echo "  every tag has Harbor's digest in internal, a second run changes nothing, and images serves all three tags"
+
+echo "== 8. the after: a client pulls through Sindri with no Harbor credential"
+MARK="$(nlog | wc -l | tr -d ' ')"
+LOGGED_IN=1
+export SINDRI_PULL_TOKEN="${PULL_TOKEN}" SINDRI_PUSH_TOKEN="${PUSH_TOKEN}"
+page_block pull > "${WORK}/pull.sh"
+docker rmi "${CSINDRI}/images/acme/app:1.0" >/dev/null 2>&1 || true
+bash -e "${WORK}/pull.sh" > "${WORK}/pull.out" 2>&1 || { cat "${WORK}/pull.out" >&2; fail "the page's docker pull through Sindri failed"; }
+grep -q "Digest: ${D_APP10}" "${WORK}/pull.out" || { cat "${WORK}/pull.out" >&2; fail "the image pulled through Sindri is not the digest Harbor holds"; }
+# The copy is Sindri's own, so the stand-in is not asked for it: its log, which
+# lags a request a little, shows no read of acme/app. (This greps the log_format
+# defined above, which the gate owns: "who METHOD uri status".)
+sleep 1
+nlog | tail -n +"$((MARK + 1))" > "${WORK}/nginx-after.log"
+if grep -q 'acme/app' "${WORK}/nginx-after.log"; then
+  cat "${WORK}/nginx-after.log" >&2
+  fail "the stand-in was asked for acme/app although it is copied and claimed"
+fi
+# An image only Harbor has, pushed to it after the copy, is read through the proxy
+# with the robot's login: the stand-in saw the Basic login at the token realm and a
+# Bearer read of the image, and nothing from the client, which has no credential.
+sc copy "${HFROMC}/acme/app:1.0" "${HFROMC}/acme/late:1.0" >/dev/null 2>&1 || fail "seeding acme/late:1.0 failed"
+MARK="$(nlog | wc -l | tr -d ' ')"
+docker rmi "${CSINDRI}/images/acme/late:1.0" >/dev/null 2>&1 || true
+docker pull "${CSINDRI}/images/acme/late:1.0" > "${WORK}/pull-late.out" 2>&1 || { cat "${WORK}/pull-late.out" >&2; fail "docker pull of acme/late through Sindri failed"; }
+grep -q "Digest: ${D_APP10}" "${WORK}/pull-late.out" || { cat "${WORK}/pull-late.out" >&2; fail "acme/late:1.0 pulled through the proxy is not Harbor's digest"; }
+settle "^robot GET /service/token 200$" || fail "the stand-in never logged the robot's token exchange"
+settle "^bearer GET /v2/acme/late/manifests/.* 200$" || fail "the stand-in never logged Sindri's read of acme/late"
+if grep -E '^(seed|other) ' "${WORK}/nginx-after.log" | grep -q .; then fail "an unexpected login reached the stand-in during the pull"; fi
+echo "  acme/app:1.0 pulled from the copy at ${D_APP10:0:19}, the stand-in unasked; acme/late:1.0 pulled through the proxy as the robot"
+
+echo "== 9. a token scoped to one repository cannot read through a virtual repository"
+SCOPED="$(bearer_curl "${SINDRI_TOKEN}" -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"gate-scoped","role":"read","repository":"images"}' "${BASE}/api/v1/tokens" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+code="$(status "${SCOPED}" -H "Accept: ${ACCEPT}" "${BASE}/v2/images/acme/app/manifests/1.0")"
+[ "${code}" = "404" ] || fail "a token scoped to images read acme/app/1.0 through members it is not scoped to: HTTP ${code}"
+echo "  scoped to images: HTTP ${code}"
+
+echo "== 10. the name claim: a push to hosted hides Harbor's tags of an image not yet copied"
+docker build -q -t acme-app:2.0 "${ROOT}/testdata/demo" >/dev/null
+page_block push > "${WORK}/push.sh"
+bash -e "${WORK}/push.sh" >/dev/null 2>&1 || fail "the page's docker push to internal failed"
+# harbor is the control: the proxy alone still has the tags Harbor holds.
+[ "$(manifest_status harbor/acme/late 1.0)" = "200" ] || fail "control: the proxy alone does not serve acme/late:1.0"
+[ "$(manifest_status images/acme/late 2.0)" = "200" ] || fail "the pushed acme/late:2.0 is not served through images"
+page_block claim-check server > "${WORK}/claim.sh"
+claim="$(bash -e "${WORK}/claim.sh")"
+[ "${claim}" = "404" ] || fail "images/acme/late:1.0 answered ${claim}, want 404: the claim did not hide Harbor's tag"
+# The claim is per image name: the copied images were not touched.
+[ "$(manifest_status images/acme/tools 1.0)" = "200" ] || fail "a push to acme/late changed acme/tools"
+[ "$(manifest_status images/acme/app 1.1)" = "200" ] || fail "a push to acme/late changed acme/app"
+echo "  acme/late:1.0 through images: ${claim}; the proxy alone: 200; acme/tools:1.0 and acme/app:1.1 unaffected: 200"
+# The page: run the copy again, and the hidden tag is in internal beside the new one.
+PATH="${WORK}/bin/migrate:${PATH}" bash -e "${WORK}/copy.sh" < /dev/null >/dev/null 2>&1 || fail "the page's copy fails when run again for acme/late"
+PATH="${WORK}/bin/migrate:${PATH}" bash -e "${WORK}/verify.sh" < /dev/null > "${WORK}/verify2.out" 2>&1 || { cat "${WORK}/verify2.out" >&2; fail "the page's digest comparison failed after the second copy"; }
+[ "$(grep -c '^ok ' "${WORK}/verify2.out")" = "4" ] || { cat "${WORK}/verify2.out" >&2; fail "the digest comparison did not report four matches"; }
+[ "$(manifest_status images/acme/late 1.0)" = "200" ] || fail "images/acme/late:1.0 is still hidden after the second copy"
+[ "$(manifest_status images/acme/late 2.0)" = "200" ] || fail "the second copy lost acme/late:2.0"
+echo "  the second copy brought acme/late:1.0 in beside 2.0"
 
 echo "== 11. Harbor off: pull by digest from hosted alone"
 docker stop "${NC}" >/dev/null

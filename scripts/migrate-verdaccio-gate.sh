@@ -11,7 +11,11 @@
 # The commands and configuration are read out of the page, between its
 # <!-- migrate:NAME --> markers, not copied into this script, so the page cannot
 # drift from what passed. The only edit made to them is replacing the page's
-# example hosts (verdaccio.example.com, sindri.example.com) with the real ones.
+# example hosts (verdaccio.example.com, sindri.example.com) with the real ones,
+# writing replace-registry-host's value without a port, and, for the lockfile
+# command, `rm package-lock.json` as `rm -f` (that copy has no lockfile left).
+# The order follows the page: the history is imported, tags included, before any
+# client is switched or anything is published to hosted.
 #
 # Verdaccio runs from a pinned image and requires a login for @acme/*. Sindri
 # authenticates to it with a `token:` credential made by `npm token create`
@@ -171,7 +175,16 @@ vcode() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 [ "$(vcode -H "Authorization: Bearer ${VERDACCIO_TOKEN}" "${VURL}/-/whoami")" = "200" ] ||
   fail "the token npm token create printed is not accepted as a Bearer token"
 
-# publish_to_verdaccio NAME VERSION: as alice, directly to Verdaccio.
+# as_alice COMMAND...: run a command signed in to Verdaccio as alice.
+as_alice() {
+  printf '//%s/:_authToken=%s\n' "${VHOST}" "${ALICE_LOGIN}" > "${npm_config_userconfig}"
+  "$@"
+  local rc=$?
+  : > "${npm_config_userconfig}"
+  return ${rc}
+}
+
+# publish_to_verdaccio NAME VERSION [TAG]: as alice, directly to Verdaccio.
 publish_to_verdaccio() {
   local dir="${WORK}/vpub-$1-$2"
   mkdir -p "${dir}"
@@ -179,7 +192,7 @@ publish_to_verdaccio() {
   printf "module.exports = 'verdaccio %s %s';\n" "$1" "$2" > "${dir}/index.js"
   printf 'registry=%s/\n' "${VURL}" > "${dir}/.npmrc"
   printf '//%s/:_authToken=%s\n' "${VHOST}" "${ALICE_LOGIN}" > "${npm_config_userconfig}"
-  (cd "${dir}" && npm publish --access public >/dev/null)
+  (cd "${dir}" && npm publish --access public ${3:+--tag "$3"} >/dev/null)
   : > "${npm_config_userconfig}"
 }
 publish_to_verdaccio legacy 1.0.0
@@ -247,7 +260,75 @@ new_client() {
   page_block project-npmrc | { if [ -n "${2:-}" ]; then grep -v "$2" || true; else cat; fi; } > "$1/.npmrc"
 }
 
-echo "== 4. the after: the same lockfile, Verdaccio out of the client's reach"
+echo "== 4. import the history, tags included, before any client is switched"
+# Out-of-order versions, one that sorts differently as text and as a number
+# (1.10.0 against 1.2.0), and a prerelease. Verdaccio's tags are set to what a
+# long-lived package has: latest on the highest release, a named tag on an older
+# one, a tag on the prerelease.
+publish_to_verdaccio legacy 1.2.0
+publish_to_verdaccio legacy 1.1.0
+publish_to_verdaccio legacy 1.10.0
+publish_to_verdaccio legacy 2.0.0-beta.1 beta
+as_alice npm dist-tag add @acme/legacy@1.10.0 latest --registry "${VURL}/" >/dev/null
+as_alice npm dist-tag add @acme/legacy@1.1.0 stable --registry "${VURL}/" >/dev/null
+# A deprecation lives in the packument, not the tarball.
+as_alice npm deprecate "@acme/legacy@1.0.0" "use a newer version" --registry "${VURL}/" >/dev/null
+IMPORT="${WORK}/import"
+mkdir -p "${IMPORT}"
+page_block inventory > "${IMPORT}/inventory.mjs"
+page_block inventory-run > "${WORK}/inventory-run.sh"
+page_block import > "${WORK}/import.sh"
+page_block import-tags > "${WORK}/import-tags.sh"
+page_block verify-tags > "${WORK}/verify-tags.sh"
+# The page's import-npmrc block: the Verdaccio token line the import needs.
+{ printf '%s\n' "${SINDRI_USER_NPMRC}"; page_block import-npmrc; } > "${npm_config_userconfig}"
+# run_import: the page's inventory, import, and tag copy, in that order.
+run_import() {
+  (cd "${IMPORT}" && bash -e "${WORK}/inventory-run.sh") || fail "the page's inventory commands failed"
+  (cd "${IMPORT}" && bash -e "${WORK}/import.sh" >/dev/null) || fail "the page's import commands failed"
+  (cd "${IMPORT}" && bash -e "${WORK}/import-tags.sh" >/dev/null) || fail "the page's tag copy failed"
+}
+# tags_match: what the page's verify block prints for Sindri's hosted repository
+# equals Verdaccio's own dist-tags, for every package in the inventory.
+tags_match() {
+  (cd "${IMPORT}" && bash -e "${WORK}/verify-tags.sh") | sort > "${WORK}/tags.sindri"
+  VURL="${VURL}" TOK="${VERDACCIO_TOKEN}" python3 - "${IMPORT}/inventory.txt" <<'PY' | sort > "${WORK}/tags.verdaccio"
+import json, os, sys, urllib.parse, urllib.request
+for name in sorted({line.split()[0] for line in open(sys.argv[1]) if line.strip()}):
+    req = urllib.request.Request(os.environ["VURL"] + "/" + urllib.parse.quote(name, safe="@"), headers={"Authorization": "Bearer " + os.environ["TOK"]})
+    print(name)
+    for tag, version in json.load(urllib.request.urlopen(req))["dist-tags"].items():
+        print(f"{tag}: {version}")
+PY
+  diff "${WORK}/tags.verdaccio" "${WORK}/tags.sindri" >&2 || fail "the dist-tags on Sindri differ from Verdaccio's"
+}
+run_import
+cat > "${WORK}/inventory.want" <<'LIST'
+@acme/legacy 1.0.0
+@acme/legacy 1.1.0
+@acme/legacy 1.2.0
+@acme/legacy 1.10.0
+@acme/legacy 2.0.0-beta.1
+@acme/other 1.0.0
+LIST
+diff "${WORK}/inventory.want" "${IMPORT}/inventory.txt" >&2 || fail "the inventory is not every version in ascending semver order"
+[ "$(versions "${BASE}/npm/internal-js/@acme%2flegacy")" = "1.0.0 1.1.0 1.10.0 1.2.0 2.0.0-beta.1" ] ||
+  fail "hosted does not list the five imported @acme/legacy versions"
+[ "$(versions "${BASE}/npm/internal-js/@acme%2fother")" = "1.0.0" ] || fail "hosted does not list the imported @acme/other@1.0.0"
+tags_match
+grep -q '^latest: 1.10.0$' "${WORK}/tags.sindri" || fail "latest on Sindri is not Verdaccio's 1.10.0: the import order moved it"
+if grep -q 'sindri-import' "${WORK}/tags.sindri"; then fail "the throwaway import tag is still on Sindri"; fi
+# What is not carried over, as the page says: the deprecation.
+curl -fsS "${AUTH[@]}" "${BASE}/npm/internal-js/@acme%2flegacy" | python3 -c '
+import json, sys
+doc = json.load(sys.stdin)["versions"]["1.0.0"]
+sys.exit(1 if "deprecated" in doc else 0)' || fail "the deprecation was carried over: the page says it is not"
+curl -fsS -H "Authorization: Bearer ${VERDACCIO_TOKEN}" "${VURL}/@acme%2flegacy" | grep -q '"deprecated"' ||
+  fail "control: Verdaccio does not hold the deprecation"
+echo "  five versions imported in semver order; dist-tags equal Verdaccio's; the deprecation was not carried over"
+printf '%s\n' "${SINDRI_USER_NPMRC}" > "${npm_config_userconfig}"
+
+echo "== 5. the after: the same lockfile, Verdaccio out of the client's reach"
 # The client holds no Verdaccio credential and the lockfile says Verdaccio, so
 # what the client does with the lockfile is the whole test.
 #
@@ -281,21 +362,16 @@ MARK="$(docker logs "${VC}" 2>&1 | wc -l | tr -d ' ')"
 grep -q "GET 200 ${BASE}/npm/javascript/@acme/legacy/-/legacy-1.0.0.tgz" "${WORK}/after.log" ||
   { cat "${WORK}/after.log" >&2; fail "npm did not fetch the tarball from Sindri's javascript repository"; }
 if grep -q "${VHOST}" "${WORK}/after.log"; then fail "npm contacted Verdaccio directly after the switch"; fi
-# Verdaccio's log lags the request a little, so look for a few seconds.
-for _ in $(seq 1 25); do
-  docker logs "${VC}" 2>&1 | tail -n +"$((MARK + 1))" > "${WORK}/verdaccio-after.log"
-  grep -q "legacy-1.0.0.tgz" "${WORK}/verdaccio-after.log" && break
-  sleep 0.2
-done
-grep -q "user: sindri-proxy(.*legacy-1.0.0.tgz" "${WORK}/verdaccio-after.log" ||
-  { cat "${WORK}/verdaccio-after.log" >&2; fail "Verdaccio did not log the tarball read by the sindri-proxy account"; }
-# (Verdaccio logs each request twice, the first with the user not yet known.)
-if grep -q "user: alice(" "${WORK}/verdaccio-after.log" || grep -q "error:" "${WORK}/verdaccio-after.log"; then
-  { cat "${WORK}/verdaccio-after.log" >&2; fail "Verdaccio served a request for @acme/legacy to the client's account, or refused one"; }
+# The history is on Sindri now, so the lockfile's tarball is the imported copy and
+# Verdaccio is not asked for it. Its log lags the request a little: settle first.
+sleep 1
+docker logs "${VC}" 2>&1 | tail -n +"$((MARK + 1))" > "${WORK}/verdaccio-after.log"
+if grep -q "legacy-1.0.0.tgz\|user: alice(" "${WORK}/verdaccio-after.log" || grep -q "error:" "${WORK}/verdaccio-after.log"; then
+  { cat "${WORK}/verdaccio-after.log" >&2; fail "Verdaccio was asked for the tarball, or refused something, although it is imported"; }
 fi
-echo "  installed through Sindri; npm never named Verdaccio, which logged the read as sindri-proxy"
+echo "  installed through Sindri; npm never named Verdaccio, which was not asked for the imported tarball"
 
-echo "== 4b. the lockfile: regenerating it from the page's command"
+echo "== 5b. the lockfile: regenerating it from the page's command"
 REGEN="${WORK}/regen"
 new_client "${REGEN}" '^replace-registry-host'
 rm -f "${REGEN}/package-lock.json"
@@ -313,16 +389,7 @@ page_block install > "${WORK}/install.sh"
 (cd "${REGEN}" && bash -e "${WORK}/install.sh" >/dev/null) || fail "npm ci on the regenerated lockfile failed"
 echo "  regenerated lockfile resolves through ${BASE}/npm/javascript/ and installs without replace-registry-host"
 
-echo "== 5. import the history, then publish @acme/legacy@1.0.1 to hosted"
-# The page's import block, with the Verdaccio token line it shows.
-{ printf '%s\n' "${SINDRI_USER_NPMRC}"; page_block import-npmrc; } > "${npm_config_userconfig}"
-IMPORT="${WORK}/import"
-mkdir -p "${IMPORT}"
-page_block import > "${WORK}/import.sh"
-(cd "${IMPORT}" && bash -e "${WORK}/import.sh" >/dev/null) || fail "the page's import commands failed"
-[ "$(versions "${BASE}/npm/internal-js/@acme%2flegacy")" = "1.0.0" ] || fail "hosted does not list the imported @acme/legacy@1.0.0"
-printf '%s\n' "${SINDRI_USER_NPMRC}" > "${npm_config_userconfig}"
-
+echo "== 6. publish @acme/legacy@1.0.1 to hosted, after the import"
 PUB="${WORK}/publish"
 mkdir -p "${PUB}"
 echo '{ "name": "@acme/legacy", "version": "1.0.1", "main": "index.js", "license": "MIT" }' > "${PUB}/package.json"
@@ -330,8 +397,8 @@ echo "module.exports = 'sindri legacy 1.0.1';" > "${PUB}/index.js"
 page_block publish-npmrc > "${PUB}/.npmrc"
 page_block publish > "${WORK}/publish.sh"
 (cd "${PUB}" && bash -e "${WORK}/publish.sh" >/dev/null) || fail "the page's publish command failed"
-[ "$(versions "${BASE}/npm/javascript/@acme%2flegacy")" = "1.0.0 1.0.1" ] ||
-  fail "javascript does not list exactly @acme/legacy 1.0.0 and 1.0.1"
+[ "$(versions "${BASE}/npm/javascript/@acme%2flegacy")" = "1.0.0 1.0.1 1.1.0 1.10.0 1.2.0 2.0.0-beta.1" ] ||
+  fail "javascript does not list the imported @acme/legacy versions and 1.0.1"
 NEW="${WORK}/new"
 mkdir -p "${NEW}"
 echo '{ "name": "app2", "version": "0.0.0", "private": true, "dependencies": { "@acme/legacy": "1.0.1" } }' > "${NEW}/package.json"
@@ -357,7 +424,7 @@ echo "  replace-registry-host=always doubles the repository path in Sindri's own
 (cd "${AFTER}" && rm -rf node_modules && npm ci >/dev/null) || fail "the old lockfile no longer installs @acme/legacy@1.0.0"
 echo "  1.0.0 (imported) and 1.0.1 (new) both install through javascript"
 
-echo "== 6. a public package still installs: Verdaccio answers 404, the npm member serves it"
+echo "== 7. a public package still installs: Verdaccio answers 404, the npm member serves it"
 PUBLIC="${WORK}/public"
 mkdir -p "${PUBLIC}"
 echo '{ "name": "app3", "version": "0.0.0", "private": true, "dependencies": { "is-number": "7.0.0" } }' > "${PUBLIC}/package.json"
@@ -367,7 +434,7 @@ page_block project-npmrc > "${PUBLIC}/.npmrc"
   fail "is-number@7.0.0 did not install through javascript"
 echo "  is-number@7.0.0 installed from the npm member"
 
-echo "== 7. the name-claim rule: a hosted name is never served from the Verdaccio proxy"
+echo "== 8. the name-claim rule: a hosted name is never served from the Verdaccio proxy"
 # The control repository is a second proxy over the same Verdaccio with its own
 # cache, so it shows what Verdaccio holds now, not what verdaccio cached earlier.
 api() { curl -s -o /dev/null -w '%{http_code}' -X POST "${AUTH[@]}" -H 'Content-Type: application/json' -d "$2" "${BASE}/api/v1/repositories" | grep -qx "$1"; }
@@ -378,29 +445,52 @@ api 201 "{\"name\":\"verdaccio-fresh\",\"type\":\"proxy\",\"protocol\":\"npm\",\
 api 201 '{"name":"proxy-first","type":"virtual","protocol":"npm","members":["verdaccio","internal-js"],"read":["authenticated"]}' ||
   fail "creating proxy-first failed"
 publish_to_verdaccio legacy 1.0.2
-[ "$(versions "${BASE}/npm/verdaccio-fresh/@acme%2flegacy")" = "1.0.0 1.0.2" ] ||
-  fail "control: the proxy alone does not list Verdaccio's 1.0.0 and 1.0.2"
-[ "$(versions "${BASE}/npm/proxy-first/@acme%2flegacy")" = "1.0.0 1.0.1" ] ||
-  fail "@acme/legacy through proxy-first is not exactly the hosted 1.0.0 and 1.0.1 (Verdaccio's 1.0.2 leaked in)"
+[ "$(versions "${BASE}/npm/verdaccio-fresh/@acme%2flegacy")" = "1.0.0 1.0.2 1.1.0 1.10.0 1.2.0 2.0.0-beta.1" ] ||
+  fail "control: the proxy alone does not list Verdaccio's versions, 1.0.2 included"
+[ "$(versions "${BASE}/npm/proxy-first/@acme%2flegacy")" = "1.0.0 1.0.1 1.1.0 1.10.0 1.2.0 2.0.0-beta.1" ] ||
+  fail "@acme/legacy through proxy-first is not exactly the hosted versions (Verdaccio's 1.0.2 leaked in)"
+MARK="$(docker logs "${VC}" 2>&1 | wc -l | tr -d ' ')"
 [ "$(status "${BASE}/npm/verdaccio-fresh/@acme/legacy/-/legacy-1.0.2.tgz")" = "200" ] ||
   fail "control: the proxy alone does not serve legacy-1.0.2.tgz"
+# The proxy read the tarball with the token credential, as the sindri-proxy account.
+for _ in $(seq 1 50); do
+  docker logs "${VC}" 2>&1 | tail -n +"$((MARK + 1))" > "${WORK}/verdaccio-proxy.log"
+  grep -q "user: sindri-proxy(.*legacy-1.0.2.tgz" "${WORK}/verdaccio-proxy.log" && break
+  sleep 0.2
+done
+grep -q "user: sindri-proxy(.*legacy-1.0.2.tgz" "${WORK}/verdaccio-proxy.log" ||
+  { cat "${WORK}/verdaccio-proxy.log" >&2; fail "Verdaccio did not log the tarball read by the sindri-proxy account"; }
 code="$(status "${BASE}/npm/proxy-first/@acme/legacy/-/legacy-1.0.2.tgz")"
 [ "${code}" = "404" ] || fail "legacy-1.0.2.tgz through proxy-first answered ${code}, want 404"
-echo "  @acme/legacy: the proxy alone has 1.0.2; proxy-first and javascript list only the hosted versions"
+echo "  @acme/legacy: the proxy alone has 1.0.2; proxy-first lists only the hosted versions"
 
-# The whole scope is claimed: @acme/other was never imported.
-[ "$(status "${BASE}/npm/verdaccio-fresh/@acme%2fother")" = "200" ] ||
-  fail "control: the proxy alone does not serve @acme/other"
-code="$(status "${BASE}/npm/javascript/@acme%2fother")"
-[ "${code}" = "404" ] || fail "@acme/other through javascript answered ${code}, want 404: the scope is not claimed"
-echo "  @acme/other: 200 through the proxy alone, 404 through javascript, until it is imported"
-sed -e 's#@acme/legacy@1.0.0#@acme/other@1.0.0#' -e 's#acme-legacy-1.0.0#acme-other-1.0.0#' "${WORK}/import.sh" > "${WORK}/import-other.sh"
+# The whole scope is claimed: @acme/late was published to Verdaccio after the import.
+publish_to_verdaccio late 1.0.0
+[ "$(status "${BASE}/npm/verdaccio-fresh/@acme%2flate")" = "200" ] ||
+  fail "control: the proxy alone does not serve @acme/late"
+code="$(status "${BASE}/npm/javascript/@acme%2flate")"
+[ "${code}" = "404" ] || fail "@acme/late through javascript answered ${code}, want 404: the scope is not claimed"
+echo "  @acme/late: 200 through the proxy alone, 404 through javascript, until it is imported"
+# The page: run the inventory, import and tag copy again. Only what is new goes in.
 { printf '%s\n' "${SINDRI_USER_NPMRC}"; page_block import-npmrc; } > "${npm_config_userconfig}"
-(cd "${IMPORT}" && bash -e "${WORK}/import-other.sh" >/dev/null) || fail "importing @acme/other failed"
-[ "$(status "${BASE}/npm/javascript/@acme%2fother")" = "200" ] || fail "@acme/other is not served after the import"
-echo "  @acme/other: 200 through javascript once imported"
+run_import
+printf '%s\n' "${SINDRI_USER_NPMRC}" > "${npm_config_userconfig}"
+cat > "${WORK}/inventory.want2" <<'LIST'
+@acme/late 1.0.0
+@acme/legacy 1.0.0
+@acme/legacy 1.0.2
+@acme/legacy 1.1.0
+@acme/legacy 1.2.0
+@acme/legacy 1.10.0
+@acme/legacy 2.0.0-beta.1
+@acme/other 1.0.0
+LIST
+diff "${WORK}/inventory.want2" "${IMPORT}/inventory.txt" >&2 || fail "the second inventory is not what Verdaccio holds now"
+tags_match
+if grep -q 'sindri-import' "${WORK}/tags.sindri"; then fail "the throwaway import tag is still on Sindri after the second run"; fi
+echo "  @acme/late: 200 through javascript once imported; the second run imported only what was new"
 
-echo "== 8. a Verdaccio that advertises another public URL: the tarball host rule"
+echo "== 9. a Verdaccio that advertises another public URL: the tarball host rule"
 # Verdaccio writes its public URL into tarball links. Sindri fetches a tarball
 # only from the upstream's own host (the token goes with the request), so the
 # upstream URL must be the public one, as the page says. Anonymous access here,

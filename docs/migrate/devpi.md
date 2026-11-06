@@ -5,8 +5,8 @@
 You can move a team from devpi to Sindri without a flag day. Sindri proxies your
 devpi index, hosts new uploads itself, and serves both through one repository, so
 clients change one line and devpi can be switched off once nothing reads it. This
-page shows each step, and the script that checks it runs the commands below as
-written.
+page shows each step, and the script that checks it runs the commands below with the substitutions listed in
+[What this was checked against](#what-this-was-checked-against).
 
 The method uses three PyPI repositories, and a fourth that is optional:
 
@@ -23,8 +23,8 @@ rule, not a preference. A project name that hosted has ever held is **claimed**:
 the proxies are never asked for it. The claim is per project, by its normalized
 name (PEP 503, so `Acme_Lib` and `acme-lib` are one project), and it covers the
 whole project, not a version. The consequence is described in
-[Move the history before you upload](#6-move-the-history-before-you-upload) and
-matters for the order of the steps.
+[Move the history before you switch anything](#3-move-the-history-before-you-switch-anything)
+and decides the order of the steps: import first, then switch clients, then upload.
 
 You need a Sindri server that can reach your devpi over HTTP or HTTPS, a devpi
 server that serves PEP 691 JSON indexes, which is what Sindri asks for (check with
@@ -99,7 +99,103 @@ keep it only if you plan to drop `root/pypi` from devpi first. Replace
 If your index inherits from other devpi indexes that you own, declare one proxy
 for each, and list each in `members` after `devpi`.
 
-## 3. Switch the clients
+## 3. Move the history before you switch anything
+
+Do this before any client reads from Sindri and before the first upload to
+`internal-py`. Uploading `acme-lib` 1.5.0 to `internal-py` claims `acme-lib`. From
+then on, through `python`, the devpi versions of `acme-lib` are not in the index
+and are not served, even a version you never uploaded to Sindri. There is no merge
+of hosted and proxied files for one project. Other projects are unaffected: the
+claim is per project, by its normalized name, so an upload to `acme-lib` does not
+hide `acme-legacy`. So import every project, with every file, first. Until you
+switch the clients in step 4 they keep reading devpi, and nothing looks different
+to them while this runs.
+
+Importing is a download from devpi and an upload to Sindri, for every file. This
+script lists every project on the index and every file of each, which is every
+version in the form devpi stores it, and downloads them. It prints one line for
+each file, so its output is the inventory. It uses only the Python standard
+library. It sends the login only to devpi's own origin (scheme and host): a file
+link that names another host is fetched without it, and a redirect to another host
+drops it. The account is the one from step 1, or any that can read the index:
+
+<!-- migrate:export -->
+```python
+import base64, json, os, pathlib, urllib.parse, urllib.request
+
+base = os.environ["DEVPI_INDEX_URL"].rstrip("/")
+index = base + "/+simple/"
+login = base64.b64encode(f"{os.environ['DEVPI_USER']}:{os.environ['DEVPI_PASSWORD']}".encode()).decode()
+out = pathlib.Path("devpi-export")
+out.mkdir(exist_ok=True)
+
+def origin(url):
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme, parts.netloc
+
+class DropLoginOffOrigin(urllib.request.HTTPRedirectHandler):
+    """Drop the login from a redirect that leaves devpi's origin."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and origin(newurl) != origin(index):
+            new.remove_header("Authorization")
+        return new
+
+opener = urllib.request.build_opener(DropLoginOffOrigin)
+
+def get(url, kind="application/vnd.pypi.simple.v1+json"):
+    headers = {"Accept": kind}
+    if origin(url) == origin(index):  # a link to another host gets no login
+        headers["Authorization"] = "Basic " + login
+    return opener.open(urllib.request.Request(url, headers=headers))
+
+with get(index) as page:
+    projects = [p["name"] for p in json.load(page)["projects"]]
+for name in projects:
+    with get(index + urllib.parse.quote(name) + "/") as page:
+        detail = json.load(page)
+        base_url = page.geturl()  # relative links resolve against the page, after redirects
+    for f in detail["files"]:
+        print(name, f["filename"])
+        with get(urllib.parse.urljoin(base_url, f["url"]), "*/*") as src:
+            (out / f["filename"]).write_bytes(src.read())
+```
+<!-- /migrate:export -->
+
+<!-- migrate:export-run -->
+```bash
+DEVPI_INDEX_URL=https://devpi.example.com/acme/prod DEVPI_USER=sindri-proxy \
+  DEVPI_PASSWORD="$DEVPI_PASSWORD" python3 export-devpi.py
+```
+<!-- /migrate:export-run -->
+
+Save the script as `export-devpi.py` first. An index that inherits from others
+lists only its own projects here, so run it for each index you own, and not for
+`root/pypi`. Check the list against what you expect, then upload the files. Set
+`SINDRI_TOKEN` to a token that may write to `internal-py`; twine reads the
+password from `TWINE_PASSWORD`, which keeps it off the command line:
+
+<!-- migrate:import -->
+```bash
+TWINE_USERNAME=token TWINE_PASSWORD="$SINDRI_TOKEN" \
+  twine upload \
+  --repository-url https://sindri.example.com/pypi/internal-py/upload \
+  devpi-export/*
+```
+<!-- /migrate:import -->
+
+An imported file keeps its bytes, and so its hash, and has Sindri's upload time.
+Sindri's files are immutable. Uploading a file again with the same bytes succeeds,
+so an interrupted import can be run again; a file with the same name and different
+bytes is refused, and the upload fails for it. devpi's
+test results and documentation are not part of the index and are not moved.
+
+A project first uploaded to devpi after your export is not in `internal-py`, so
+through `python` it is still served from the `devpi` proxy. Run the script and the
+upload again before the first upload to that project: the files already
+there are uploaded again unchanged.
+
+## 4. Switch the clients
 
 A client needs the index address and a token. `pip.conf` holds the address, and
 holds no secret:
@@ -161,7 +257,7 @@ a client reading devpi directly, or worse, beside Sindri:
   devpi until the server goes, but their `devpi upload` should become `twine
   upload` (step 7).
 
-## 4. Do not keep `--extra-index-url`
+## 5. Do not keep `--extra-index-url`
 
 The old habit with devpi is a second index on the command line:
 
@@ -189,7 +285,7 @@ With the example above, a version of `acme-lib` that exists only on devpi is
 installed, and a hosted version that is lower is ignored. Through `python`, the
 hosted version is what you get. The gate shows both.
 
-## 5. Check the clients without devpi
+## 6. Check the clients without devpi
 
 A client that holds no devpi credential cannot go around Sindri. Install a project
 the old index holds:
@@ -201,78 +297,9 @@ pip install --no-cache-dir acme-legacy==1.0.0
 <!-- /migrate:install -->
 
 With the page's `pip.conf`, `~/.netrc`, and no devpi address anywhere, the file
-comes from Sindri's `python` repository, which fetched it from devpi as
-`sindri-proxy`. The same filename has the same SHA-256 on both sides.
-
-## 6. Move the history before you upload
-
-Uploading `acme-lib` 1.5.0 to `internal-py` claims `acme-lib`. From then on,
-through `python`, the devpi versions of `acme-lib` are not in the index and are not
-served, even a version you never uploaded to Sindri. There is no merge of hosted
-and proxied files for one project. Other projects are unaffected: the claim is per
-project, so an upload to `acme-lib` does not hide `acme-legacy`. So import what you
-keep, for every project, before the first upload to it, or at least before clients
-upgrade.
-
-Importing is a download from devpi and an upload to Sindri, for every file. This
-script lists every project on the index and every file of each, which is every
-version in the form devpi stores it, and downloads them. It prints one line for
-each file, so its output is the inventory. It uses only the Python standard
-library. The account is the one from step 1, or any that can read the index:
-
-<!-- migrate:export -->
-```python
-import base64, json, os, pathlib, urllib.parse, urllib.request
-
-index = os.environ["DEVPI_INDEX_URL"].rstrip("/") + "/+simple/"
-login = base64.b64encode(f"{os.environ['DEVPI_USER']}:{os.environ['DEVPI_PASSWORD']}".encode()).decode()
-out = pathlib.Path("devpi-export")
-out.mkdir(exist_ok=True)
-
-def get(url, kind="application/vnd.pypi.simple.v1+json"):
-    request = urllib.request.Request(url, headers={"Authorization": "Basic " + login, "Accept": kind})
-    return urllib.request.urlopen(request)
-
-with get(index) as page:
-    projects = [p["name"] for p in json.load(page)["projects"]]
-for name in projects:
-    with get(index + urllib.parse.quote(name) + "/") as page:
-        detail = json.load(page)
-        base = page.geturl()  # relative links resolve against the page, after redirects
-    for f in detail["files"]:
-        print(name, f["filename"])
-        with get(urllib.parse.urljoin(base, f["url"]), "*/*") as src:
-            (out / f["filename"]).write_bytes(src.read())
-```
-<!-- /migrate:export -->
-
-<!-- migrate:export-run -->
-```bash
-DEVPI_INDEX_URL=https://devpi.example.com/acme/prod DEVPI_USER=sindri-proxy \
-  DEVPI_PASSWORD="$DEVPI_PASSWORD" python3 export-devpi.py
-```
-<!-- /migrate:export-run -->
-
-Save the script as `export-devpi.py` first. An index that inherits from others
-lists only its own projects here, so run it for each index you own, and not for
-`root/pypi`. Check the list against what you expect, then upload the files. Set
-`SINDRI_TOKEN` to a token that may write to `internal-py`; twine reads the
-password from `TWINE_PASSWORD`, which keeps it off the command line:
-
-<!-- migrate:import -->
-```bash
-TWINE_USERNAME=token TWINE_PASSWORD="$SINDRI_TOKEN" \
-  twine upload \
-  --repository-url https://sindri.example.com/pypi/internal-py/upload \
-  devpi-export/*
-```
-<!-- /migrate:import -->
-
-An imported file keeps its bytes, and so its hash, and has Sindri's upload time.
-Sindri's files are immutable. Uploading a file again with the same bytes succeeds,
-so an interrupted import can be run again; a file with the same name and different
-bytes is refused, and the upload fails for it. devpi's
-test results and documentation are not part of the index and are not moved.
+comes from Sindri's `python` repository, from the copy you imported in step 3. The
+same filename has the same SHA-256 on both sides. A project that only devpi holds
+is served by the proxy, which reads it from devpi as `sindri-proxy`.
 
 ## 7. Upload new releases to Sindri
 
@@ -347,3 +374,14 @@ from. The keyring is a plain file backend (`keyrings.alt`), which tests the
 
 Not checked here: a devpi that serves HTTPS with a private certificate authority,
 devpi's replica mode, and indexes that inherit from other devpi indexes.
+
+The check runs the page's configuration, client files, and commands out of the
+page itself, with these substitutions: the example hosts `devpi.example.com` and
+`sindri.example.com` become the hosts the check runs on, the netrc's
+`YOUR_SINDRI_TOKEN` becomes a token, `machine` names the container's address for
+the host, the check adds one `trusted-host` line to `pip.conf` because its Sindri
+speaks plain HTTP, and in the publish block `dist/*` names the directory the check
+built into, with `python -m build` run by the check's own pinned build step. The
+export script is also run against two small local listeners, one that serves a
+devpi-style index whose file links point to a second host and redirect to it, to
+see that the login never reaches that host.

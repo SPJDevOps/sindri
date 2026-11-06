@@ -6,7 +6,8 @@ You can move a team from Verdaccio to Sindri without a flag day. Sindri proxies
 your Verdaccio, hosts new publishes itself, and serves both through one
 repository, so clients change one line and Verdaccio can be switched off once
 nothing reads it. This page shows each step, and the script that checks it runs
-the commands below as written.
+the commands below with the substitutions listed in
+[What this was checked against](#what-this-was-checked-against).
 
 The method uses three npm repositories:
 
@@ -22,7 +23,7 @@ proxy is never asked for it, so a package published to `internal-js` can never
 be replaced by one of the same name from Verdaccio or from npmjs. For npm the
 claim covers the whole scope, so one published `@acme/*` package claims every
 `@acme/*` name. That has a consequence for the order of the steps below, which
-[Move the history before you publish](#5-move-the-history-before-you-publish)
+[Move the history before you switch anything](#3-move-the-history-before-you-switch-anything)
 explains. See [ADR 24](../adr/0024-npm-packument-and-dist-tags.md).
 
 You need a Sindri server with an npm repository's `publicUrl` set (see
@@ -95,9 +96,172 @@ Sindri reaches it at has its packuments served but every tarball refused with a
 502, and the log says `tarball URL is on another host`. Point `upstream.url` at
 the public one.
 
-## 3. Switch the clients
+## 3. Move the history before you switch anything
 
-A client needs the registry, and a token for it. Put the registry in the
+Do this before any client reads from Sindri and before the first publish to
+`internal-js`. Publishing `@acme/legacy` to `internal-js` claims the whole `@acme`
+scope. From then on, through `javascript`, a Verdaccio-only version of
+`@acme/legacy`, and every other `@acme/*` package that is not yet in `internal-js`,
+is not found. The import below is itself a series of publishes, so the scope is
+claimed from the first one, and a client that read `javascript` meanwhile would
+find unimported packages missing. Until you switch the clients in step 4 they keep
+reading Verdaccio, and nothing looks different to them while this runs.
+
+Importing is a pack from Verdaccio and a publish to Sindri, once per version, for
+every package of the scope. The client needs the Verdaccio token for this step
+only:
+
+<!-- migrate:import-npmrc -->
+```ini
+//verdaccio.example.com/:_authToken=${VERDACCIO_TOKEN}
+```
+<!-- /migrate:import-npmrc -->
+
+First list what there is. This script asks Verdaccio's search for every package of
+the scope, then for each one's document, and prints one `name version`
+line per version, oldest first by semantic-version order, so `1.10.0` follows
+`1.2.0`. It uses only Node's own `fetch`. Save it as `inventory.mjs`:
+
+<!-- migrate:inventory -->
+```javascript
+const url = process.env.VERDACCIO_URL.replace(/\/$/, "");
+const scope = process.env.SCOPE;
+const headers = { Authorization: `Bearer ${process.env.VERDACCIO_TOKEN}` };
+
+async function get(path) {
+  const res = await fetch(url + path, { headers });
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  return res.json();
+}
+
+const split = (v) => {
+  const [core, ...pre] = v.split("+")[0].split("-");
+  return [core.split(".").map(Number), pre.join("-")];
+};
+const numeric = (id) => /^\d+$/.test(id);
+function comparePre(a, b) {
+  if (a === b) return 0;
+  if (a === "") return 1;
+  if (b === "") return -1;
+  const x = a.split("."), y = b.split(".");
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    if (x[i] === y[i]) continue;
+    if (numeric(x[i]) && numeric(y[i])) return x[i] - y[i];
+    if (numeric(x[i]) !== numeric(y[i])) return numeric(x[i]) ? -1 : 1;
+    return x[i] < y[i] ? -1 : 1;
+  }
+  return x.length - y.length;
+}
+function compare(a, b) {
+  const [ca, pa] = split(a), [cb, pb] = split(b);
+  for (let i = 0; i < 3; i++) if (ca[i] !== cb[i]) return ca[i] - cb[i];
+  return comparePre(pa, pb);
+}
+
+const found = new Set();
+for (let from = 0; ; from += 250) {
+  const page = await get(`/-/v1/search?text=${encodeURIComponent(scope)}&size=250&from=${from}`);
+  const before = found.size;
+  for (const hit of page.objects) found.add(hit.package.name);
+  if (page.objects.length < 250 || found.size === before) break;
+}
+const names = [...found].filter((n) => n.startsWith(scope + "/")).sort();
+for (const name of names) {
+  const doc = await get("/" + name.replace("/", "%2f"));
+  if (process.argv[2] === "tags") {
+    for (const [tag, version] of Object.entries(doc["dist-tags"])) console.log(name, tag, version);
+  } else {
+    for (const version of Object.keys(doc.versions).sort(compare)) console.log(name, version);
+  }
+}
+```
+<!-- /migrate:inventory -->
+
+Run it once for each scope you own, and read the list before going on:
+
+<!-- migrate:inventory-run -->
+```bash
+VERDACCIO_URL=https://verdaccio.example.com SCOPE=@acme node inventory.mjs > inventory.txt
+VERDACCIO_URL=https://verdaccio.example.com SCOPE=@acme node inventory.mjs tags > tags.txt
+```
+<!-- /migrate:inventory-run -->
+
+`inventory.txt` holds the versions and `tags.txt` holds Verdaccio's `dist-tags`, one
+`name tag version` line each. The account that made the token must be able to read
+every package in them; a package it cannot read is not in the list.
+
+The import goes through the list in order. A version already on Sindri is skipped,
+so an interrupted import can be run again. Every version is published under a
+throwaway tag, `sindri-import`, because `npm publish` otherwise moves `latest` to
+whatever was published last, and the history goes in oldest first. When a package
+has all its versions in, its real tags are copied from `tags.txt` and the throwaway
+is removed. If `sindri-import` is already one of your tags, pick another name in
+both places:
+
+<!-- migrate:import -->
+```bash
+while read -r name version; do
+  if [ -n "$(npm view "${name}@${version}" version --registry https://sindri.example.com/npm/internal-js/ </dev/null 2>/dev/null)" ]; then
+    continue
+  fi
+  tarball="$(npm pack "${name}@${version}" --silent --registry https://verdaccio.example.com/ </dev/null)"
+  npm publish "./${tarball}" --access public --tag sindri-import \
+    --registry https://sindri.example.com/npm/internal-js/ </dev/null
+done < inventory.txt
+```
+<!-- /migrate:import -->
+
+<!-- migrate:import-tags -->
+```bash
+for name in $(cut -d' ' -f1 inventory.txt | sort -u); do
+  npm dist-tag ls "${name}" --registry https://sindri.example.com/npm/internal-js/ </dev/null 2>/dev/null |
+    grep -q '^sindri-import:' || continue
+  awk -v n="${name}" '$1 == n { print $2, $3 }' tags.txt | while read -r tag version; do
+    npm dist-tag add "${name}@${version}" "${tag}" --registry https://sindri.example.com/npm/internal-js/ </dev/null
+  done
+  npm dist-tag rm "${name}" sindri-import --registry https://sindri.example.com/npm/internal-js/ </dev/null
+done
+```
+<!-- /migrate:import-tags -->
+
+Only a package that still has `sindri-import` is touched, so running this again
+does not move a tag you have since set by publishing. Check that the tags match
+what Verdaccio had; this prints each package and its tags:
+
+<!-- migrate:verify-tags -->
+```bash
+for name in $(cut -d' ' -f1 inventory.txt | sort -u); do
+  echo "${name}"
+  npm dist-tag ls "${name}" --registry https://sindri.example.com/npm/internal-js/ </dev/null
+done
+```
+<!-- /migrate:verify-tags -->
+
+Remove the Verdaccio line from `~/.npmrc` afterwards.
+
+A package first published to Verdaccio after your inventory is not in
+`internal-js`. Through `javascript` it is not found, because the scope is
+claimed. Run the inventory, the import, and the tag copy again before you switch the
+clients: the second run imports only what is new.
+
+What the import does not carry over:
+
+- **Publish times.** An imported version has Sindri's publish time, the moment
+  you imported it, not Verdaccio's. That matters to a client with a minimum
+  release age, such as yarn 4's `npmMinimalAgeGate`: an imported version counts as
+  new until the age has passed.
+- **Deprecations.** `npm deprecate` marks live in the document, not in the
+  tarball, so a deprecated version arrives not deprecated. Apply them again with
+  `npm deprecate "<name>@<version>" "<message>" --registry
+  https://sindri.example.com/npm/internal-js/`.
+- **Anything that is not in the tarball or a dist-tag:** Verdaccio's access
+  rules, its list of owners, and the account that published each version.
+  Sindri's own repositories and tokens decide who may read and publish.
+
+## 4. Switch the clients
+
+The history is in Sindri, so clients can change. A client needs the registry, and
+a token for it. Put the registry in the
 project's `.npmrc`:
 
 <!-- migrate:project-npmrc -->
@@ -123,13 +287,13 @@ Scopes need nothing more. A scope is the first part of the name, and the
 virtual repository resolves `@acme/legacy` as it resolves `left-pad`. A
 `@acme:registry=` line that points a scope at Verdaccio must be removed, or that
 scope bypasses Sindri. The Verdaccio token line goes too, once you have done
-step 5: a client that has no Verdaccio credential cannot go around Sindri to
-reach it.
+the import in step 3: a client that has no Verdaccio credential cannot go around
+Sindri to reach it.
 
 The second line of the project file is the lockfile setting. The next section
 explains it.
 
-## 4. Lockfiles keep the old host
+## 5. Lockfiles keep the old host
 
 `package-lock.json` records the URL each tarball was fetched from, in
 `resolved`. For the public registry npm rewrites that URL to whatever
@@ -172,34 +336,6 @@ repositories live under `/npm/<name>/`, npm doubles that path
 (`/npm/javascript/npm/javascript/...`) and the install fails with a 404 for
 any version npm resolves fresh, such as one you publish after the switch.
 
-## 5. Move the history before you publish
-
-Publishing `@acme/legacy` to `internal-js` claims the whole `@acme` scope. From
-then on, through `javascript`, a Verdaccio-only version of `@acme/legacy`, and
-every other `@acme/*` package that is not yet in `internal-js`, is not found. So
-import what you keep, for every package of a scope, before the first publish
-to it, or at least before clients upgrade.
-
-Importing is a pack from Verdaccio and a publish to Sindri, once per version.
-The client needs the Verdaccio token for this step only:
-
-<!-- migrate:import-npmrc -->
-```ini
-//verdaccio.example.com/:_authToken=${VERDACCIO_TOKEN}
-```
-<!-- /migrate:import-npmrc -->
-
-<!-- migrate:import -->
-```bash
-npm pack @acme/legacy@1.0.0 --registry https://verdaccio.example.com/
-npm publish ./acme-legacy-1.0.0.tgz --access public --registry https://sindri.example.com/npm/internal-js/
-```
-<!-- /migrate:import -->
-
-Remove the Verdaccio line from `~/.npmrc` afterwards. Each imported version has
-Sindri's publish time, which matters to a client with a minimum release age,
-such as yarn 4's `npmMinimalAgeGate`.
-
 ## 6. Publish new versions to Sindri
 
 Publishing goes to the hosted repository, not the virtual one. Point the
@@ -224,8 +360,8 @@ history, because both are in `internal-js`.
 
 When nothing reads Verdaccio but Sindri, stop publishing to it, remove
 `verdaccio` from the `javascript` members, and then stop Verdaccio. Do not
-remove the proxy before the history is imported: the proxy is what keeps those
-versions installable. Once it is gone, regenerate any lockfile that still names
+remove the proxy before the history is imported (step 3): until a package is
+imported, the proxy is what keeps its versions installable. Once it is gone, regenerate any lockfile that still names
 Verdaccio, and drop `replace-registry-host`.
 
 ## What this was checked against
@@ -246,3 +382,18 @@ cannot read Verdaccio's private package.
 Not checked here: a Verdaccio that stores tarballs in S3 and redirects to them,
 GitHub Packages, and pnpm and yarn against this layout. A redirect that leaves
 the upstream's origin loses the token by design.
+
+The check runs the page's configuration, client files, and commands out of the
+page itself, with these substitutions: the example hosts `verdaccio.example.com`
+and `sindri.example.com` become the hosts the check runs on, and
+`replace-registry-host` names Verdaccio's host without a port. Two commands are
+changed. The lockfile command's `rm package-lock.json` becomes `rm -f`, because
+that copy of the project has no lockfile left to remove. The check's own
+publishes to Verdaccio and its comparisons of tags are its own commands, and not
+the page's.
+
+The history import runs with two or more versions published out of order, a
+version that sorts differently as text and as a number (`1.10.0` against
+`1.2.0`), and a prerelease. After the import, the check compares every package's
+dist-tags on Sindri with Verdaccio's, and asserts that `sindri-import` is gone and
+that a deprecation was not carried over.

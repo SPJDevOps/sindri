@@ -11,9 +11,13 @@
 # The commands and configuration are read out of the page, between its
 # <!-- migrate:NAME --> markers, not copied into this script, so the page cannot
 # drift from what passed. The only edits made to them are replacing the page's
-# example hosts (devpi.example.com, sindri.example.com) with the real ones and
-# the netrc's token placeholder with the token; the gate adds one line, a
-# trusted-host for pip, because the gate's Sindri speaks plain HTTP.
+# example hosts (devpi.example.com, sindri.example.com) with the real ones, the
+# netrc's token placeholder with the token, the netrc's machine with the
+# container's name for the host, and the publish block's dist/* with the
+# directory the gate built into (its `python -m build` line is the gate's own
+# pinned build step); the gate adds one line, a trusted-host for pip, because
+# the gate's Sindri speaks plain HTTP. The order follows the page: the history
+# is imported before any client is switched or anything is uploaded to hosted.
 #
 # What this isolates, and what it does not. devpi, nginx and the clients run in
 # containers on a private Docker network; pip and twine run in a container with
@@ -258,8 +262,8 @@ publish_to_devpi() {
     fail "uploading $1 $2 to devpi failed"
 }
 publish_to_devpi acme-legacy 1.0.0
-publish_to_devpi acme-lib 2.0.0
-echo "  acme/prod holds acme-legacy 1.0.0 and acme-lib 2.0.0"
+publish_to_devpi acme-tools 1.0.0
+echo "  acme/prod holds acme-legacy 1.0.0 and acme-tools 1.0.0"
 
 echo "== 3. the page's devpi-user command makes sindri-proxy"
 page_block devpi-user > "${WORK}/devpi-user.sh"
@@ -304,7 +308,106 @@ files() {
     python3 -c 'import json,sys; print(" ".join(sorted(f["filename"] for f in json.load(sys.stdin)["files"])))'
 }
 
-echo "== 6. the client configuration, from the page"
+echo "== 6. import the history, from the page, before any client is switched"
+# import_history WANT: run the page's export, check its inventory against the
+# file WANT, then run the page's upload twice (it must be safe to repeat).
+import_history() {
+  cl rm -rf /w/import
+  cl mkdir -p /w/import
+  page_block export > "${WORK}/w/import/export-devpi.py"
+  page_block export-run > "${WORK}/w/import/export.sh"
+  page_block import > "${WORK}/w/import/import.sh"
+  EXTRA=(-e DEVPI_PASSWORD="${DEVPI_PASSWORD}")
+  WD=/w/import cl bash -e export.sh > "${WORK}/inventory.txt" || fail "the page's export script failed"
+  sort "${WORK}/inventory.txt" > "${WORK}/inventory.sorted"
+  diff "$1" "${WORK}/inventory.sorted" >&2 || fail "the export did not list exactly what devpi holds"
+  EXTRA=(-e SINDRI_TOKEN="${SINDRI_TOKEN}")
+  WD=/w/import cl bash -e import.sh >"${WORK}/import.log" 2>&1 || { tail -15 "${WORK}/import.log" >&2; fail "the page's import upload failed"; }
+  # Running it again must not fail: the same bytes upload again.
+  WD=/w/import cl bash -e import.sh >/dev/null 2>&1 || fail "the page's import upload is not safe to repeat"
+  EXTRA=()
+}
+cat > "${WORK}/inventory.first" <<'LIST'
+acme-legacy acme_legacy-1.0.0-py3-none-any.whl
+acme-legacy acme_legacy-1.0.0.tar.gz
+acme-tools acme_tools-1.0.0-py3-none-any.whl
+acme-tools acme_tools-1.0.0.tar.gz
+LIST
+import_history "${WORK}/inventory.first"
+[ "$(files python acme-legacy)" = "acme_legacy-1.0.0-py3-none-any.whl acme_legacy-1.0.0.tar.gz" ] || fail "after the import python does not list acme-legacy 1.0.0"
+[ "$(files python acme-tools)" = "acme_tools-1.0.0-py3-none-any.whl acme_tools-1.0.0.tar.gz" ] || fail "after the import python does not list acme-tools 1.0.0"
+# The imported file is devpi's bytes.
+IMPORTED="$(curl -fsS "${AUTH[@]}" "${BASE}/pypi/internal-py/packages/acme-legacy/acme_legacy-1.0.0-py3-none-any.whl" | shasum -a 256 | awk '{print $1}')"
+[ "${IMPORTED}" = "${BEFORE_SHA}" ] || fail "the imported acme_legacy-1.0.0 is not devpi's file"
+echo "  the inventory matched devpi, the import is repeatable, and the files are devpi's bytes"
+
+echo "== 6b. the export sends its login only to devpi's own origin"
+# devpi cannot be made to name another host, so a stub does: two listeners in the
+# client container, one standing in for devpi whose index links to a file on the
+# other, redirects to it, and serves a third file itself. Each records whether the
+# request carried Authorization.
+cat > "${WORK}/w/stub.py" <<'PY'
+import http.server, json, threading
+
+LOG = "/w/stub.log"
+A, B = 18081, 18082
+
+def make(who):
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            with open(LOG, "a") as f:
+                f.write(f"{who} {self.path} auth={'yes' if self.headers.get('Authorization') else 'no'}\n")
+            if self.path == "/acme/prod/+simple/":
+                body = json.dumps({"projects": [{"name": "stubproj"}]}).encode()
+            elif self.path == "/acme/prod/+simple/stubproj/":
+                body = json.dumps({"files": [
+                    {"filename": "same-1.tar.gz", "url": "/same.tgz"},
+                    {"filename": "off-1.tar.gz", "url": f"http://127.0.0.1:{B}/off.tgz"},
+                    {"filename": "redir-1.tar.gz", "url": "/redir"},
+                ]}).encode()
+            elif self.path == "/redir":
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{B}/redirected.tgz")
+                self.end_headers()
+                return
+            else:
+                body = b"x"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    return H
+
+servers = [http.server.ThreadingHTTPServer(("127.0.0.1", port), make(who)) for who, port in (("A", A), ("B", B))]
+open("/w/stub.ready", "w").close()
+threads = [threading.Thread(target=s.serve_forever) for s in servers]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+PY
+cl rm -rf /w/stub.log /w/stub.ready /w/stubout
+cl mkdir -p /w/stubout
+# timeout ends the listeners if the gate stops early; the container goes anyway.
+docker exec -d "${CC}" timeout 120 python /w/stub.py
+for _ in $(seq 1 50); do cl test -f /w/stub.ready && break; sleep 0.2; done
+cl test -f /w/stub.ready || fail "the stub listeners did not start"
+cp "${WORK}/w/import/export-devpi.py" "${WORK}/w/stubout/export-devpi.py"
+EXTRA=(-e DEVPI_INDEX_URL=http://127.0.0.1:18081/acme/prod -e DEVPI_USER=stub -e DEVPI_PASSWORD=stub-password)
+WD=/w/stubout cl python export-devpi.py >/dev/null || fail "the export script failed against the stub"
+EXTRA=()
+cl cat /w/stub.log > "${WORK}/stub.log"
+grep -q '^A /acme/prod/+simple/ auth=yes$' "${WORK}/stub.log" || fail "the export did not send its login to the index origin"
+grep -q '^A /same.tgz auth=yes$' "${WORK}/stub.log" || fail "the export did not send its login to a file on the index origin"
+grep -q '^B /off.tgz auth=no$' "${WORK}/stub.log" || { cat "${WORK}/stub.log" >&2; fail "the export sent its login to a file link on another origin"; }
+grep -q '^B /redirected.tgz auth=no$' "${WORK}/stub.log" || { cat "${WORK}/stub.log" >&2; fail "the export kept its login across a redirect to another origin"; }
+if grep '^B ' "${WORK}/stub.log" | grep -q 'auth=yes'; then fail "another origin received the login"; fi
+echo "  the login went to the index origin only; an off-origin link and a redirect carried none"
+
+echo "== 7. the client configuration, from the page"
 # A pip configuration per variant, each the page's block. The gate adds
 # trusted-host, because this Sindri speaks plain HTTP to a non-loopback name.
 mkdir -p "${WORK}/w/home/.config"
@@ -318,7 +421,7 @@ if grep -q "${DEVPI_LOCAL#http://}\|${DEVPI_FROM_CLIENT#http://}" "${WORK}/w/pip
 fi
 pip_sindri() { local EXTRA=(-e PIP_CONFIG_FILE=/w/pip.conf); cl pip "$@"; }
 
-echo "== 7. the after: the same project, with no devpi credential on the client"
+echo "== 8. the after: the same project, with no devpi credential on the client"
 # Settle the log before marking where this run's lines start.
 dlog() { docker logs "${NC}" 2>&1; }
 MARK="$(dlog | wc -l | tr -d ' ')"
@@ -342,27 +445,43 @@ cl bash -e /w/install.sh >/dev/null 2>&1 || fail "the page's install command fai
 [ "$(cl /w/venv-after/bin/python -c 'import acme_legacy; print(acme_legacy.MARK)')" = "acme-legacy 1.0.0" ] ||
   fail "the installed acme-legacy is not 1.0.0"
 EXTRA=()
+# The page's check reads the imported copy, so devpi is not asked for it at all.
+# nginx's log lags the request a little, so settle it first.
+sleep 1
+dlog | tail -n +"$((MARK + 1))" > "${WORK}/nginx-after.log"
+if grep -q 'acme_legacy' "${WORK}/nginx-after.log"; then
+  cat "${WORK}/nginx-after.log" >&2
+  fail "devpi was asked for acme-legacy although it is imported and claimed"
+fi
+echo "  same SHA-256 through Sindri; pip named only Sindri; devpi was not asked"
+
+echo "== 8b. a project only devpi holds is served by the proxy, as sindri-proxy"
+# Uploaded to devpi after the export, so it is not in internal-py.
+publish_to_devpi acme-lib 2.0.0
+MARK="$(dlog | wc -l | tr -d ' ')"
+cl rm -rf /w/late
+pip_sindri download --no-cache-dir --no-deps -d /w/late acme-lib==2.0.0 >/dev/null 2>&1 || fail "acme-lib 2.0.0, only on devpi, did not install through python"
 # nginx's log shows who read the file from devpi. It lags the request a little.
 # This greps the log_format defined above, which the gate owns: "who METHOD uri status".
 for _ in $(seq 1 50); do
-  dlog | tail -n +"$((MARK + 1))" > "${WORK}/nginx-after.log"
-  grep -q "sindri-proxy GET .*acme_legacy-1.0.0-py3-none-any.whl 200" "${WORK}/nginx-after.log" && break
+  dlog | tail -n +"$((MARK + 1))" > "${WORK}/nginx-late.log"
+  grep -q "sindri-proxy GET .*acme_lib-2.0.0-py3-none-any.whl 200" "${WORK}/nginx-late.log" && break
   sleep 0.2
 done
-grep -q "sindri-proxy GET .*acme_legacy-1.0.0-py3-none-any.whl 200" "${WORK}/nginx-after.log" ||
-  { cat "${WORK}/nginx-after.log" >&2; fail "devpi did not log the file read by the sindri-proxy account"; }
-if grep -E '^(acme|other|anonymous|root) ' "${WORK}/nginx-after.log" | grep -v '/+authcheck' | grep -q .; then
-  grep -E '^(acme|other|anonymous|root) ' "${WORK}/nginx-after.log" >&2
+grep -q "sindri-proxy GET .*acme_lib-2.0.0-py3-none-any.whl 200" "${WORK}/nginx-late.log" ||
+  { cat "${WORK}/nginx-late.log" >&2; fail "devpi did not log the file read by the sindri-proxy account"; }
+if grep -E '^(acme|other|anonymous|root) ' "${WORK}/nginx-late.log" | grep -v '/+authcheck' | grep -q .; then
+  grep -E '^(acme|other|anonymous|root) ' "${WORK}/nginx-late.log" >&2
   fail "devpi saw a request that did not come from Sindri's account"
 fi
-echo "  same SHA-256 through Sindri; pip named only Sindri; devpi logged the read as sindri-proxy"
+echo "  acme-lib 2.0.0 came through the proxy and devpi logged the read as sindri-proxy"
 
-echo "== 8. a public project still installs: devpi answers 404, the pypi member serves it"
+echo "== 9. a public project still installs: devpi answers 404, the pypi member serves it"
 cl rm -rf /w/public
 pip_sindri download --no-cache-dir --no-deps -d /w/public six==1.16.0 >/dev/null 2>&1 || fail "six==1.16.0 did not come through the pypi member"
 echo "  six 1.16.0 downloaded through python"
 
-echo "== 9. keyring: the page's pip.conf with keyring-provider = subprocess"
+echo "== 10. keyring: the page's pip.conf with keyring-provider = subprocess"
 page_block keyring-pip > "${WORK}/w/keyring-pip.sh"
 printf "%s\n" "${SINDRI_TOKEN}" | STDIN=1 cl bash -e /w/keyring-pip.sh >/dev/null 2>&1 || fail "the page's keyring set command failed"
 cl rm -rf /w/after-keyring
@@ -380,7 +499,7 @@ EXTRA=()
 cl mv /w/home/.netrc.off /w/home/.netrc
 echo "  pip authenticated from the keyring, and failed without it"
 
-echo "== 10. upload to hosted from the page: .pypirc, keyring, twine"
+echo "== 11. upload to hosted from the page: .pypirc, keyring, twine"
 page_block pypirc > "${WORK}/w/home/.pypirc"
 page_block keyring-twine > "${WORK}/w/keyring-twine.sh"
 printf "%s\n" "${SINDRI_TOKEN}" | STDIN=1 cl bash -e /w/keyring-twine.sh >/dev/null 2>&1 || fail "the page's keyring set command for twine failed"
@@ -392,13 +511,13 @@ publish_hosted() {
   grep -q 'twine upload --repository sindri' "${WORK}/w/publish.sh" || fail "the page's publish block has no twine upload line"
   cl bash -e /w/publish.sh >/dev/null 2>&1 || fail "the page's twine upload of $1 $2 failed"
 }
-# This is the order the page warns against, on purpose: acme-lib 1.5.0 is
-# uploaded to hosted before devpi's acme-lib 2.0.0 is imported.
+# This is the order the page warns against for a project it has not imported:
+# acme-lib 1.5.0 is uploaded to hosted before devpi's acme-lib 2.0.0 is imported.
 publish_hosted acme-lib 1.5.0
 [ "$(files internal-py acme-lib)" = "acme_lib-1.5.0-py3-none-any.whl acme_lib-1.5.0.tar.gz" ] || fail "hosted does not list acme-lib 1.5.0"
 echo "  acme-lib 1.5.0 uploaded to internal-py"
 
-echo "== 11. the name claim: one upload hides devpi's acme-lib from python"
+echo "== 12. the name claim: one upload hides devpi's acme-lib from python"
 # `devpi` is the control: a proxy alone has what devpi holds now.
 [ "$(files devpi acme-lib)" = "acme_lib-2.0.0-py3-none-any.whl acme_lib-2.0.0.tar.gz" ] || fail "control: the proxy alone does not list devpi's acme-lib 2.0.0"
 [ "$(files python acme-lib)" = "acme_lib-1.5.0-py3-none-any.whl acme_lib-1.5.0.tar.gz" ] ||
@@ -415,7 +534,7 @@ cl /w/venv-claim/bin/pip install --no-cache-dir acme-lib >/dev/null 2>&1 || fail
   fail "pip through python did not install the hosted acme-lib 1.5.0"
 echo "  acme-lib: python lists and installs only the hosted 1.5.0; the proxy alone has 2.0.0; acme-legacy is unaffected"
 
-echo "== 12. --extra-index-url: the page's pitfall installs the version from the other index"
+echo "== 13. --extra-index-url: the page's pitfall installs the version from the other index"
 page_block extra-index > "${WORK}/w/extra-index.sh"
 cl python -m venv /w/venv-extra
 # The page's command, run in a clean environment whose pip finds the netrc.
@@ -428,36 +547,18 @@ cl bash -e /w/extra-index.sh >/dev/null 2>&1 || fail "the page's --extra-index-u
 EXTRA=()
 echo "  --extra-index-url installed acme-lib 2.0.0 although hosted holds 1.5.0; python installed 1.5.0"
 
-echo "== 13. import the history, from the page"
-cl rm -rf /w/import
-cl mkdir -p /w/import
-page_block export > "${WORK}/w/import/export-devpi.py"
-page_block export-run > "${WORK}/w/import/export.sh"
-page_block import > "${WORK}/w/import/import.sh"
-EXTRA=(-e DEVPI_PASSWORD="${DEVPI_PASSWORD}")
-WD=/w/import cl bash -e export.sh > "${WORK}/inventory.txt" || fail "the page's export script failed"
-sort "${WORK}/inventory.txt" > "${WORK}/inventory.sorted"
-cat > "${WORK}/inventory.want" <<'LIST'
+echo "== 14. import the late project, then upload a new release"
+cat > "${WORK}/inventory.second" <<'LIST'
 acme-legacy acme_legacy-1.0.0-py3-none-any.whl
 acme-legacy acme_legacy-1.0.0.tar.gz
 acme-lib acme_lib-2.0.0-py3-none-any.whl
 acme-lib acme_lib-2.0.0.tar.gz
+acme-tools acme_tools-1.0.0-py3-none-any.whl
+acme-tools acme_tools-1.0.0.tar.gz
 LIST
-diff "${WORK}/inventory.want" "${WORK}/inventory.sorted" >&2 || fail "the export did not list exactly what devpi holds"
-EXTRA=(-e SINDRI_TOKEN="${SINDRI_TOKEN}")
-WD=/w/import cl bash -e import.sh >"${WORK}/import.log" 2>&1 || { tail -15 "${WORK}/import.log" >&2; fail "the page's import upload failed"; }
-EXTRA=(-e SINDRI_TOKEN="${SINDRI_TOKEN}")
-# Running it again must not fail: --skip-existing, as the page says.
-WD=/w/import cl bash -e import.sh >/dev/null 2>&1 || fail "the page's import upload is not safe to repeat"
-EXTRA=()
+import_history "${WORK}/inventory.second"
 want="acme_lib-1.5.0-py3-none-any.whl acme_lib-1.5.0.tar.gz acme_lib-2.0.0-py3-none-any.whl acme_lib-2.0.0.tar.gz"
-[ "$(files python acme-lib)" = "${want}" ] || fail "after the import python does not list acme-lib 1.5.0 and 2.0.0"
-# The imported file is devpi's bytes.
-IMPORTED="$(curl -fsS "${AUTH[@]}" "${BASE}/pypi/internal-py/packages/acme-legacy/acme_legacy-1.0.0-py3-none-any.whl" | shasum -a 256 | awk '{print $1}')"
-[ "${IMPORTED}" = "${BEFORE_SHA}" ] || fail "the imported acme_legacy-1.0.0 is not devpi's file"
-echo "  the inventory matched devpi, the import is repeatable, and acme-lib 2.0.0 is back beside 1.5.0"
-
-echo "== 14. upload a new release after the import"
+[ "$(files python acme-lib)" = "${want}" ] || fail "after the second import python does not list acme-lib 1.5.0 and 2.0.0"
 publish_hosted acme-legacy 1.0.1
 cl rm -rf /w/final
 cl python -m venv /w/venv-final
@@ -467,7 +568,7 @@ cl /w/venv-final/bin/pip install --no-cache-dir acme-legacy >/dev/null 2>&1 || f
   fail "python did not install the newly uploaded acme-legacy 1.0.1"
 cl /w/venv-final/bin/pip install --no-cache-dir acme-legacy==1.0.0 >/dev/null 2>&1 || fail "the imported acme-legacy 1.0.0 no longer installs"
 EXTRA=()
-echo "  acme-legacy 1.0.1 (new) and 1.0.0 (imported) both install through python"
+echo "  acme-lib 2.0.0 is back beside 1.5.0; acme-legacy 1.0.1 (new) and 1.0.0 (imported) both install through python"
 
 echo "== 15. secrets"
 if grep -q "${DEVPI_PASSWORD}" "${WORK}/sindri.log"; then fail "the devpi password is in Sindri's log"; fi
