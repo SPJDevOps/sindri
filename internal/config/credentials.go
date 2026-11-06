@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+
+	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/remote"
 )
 
 // ErrNoCredentials means a proxy names a credentials reference that is not
@@ -36,19 +39,20 @@ func (s *CredentialStore) Swap(cs Credentials) {
 	s.current.Store(&cp)
 }
 
-// Names lists the defined references.
-func (s *CredentialStore) Names() map[string]struct{} {
+// Names lists the defined references and how each authenticates, which is all
+// the reconciler may see.
+func (s *CredentialStore) Names() map[string]model.CredentialKind {
 	return s.current.Load().Names()
 }
 
 // Lookup implements remote.Credentials.
-func (s *CredentialStore) Lookup(_ context.Context, ref string) (username, password string, err error) {
+func (s *CredentialStore) Lookup(_ context.Context, ref string) (remote.Credential, error) {
 	if ref == "" {
-		return "", "", nil
+		return remote.Credential{}, nil
 	}
 	c, ok := (*s.current.Load())[ref]
 	if !ok {
-		return "", "", fmt.Errorf("%w: %q", ErrNoCredentials, ref)
+		return remote.Credential{}, fmt.Errorf("%w: %q", ErrNoCredentials, ref)
 	}
-	return c.Username, c.Password, nil
+	return remote.Credential{Username: c.Username, Password: c.Password, Token: c.Token}, nil
 }

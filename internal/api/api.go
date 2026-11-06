@@ -56,7 +56,7 @@ type Options struct {
 	// Credentials lists the credentials references the server defines, so a
 	// repository naming an unknown one is refused when it is created (ADR 15).
 	// Nil means none are defined.
-	Credentials func() map[string]struct{}
+	Credentials func() map[string]model.CredentialKind
 	// Reconciler serves /config/diff and /config/apply. Nil leaves them
 	// unmounted.
 	Reconciler *reconcile.Reconciler
@@ -79,7 +79,7 @@ func Handler(opts Options) http.Handler {
 		opts.RequestID = func(context.Context) string { return "" }
 	}
 	if opts.Credentials == nil {
-		opts.Credentials = func() map[string]struct{} { return nil }
+		opts.Credentials = func() map[string]model.CredentialKind { return nil }
 	}
 
 	if (opts.Lifecycle == nil) != (opts.Evidence == nil) {
@@ -145,7 +145,7 @@ type api struct {
 	evidence    *evidence.Service
 	auth        auth.Authenticator
 	requestID   func(context.Context) string
-	credentials func() map[string]struct{}
+	credentials func() map[string]model.CredentialKind
 	reconciler  *reconcile.Reconciler
 	tokens      *auth.TokenService
 	gc          *gc.Collector

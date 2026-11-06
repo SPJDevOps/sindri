@@ -27,6 +27,10 @@ credentials:
   mirror:
     username: gate
     password: ${SINDRI_MIRROR_PASSWORD:-not-a-secret}
+  # A token credential is sent as a Bearer header (ADR 27). Nothing in the
+  # manifests names it: it exists so config show's redaction is exercised.
+  npm-private:
+    token: ${SINDRI_NPM_TOKEN:-not-a-secret}
 
 defaults:
   proxy:

@@ -32,6 +32,17 @@ const (
 	ProtocolNPM Protocol = "npm"
 )
 
+// CredentialKind says how an upstream credential authenticates. A kind is not a
+// secret, so the reconciler and the API may see it (ADR 27).
+type CredentialKind string
+
+const (
+	// CredentialBasic is a username and password, sent as HTTP Basic.
+	CredentialBasic CredentialKind = "basic"
+	// CredentialToken is a static token, sent as HTTP Bearer.
+	CredentialToken CredentialKind = "token"
+)
+
 // ManagedBy records whether a repository row is owned by config reconcile or
 // the management API. The two must never fight over the same row (M7).
 type ManagedBy string

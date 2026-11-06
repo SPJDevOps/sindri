@@ -577,7 +577,7 @@ func TestProxyPyPI_CredentialsStayOnUpstreamOrigin(t *testing.T) {
 		default:
 			http.NotFound(w, r)
 		}
-	}, withCredentials(remote.StaticCredentials{"mirror-cred": {"mirror", "s3cret"}}))
+	}, withCredentials(remote.StaticCredentials{"mirror-cred": {Username: "mirror", Password: "s3cret"}}))
 	// The management API refuses credentials_ref until M7 supplies secrets
 	// (ADR 15), so the repository is created below the API. What this guards,
 	// credentials never leaving the upstream's origin, is what M7 builds on.

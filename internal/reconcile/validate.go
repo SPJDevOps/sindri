@@ -26,6 +26,11 @@ var (
 	// the repository is written, never at pull time (ADR 15).
 	ErrUnknownCredentials = errors.New("unknown credentials reference")
 
+	// ErrCredentialKind means a repository pairs a credential with a protocol
+	// that cannot use its kind: an OCI proxy exchanges username/password at the
+	// registry's token realm, where a static token has no meaning (ADR 27).
+	ErrCredentialKind = errors.New("credential kind not usable")
+
 	// ErrInvalid means desired state failed validation. The wrapped
 	// config.Errors locate each problem.
 	ErrInvalid = errors.New("invalid configuration")
@@ -48,14 +53,18 @@ type RepositorySpec struct {
 // A proxy or virtual repository that carries lifecycle stages fails (I4), and
 // a credentials reference must name an entry of the server's credentials
 // section.
-func ValidateRepository(spec RepositorySpec, credentials map[string]struct{}) error {
+func ValidateRepository(spec RepositorySpec, credentials map[string]model.CredentialKind) error {
 	if spec.CredentialsRef != "" {
 		if spec.Type != model.RepoTypeProxy {
 			return fmt.Errorf("repository %q: only a proxy repository takes credentials", spec.Name)
 		}
-		if _, ok := credentials[spec.CredentialsRef]; !ok {
+		kind, ok := credentials[spec.CredentialsRef]
+		if !ok {
 			return fmt.Errorf("%w: repository %q names %q, which the server's credentials section does not define",
 				ErrUnknownCredentials, spec.Name, spec.CredentialsRef)
+		}
+		if err := checkCredentialKind(spec.Protocol, spec.CredentialsRef, kind); err != nil {
+			return fmt.Errorf("repository %q: %w", spec.Name, err)
 		}
 	}
 	if len(spec.LifecycleStages) == 0 {
@@ -69,6 +78,15 @@ func ValidateRepository(spec RepositorySpec, credentials map[string]struct{}) er
 	default:
 		return fmt.Errorf("unknown repository type %q", spec.Type)
 	}
+}
+
+// checkCredentialKind refuses a token credential on an OCI proxy (ADR 27).
+func checkCredentialKind(protocol model.Protocol, name string, kind model.CredentialKind) error {
+	if protocol == model.ProtocolOCI && kind == model.CredentialToken {
+		return fmt.Errorf("%w: credentials %q is a token, but an OCI upstream needs username/password",
+			ErrCredentialKind, name)
+	}
+	return nil
 }
 
 func lifecycleOnNonHosted(t model.RepoType, name string) error {
@@ -88,10 +106,10 @@ type Existing struct {
 // Every field is optional; `config check` passes none of them, and the server
 // passes all of them.
 type ValidateOptions struct {
-	// Credentials is the set of defined credentials references. Nil skips the
+	// Credentials maps each defined credentials reference to its kind. Nil skips the
 	// check, which is what `config check` on a manifest directory does: the
 	// secrets live on the server, not beside the manifests.
-	Credentials map[string]struct{}
+	Credentials map[string]model.CredentialKind
 
 	// Lookup finds a repository outside the set, by full name.
 	Lookup func(name string) (Existing, bool)
@@ -296,9 +314,12 @@ func (v *validator) validateUpstream(r *config.Repository) {
 		v.add(r.Source.Errorf("upstream.url", "%q is not an http(s) URL", up.URL))
 	}
 	if up.Credentials != "" && v.opts.Credentials != nil {
-		if _, ok := v.opts.Credentials[up.Credentials]; !ok {
+		kind, ok := v.opts.Credentials[up.Credentials]
+		if !ok {
 			v.add(r.Source.Errorf("upstream.credentials", "%s: %q is not defined in the server's credentials section",
 				ErrUnknownCredentials, up.Credentials))
+		} else if err := checkCredentialKind(r.Spec.Protocol, up.Credentials, kind); err != nil {
+			v.add(r.Source.Errorf("upstream.credentials", "%s", err))
 		}
 	}
 }

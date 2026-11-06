@@ -172,7 +172,7 @@ func newRouteEnv(t *testing.T) *routeEnv {
 	if err != nil {
 		t.Fatalf("gc.New: %v", err)
 	}
-	noCredentials := func() map[string]struct{} { return nil }
+	noCredentials := func() map[string]model.CredentialKind { return nil }
 	handler := api.Handler(api.Options{
 		Registry:    reg,
 		Lifecycle:   lc,

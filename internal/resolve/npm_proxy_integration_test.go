@@ -641,7 +641,7 @@ func TestProxyNPM_TarballOutsideTheUpstreamPathIsRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newNPMProxyAt(t, "/npm-a", npmProxyConfig{
 				ttl: 3600, negativeTTL: 300, credentialsRef: "mirror",
-				options: []envOption{withCredentials(remote.StaticCredentials{"mirror": {"mirror", "s3cret"}})},
+				options: []envOption{withCredentials(remote.StaticCredentials{"mirror": {Username: "mirror", Password: "s3cret"}})},
 			})
 			tgz := []byte("a tarball")
 			e.stub.setDocument("/npm-a/foo", npmDoc(t, "foo", map[string]map[string]any{
@@ -732,7 +732,7 @@ func TestProxyNPM_CredentialsStayOnUpstreamOrigin(t *testing.T) {
 
 	e := newNPMProxy(t, npmProxyConfig{
 		ttl: 3600, negativeTTL: 300, credentialsRef: "mirror",
-		options: []envOption{withCredentials(remote.StaticCredentials{"mirror": {"mirror", "s3cret"}})},
+		options: []envOption{withCredentials(remote.StaticCredentials{"mirror": {Username: "mirror", Password: "s3cret"}})},
 	})
 	e.stub.configure(func(s *npmStub) {
 		s.check = func(r *http.Request) bool {
