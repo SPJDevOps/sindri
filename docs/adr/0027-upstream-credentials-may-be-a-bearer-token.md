@@ -60,10 +60,37 @@ repository, the token request fails and the token is not sent.
 
 ## Tried against a real registry
 
-Filled in by the Verdaccio migration gate. It runs a Verdaccio proxy with a `token:`
-credential end to end and records here which of the strict tarball rules, if any, refused
-something real. GitHub Packages and registries that redirect tarballs to a CDN are
-unverified.
+`scripts/migrate-verdaccio-gate.sh` runs a Verdaccio 6.11.1 container (pinned by
+digest) that requires a login for `@acme/*`, and a Sindri proxy whose upstream
+is that Verdaccio with `token:` set to a token made by `npm token create`.
+Verdaccio's own log shows Sindri's reads of the private packument and tarball
+under the token's account, and the gate fails if the proxy cannot read the
+package. The Bearer path works end to end.
+
+The npm proxy's strict tarball rules (ADR 24) were checked against what
+Verdaccio really writes:
+
+- **Scoped packages pass.** Verdaccio's tarball links are
+  `/@acme/legacy/-/legacy-1.0.0.tgz`: no `%2f`, a basename ending `.tgz`, and under
+  the upstream's base path. None of those rules refused them.
+- **One rule does refuse a real configuration: the same-host rule.** A Verdaccio
+  that advertises another public URL (`VERDACCIO_PUBLIC_URL`, `url_prefix`) than
+  the one Sindri reaches it at writes tarball links on that other host, and the
+  proxy answers 502 for each, logging `tarball URL is on another host`.
+  Packuments still serve. It is not relaxed: the credential goes with the
+  tarball request, and a link that names another host is exactly the hostile
+  packument the rule exists for. The migration guide tells the operator to point
+  `upstream.url` at the public URL, and the gate covers the refusal.
+- **A cross-origin redirect was not exercised.** Verdaccio serves tarballs
+  directly. A Verdaccio with an S3 storage plugin that redirects to the bucket
+  is unverified, as are GitHub Packages and registries that redirect tarballs
+  to a CDN. By the redirect rules above the token is not sent there, so such an
+  upstream may need its tarballs served without a redirect.
+
+The same gate also found, outside Sindri, that npm 10.9.9's
+`replace-registry-host=always` doubles the repository path in Sindri's own
+tarball links, and that a named host must be written without its port. Both are
+in the guide.
 
 ## Consequences
 

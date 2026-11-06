@@ -8,6 +8,10 @@
 - [Configuration reference](configuration.md)
 - [Upgrading](upgrading.md)
 
+# Migrating
+
+- [From Verdaccio](migrate/verdaccio.md)
+
 # Decisions
 
 - [Architecture decision records](adr/index.md)
