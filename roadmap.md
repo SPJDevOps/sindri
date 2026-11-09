@@ -827,13 +827,14 @@ publish is scanned, and promotion is refused above a severity.
 |---|---|---|---|
 | 5, Nov 5–15 | v1.1.1 ✅ | SIN-57, 59, 60, 61, 62, 63, 64, 66, 67 | v1.1.1 |
 | 6, Nov 6–15 | M10 docs site | SIN-22, 23, 29 | |
-| 7, Nov 16–22 | M10 migration | SIN-24, 25, 26, 53 | |
-| 8, Nov 23–29 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
-| 9, Nov 30–Dec 6 | M11a scan | SIN-30, 31, 32, 36 | |
-| 10, Dec 7–13 | M11a gate | SIN-34, 38, 39, 72 | v1.3.0, then announce |
+| 7, Nov 6–22 | M10 migration | SIN-24, 25, 26, 53 | |
+| 8, Nov 9–15 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
+| 9, Nov 16–22 | M11a scan | SIN-30, 31, 32, 36 | |
+| 10, Nov 23–29 | M11a gate | SIN-34, 38, 39, 72 | v1.3.0, then announce |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
-week, and Sprints 7 to 10 each moved up one week.
+week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9 and 10
+moved up two weeks.
 
 Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic.
 
@@ -1013,15 +1014,16 @@ reading the source.
 - [x] Migration guides from **Verdaccio, devpi, and Harbor**. The method: put a Sindri
   proxy in front of the old registry, switch clients over, and let the cache fill, then
   publish new versions to hosted. No import tool yet; build one if users ask for it
-- [ ] A deployment and operations guide: Docker Compose and Helm deployments, TLS behind a
+- [x] A deployment and operations guide: Docker Compose and Helm deployments, TLS behind a
   reverse proxy, Postgres backup and restore, the blob store, metrics and suggested alerts,
   and sizing
-- [ ] A Helm chart, chosen by ADR for its location and publishing, running **one replica**:
+- [x] A Helm chart, chosen by ADR for its location and publishing
+  ([ADR 28](docs/adr/0028-helm-chart-location-and-publishing.md)), running **one replica**:
   upload sessions live in process memory, so a chunked push would break across replicas
   (SIN-71). Moved here from Later by [ADR 25](docs/adr/0025-what-the-announcement-requires.md)
 - [x] Private npm upstreams, if the Verdaccio guide needs them: Bearer credentials and a real
   private registry tried end to end (SIN-53)
-- [ ] A README rewritten for the polyglot team: what it replaces, a two-minute start, and
+- [x] A README rewritten for the polyglot team: what it replaces, a two-minute start, and
   links into the docs site
 - [x] Every page's commands run in CI or in a gate script, as the quickstart's already do
 
@@ -1067,6 +1069,23 @@ manifest read honoured only the first `Accept` line), and SIN-79 (a tags list re
 registry with a token server that reproduces Harbor's robot-account flow, not against Harbor
 itself, and the page says so. **Still open, for a person:** the gate line "a person who has not
 used Sindri follows one migration guide end to end" has not been done.
+
+**Deploy slice, Sprint 8, 2026-11-09.** `make lint`, `make test`, `make docs`,
+`make test-integration`, and `./scripts/m10-docs-gate.sh` passed on `m10-deploy`, with Go
+1.27.3 (lint under 1.27.1), Docker 29.8.0, Helm v4.3.1, kind v0.33.0 on node v1.37.0, nginx
+1.28, Caddy 2.10, Traefik v3.5, and Prometheus v3.5.0. The docs gate now runs all 11 checks
+the pages name. SIN-70 is the chart ([ADR 28](docs/adr/0028-helm-chart-location-and-publishing.md)):
+`scripts/helm-gate.sh` installs it in kind by the guide's commands, pushes and pulls an
+image, upgrades, and confirms the pod was replaced and the image still serves. SIN-27 is the
+deployment and operations guide: `scripts/deploy-compose-gate.sh` pushes and pulls through
+nginx, Caddy, and Traefik, then destroys the deployment with its volumes and restores it
+from the page's backup. The ticket's alerts needed a metric that did not exist, so
+`sindri_queue_jobs` reports the queue, read at scrape time; storage failures alert through
+5xx responses and `/readyz`, with no metric of their own. SIN-28 is the README, now 112
+lines; the pip and npm detail moved to `docs/clients/`, and their gates check those pages.
+**The sizing section gives no numbers,** because no load test has been run, and the page
+says so. **Still open, for a person:** the migration walkthrough above, which v1.2.0 does
+not wait for and the announcement does. M10 stays open until it is done.
 
 ---
 
