@@ -228,6 +228,20 @@ func (q *Queue) Due(ctx context.Context, kind, dedupeKey string, interval time.D
 	return due, nil
 }
 
+// Counts returns how many jobs are queued, running, and failed, by state name.
+// A state with no jobs is absent.
+func (q *Queue) Counts(ctx context.Context) (map[string]int64, error) {
+	rows, err := q.q.CountJobsByState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("counting jobs by state: %w", err)
+	}
+	counts := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		counts[row.State] = row.Jobs
+	}
+	return counts, nil
+}
+
 // DeleteFinished removes jobs that finished more than olderThan ago.
 func (q *Queue) DeleteFinished(ctx context.Context, olderThan time.Duration) (int64, error) {
 	n, err := q.q.DeleteFinishedJobs(ctx, seconds(olderThan))

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -234,6 +235,36 @@ func TestQueue_FailedJobRetriesWithBackoffThenFails(t *testing.T) {
 	got, _ = q.Get(t.Context(), job.ID)
 	if got.State != queue.StateFailed || got.LastError != "second failure" || got.FinishedAt == nil {
 		t.Fatalf("after max attempts = %+v, want failed", got)
+	}
+}
+
+func TestQueue_CountsJobsByState(t *testing.T) {
+	q, database := newQueue(t)
+
+	before, err := q.Counts(t.Context())
+	if err != nil {
+		t.Fatalf("Counts: %v", err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("Counts on an empty queue = %v, want nothing", before)
+	}
+
+	enqueue(t, q, "queued-a", "")
+	enqueue(t, q, "queued-b", "")
+	enqueue(t, q, "runs", "")
+	enqueue(t, q, "succeeds", "")
+	enqueue(t, q, "fails", "")
+	exec(t, database, `UPDATE jobs SET state = 'running' WHERE kind = 'runs'`)
+	exec(t, database, `UPDATE jobs SET state = 'succeeded' WHERE kind = 'succeeds'`)
+	exec(t, database, `UPDATE jobs SET state = 'failed' WHERE kind = 'fails'`)
+
+	got, err := q.Counts(t.Context())
+	if err != nil {
+		t.Fatalf("Counts: %v", err)
+	}
+	want := map[string]int64{"queued": 2, "running": 1, "failed": 1}
+	if !maps.Equal(got, want) {
+		t.Fatalf("Counts = %v, want %v", got, want)
 	}
 }
 

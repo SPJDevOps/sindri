@@ -73,6 +73,10 @@ type Options struct {
 	// gets a fresh one, so two servers in one test process do not collide on
 	// the global default registry.
 	Metrics *prometheus.Registry
+
+	// QueueCounts reports background jobs by state name for the
+	// sindri_queue_jobs gauge. Optional: without it the gauge has no series.
+	QueueCounts func(ctx context.Context) (map[string]int64, error)
 }
 
 // Server owns an HTTP listener and the handler behind it.
@@ -105,7 +109,7 @@ func New(opts Options) (*Server, error) {
 	if registry == nil {
 		registry = prometheus.NewRegistry()
 	}
-	m, err := newMetrics(registry)
+	m, err := newMetrics(registry, opts.QueueCounts)
 	if err != nil {
 		return nil, err
 	}

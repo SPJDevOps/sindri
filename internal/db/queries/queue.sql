@@ -107,6 +107,13 @@ SELECT (
     )
 )::bool AS due;
 
+-- name: CountJobsByState :many
+-- What an operator watches. Succeeded jobs are left out: nothing alerts on them.
+SELECT state, count(*) AS jobs
+FROM jobs
+WHERE state IN ('queued', 'running', 'failed')
+GROUP BY state;
+
 -- name: DeleteFinishedJobs :execrows
 DELETE FROM jobs
 WHERE state IN ('succeeded', 'failed')
