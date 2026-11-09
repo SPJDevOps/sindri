@@ -11,6 +11,13 @@ with the code they describe.
 
 - [Quickstart](quickstart.md): a registry with a web UI on one machine, in about two
   minutes.
+- [pip and twine](clients/pip.md), and [npm, pnpm, and yarn](clients/npm.md): pointing
+  your clients at Sindri.
+- Deploying: [Docker Compose](deploy/compose.md),
+  [Kubernetes with Helm](deploy/helm.md), and
+  [TLS behind a reverse proxy](deploy/reverse-proxy.md).
+- [Operating Sindri](operations.md): backup and restore, garbage collection, metrics and
+  alerts, and sizing.
 - [Configuration reference](configuration.md): every key `sindri.yaml` accepts, in short
   and long form.
 - [Upgrading](upgrading.md): what happens on startup, the behaviour changes in each

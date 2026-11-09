@@ -50,6 +50,19 @@ diff -u "${ROOT}/deploy/quickstart/compose.yaml" "${WORK}/compose.yaml" \
   || { echo "docs/quickstart.md and deploy/quickstart/compose.yaml have drifted apart" >&2; exit 1; }
 echo "the document's Compose file matches deploy/quickstart/compose.yaml"
 
+# The README's two-minute start is this quickstart, shortened. Its download line
+# fetches the Compose file compared above, and every other line must be one the
+# quickstart runs below, so the README cannot show a command that did not pass.
+README_DOWNLOAD='curl -fsSLO https://raw.githubusercontent.com/SPJDevOps/sindri/main/deploy/quickstart/compose.yaml'
+awk '/<!-- readme:start -->/{f=1;next}/<!-- readme:end -->/{f=0}f' "${ROOT}/README.md" | sed '1d;$d' > "${WORK}/readme.sh"
+test -s "${WORK}/readme.sh" || { echo "no two-minute start block in README.md" >&2; exit 1; }
+grep -Fxq -- "${README_DOWNLOAD}" "${WORK}/readme.sh" || { echo "README.md does not download the quickstart's Compose file" >&2; exit 1; }
+while IFS= read -r line; do
+  [[ "${line}" == "${README_DOWNLOAD}" ]] && continue
+  grep -Fxq -- "${line}" "${WORK}/steps.sh" || { echo "README.md runs a line the quickstart does not: ${line}" >&2; exit 1; }
+done < "${WORK}/readme.sh"
+echo "every line of the README's two-minute start is run below"
+
 if [[ -z "${IMAGE}" ]]; then
   echo "== building the Sindri image from this checkout"
   docker build -q -t sindri:gate --build-arg VERSION=quickstart-gate "${ROOT}" >/dev/null

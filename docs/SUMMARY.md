@@ -5,8 +5,17 @@
 # Using Sindri
 
 - [Quickstart](quickstart.md)
+- [Using pip and twine](clients/pip.md)
+- [Using npm, pnpm, and yarn](clients/npm.md)
 - [Configuration reference](configuration.md)
 - [Upgrading](upgrading.md)
+
+# Deploying
+
+- [Docker Compose](deploy/compose.md)
+- [Kubernetes with Helm](deploy/helm.md)
+- [TLS behind a reverse proxy](deploy/reverse-proxy.md)
+- [Operating Sindri](operations.md)
 
 # Migrating
 
@@ -44,3 +53,4 @@
   - [25. The announcement requires M10, a Helm chart, and the first half of M11](adr/0025-what-the-announcement-requires.md)
   - [26. The docs site is built by mdBook from plain markdown, and lychee checks its links](adr/0026-docs-site-generator.md)
   - [27. Upstream credentials may be a Bearer token](adr/0027-upstream-credentials-may-be-a-bearer-token.md)
+  - [28. The Helm chart lives in this repository and is published to ghcr as an OCI artifact](adr/0028-helm-chart-location-and-publishing.md)
