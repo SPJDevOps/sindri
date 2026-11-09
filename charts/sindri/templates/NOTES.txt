@@ -1,0 +1,9 @@
+Sindri {{ .Chart.AppVersion }} is starting. It runs as one replica, so a restart or upgrade has brief downtime.
+
+Check that it is ready:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "sindri.fullname" . }}
+
+Reach it from this machine:
+
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "sindri.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}

@@ -41,6 +41,32 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # The Helm chart, versioned as the release tag so that it names exactly one
+  # image, and pushed only once that image exists (ADR 28).
+  chart:
+    name: Helm chart
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # the chart on ghcr.io
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+      - name: Package and push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          printf '%s' "$GITHUB_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          helm package charts/sindri --version "$version" --app-version "$version"
+          helm push "sindri-$version.tgz" oci://ghcr.io/spjdevops/charts
+
   # The docs site, published to GitHub Pages once the release itself is out,
   # so the site never describes a version that failed to publish (ADR 26).
   # Pages must be set to "GitHub Actions" in the repository settings, and the

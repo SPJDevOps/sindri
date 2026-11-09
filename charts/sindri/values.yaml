@@ -1,0 +1,61 @@
+# There is deliberately no replica count: upload sessions live in process
+# memory, so a chunked push breaks across replicas (ADR 28).
+
+image:
+  repository: ghcr.io/spjdevops/sindri
+  # Empty means the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# sindri.yaml, written to a ConfigMap unchanged and read by the one loader. Every
+# key in the configuration reference works here. `database`, `storage`, and
+# `auth.static_token` are required, because Sindri's own defaults for them are
+# for local development.
+#
+# Keep secrets out of this block: name them with ${VAR} and supply them through
+# envFrom below.
+config: {}
+
+# Where the ${VAR} values in `config` come from, usually one Secret you created:
+#
+#   envFrom:
+#     - secretRef:
+#         name: sindri-env
+envFrom: []
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Routes Sindri's public paths only. /metrics, /healthz, and /readyz carry no
+# authentication, so they stay inside the cluster.
+ingress:
+  enabled: false
+  className: ""
+  # A registry needs large request bodies and long timeouts; set your
+  # controller's annotations for them here. See the reverse proxy guide.
+  annotations: {}
+  host: ""
+  tls: []
+
+# A volume for the filesystem storage backend. Required with it, because a pod's
+# own disk does not outlive the pod. mountPath must match `config.storage`.
+persistence:
+  enabled: false
+  mountPath: /var/lib/sindri
+  size: 50Gi
+  # Empty means the cluster's default StorageClass.
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+
+# Scratch space. npm publishes are spooled here while they are validated, so
+# the limit must exceed the largest package you accept.
+tmp:
+  sizeLimit: 2Gi
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}

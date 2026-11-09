@@ -57,10 +57,15 @@ cover:
 
 ## lint: Run go vet and golangci-lint. Fails if golangci-lint is not installed.
 .PHONY: lint
-lint: fmt-check
+lint: fmt-check lint-chart
 	go vet ./...
 	@test -n "$(GOLANGCI_LINT)" || { echo "golangci-lint not found in $(TOOLS_BIN) or PATH. Install it with: make tools"; exit 1; }
 	$(GOLANGCI_LINT) run
+
+## lint-chart: Lint the Helm chart, with the values it refuses to render without.
+.PHONY: lint-chart
+lint-chart:
+	helm lint --strict charts/sindri --set config.database=x --set config.storage=s3://b --set config.auth.static_token=y
 
 ## fmt: Format all Go source.
 .PHONY: fmt

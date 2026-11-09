@@ -1,0 +1,11 @@
+apiVersion: v2
+name: sindri
+description: A registry for container images, Python packages, and npm packages, running as one replica.
+type: application
+# The release workflow sets both to the release tag when it packages the chart
+# (ADR 28). 0.0.0-dev never reaches the registry.
+version: 0.0.0-dev
+appVersion: 0.0.0-dev
+home: https://spjdevops.github.io/sindri/
+sources:
+  - https://github.com/SPJDevOps/sindri
