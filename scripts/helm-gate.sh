@@ -17,6 +17,12 @@
 # a NodePort. An upgrade must recreate the pod and still serve every blob of the
 # image pushed before it.
 #
+# The page's Ingress then runs on a real ingress-nginx, with TLS ending there. An
+# image must push and pull through it, and upload locations must stay relative.
+# As a control, removing the page's body-size annotation must make a push fail,
+# which shows that the traffic really crosses the Ingress and that the page's
+# setting is what allows it.
+#
 # SINDRI_GATE_IMAGE tests an image that is already built.
 set -euo pipefail
 
@@ -29,7 +35,11 @@ POSTGRES_IMAGE="postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5
 # The same pin as internal/testsupport; see ADR 11.
 MINIO_IMAGE="bitnamilegacy/minio:2025.7.23-debian-12-r5"
 CRANE_IMAGE="gcr.io/go-containerregistry/crane@sha256:ce0d9cffa63d62c547b7df1cad9875fe90e8f7e2413870f0b50ca03839f56901"
+CURL_IMAGE="curlimages/curl:8.11.1"
 SOURCE_IMAGE="alpine:3.20"
+# Its last release: the project is archived, which the page says.
+INGRESS_NGINX="controller-v1.15.1"
+INGRESS_HOST="sindri.example.com"
 IMAGE="${SINDRI_GATE_IMAGE:-}"
 WORK="$(mktemp -d)"
 
@@ -56,6 +66,8 @@ echo "== extracting the page's values and commands"
 cd "${WORK}"
 block values > values.yaml
 block ingress > ingress.yaml
+block tls > tls.sh
+test -s tls.sh || fail "the page has no tls block"
 for name in install upgrade; do
   block "${name}" > "${name}.sh"
   grep -q 'oci://ghcr.io/spjdevops/charts/sindri --version ' "${name}.sh" \
@@ -179,23 +191,29 @@ kubectl -n sindri expose deployment sindri --type=NodePort --name=gate --port=80
 PORT="$(kubectl -n sindri get service gate -o jsonpath='{.spec.ports[0].nodePort}')"
 TARGET="${NODE}:${PORT}/gate/alpine:1"
 
+NODE_IP="$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "${NODE}")"
 mkdir -p "${WORK}/crane"
 chmod 777 "${WORK}/crane"
 crane() {
-  docker run --rm -i --network kind -e DOCKER_CONFIG=/cfg -v "${WORK}/crane:/cfg" \
-    "${CRANE_IMAGE}" --insecure "$@"
+  docker run --rm -i --network kind --add-host "${INGRESS_HOST}:${NODE_IP}" \
+    -e DOCKER_CONFIG=/cfg -v "${WORK}/crane:/cfg" "${CRANE_IMAGE}" --insecure "$@"
+}
+# curl_ingress ARGS...: curl on kind's network, resolving the Ingress host. -k
+# because the certificate is self-signed here.
+curl_ingress() {
+  docker run --rm --network kind --add-host "${INGRESS_HOST}:${NODE_IP}" "${CURL_IMAGE}" -ks "$@"
 }
 printf '%s' "${SINDRI_TOKEN}" | crane auth login "${NODE}:${PORT}" -u admin --password-stdin
 
-# validate_pull: read every layer of the two real images back, by digest.
+# validate_pull REF: read every layer of the two real images back, by digest.
 # `crane validate` on the whole index always fails on this image, also straight
 # from Docker Hub: its attestation manifests have in-toto JSON layers, and crane
 # expects gzip.
 validate_pull() {
   local platform digest
   for platform in linux/amd64 linux/arm64; do
-    digest="$(crane --platform "${platform}" digest "${TARGET}")"
-    crane validate --remote "${TARGET%:1}@${digest}"
+    digest="$(crane --platform "${platform}" digest "$1")"
+    crane validate --remote "${1%:1}@${digest}"
   done
 }
 
@@ -204,7 +222,7 @@ crane copy "${SOURCE_IMAGE}" "${TARGET}"
 source_digest="$(crane digest "${SOURCE_IMAGE}")"
 before="$(crane digest "${TARGET}")"
 test "${before}" = "${source_digest}" || fail "pushed ${source_digest}, but Sindri serves ${before}"
-validate_pull
+validate_pull "${TARGET}"
 
 pod_before="$(kubectl -n sindri get pods -l app.kubernetes.io/name=sindri -o jsonpath='{.items[0].metadata.uid}')"
 
@@ -220,6 +238,55 @@ test "${running}" = "sindri:gate-upgraded" || fail "the upgrade runs ${running}"
 echo "== the image survived the upgrade"
 after="$(crane digest "${TARGET}")"
 test "${before}" = "${after}" || fail "digest changed across the upgrade: ${before} then ${after}"
-validate_pull
+validate_pull "${TARGET}"
 
-echo "Helm gate passed: installed, pushed and pulled ${before}, upgraded, and served it again"
+echo "== installing ingress-nginx (${INGRESS_NGINX})"
+kubectl label node "${NODE}" ingress-ready=true >/dev/null
+kubectl apply -f "https://raw.githubusercontent.com/kubernetes/ingress-nginx/${INGRESS_NGINX}/deploy/static/provider/kind/deploy.yaml" >/dev/null
+kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=300s >/dev/null
+# The webhook's certificate comes from these jobs. They may already be gone,
+# and an upgrade the webhook still refuses fails loudly just below.
+kubectl -n ingress-nginx wait --for=condition=complete job --all --timeout=120s >/dev/null 2>&1 || true
+
+echo "== enabling the Ingress, by the page's commands"
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=${INGRESS_HOST}" \
+  -addext "subjectAltName=DNS:${INGRESS_HOST}" -keyout privkey.pem -out fullchain.pem 2>/dev/null
+bash -euo pipefail tls.sh >/dev/null
+sed -i.bak 's/--values values.yaml/--values values.yaml --values ingress.yaml/' upgrade.sh
+grep -q -- '--values ingress.yaml' upgrade.sh || fail "could not add the Ingress values to the upgrade"
+bash -euo pipefail upgrade.sh >/dev/null
+
+for _ in $(seq 1 60); do
+  [ "$(curl_ingress -o /dev/null -w '%{http_code}' "https://${INGRESS_HOST}/v2/")" = 401 ] && break
+  sleep 2
+done
+code="$(curl_ingress -o /dev/null -w '%{http_code}' "https://${INGRESS_HOST}/v2/")"
+test "${code}" = 401 || fail "the Ingress does not reach Sindri: /v2/ answered ${code}"
+
+echo "== through the Ingress: locations stay relative, and the operational paths are hidden"
+location="$(curl_ingress -D - -o /dev/null -u "admin:${SINDRI_TOKEN}" -X POST \
+  "https://${INGRESS_HOST}/v2/gate/ingress/blobs/uploads/" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')"
+[[ "${location}" == /v2/gate/ingress/blobs/uploads/* ]] \
+  || fail "an upload location through the Ingress is '${location}', want a relative path"
+for path in metrics healthz readyz; do
+  code="$(curl_ingress -o /dev/null -w '%{http_code}' "https://${INGRESS_HOST}/${path}")"
+  test "${code}" = 404 || fail "the Ingress serves /${path} with ${code}, want 404"
+done
+
+echo "== pushing and pulling through the Ingress"
+INGRESS_TARGET="${INGRESS_HOST}/gate/ingress:1"
+printf '%s' "${SINDRI_TOKEN}" | crane auth login "${INGRESS_HOST}" -u admin --password-stdin
+crane copy "${SOURCE_IMAGE}" "${INGRESS_TARGET}"
+through="$(crane digest "${INGRESS_TARGET}")"
+test "${through}" = "${source_digest}" || fail "pushed ${source_digest} through the Ingress, but it serves ${through}"
+validate_pull "${INGRESS_TARGET}"
+
+echo "== control: without the page's body-size annotation, a push must fail"
+kubectl -n sindri annotate ingress sindri nginx.ingress.kubernetes.io/proxy-body-size- >/dev/null
+# The controller reloads its configuration asynchronously.
+sleep 10
+if crane copy "${SOURCE_IMAGE}" "${INGRESS_HOST}/gate/control:1" >/dev/null 2>&1; then
+  fail "a push succeeded without the body-size annotation, so the check above proves nothing"
+fi
+
+echo "Helm gate passed: installed, pushed and pulled ${before}, upgraded, served it again, and did the same through ingress-nginx"

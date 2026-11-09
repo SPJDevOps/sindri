@@ -1076,7 +1076,11 @@ used Sindri follows one migration guide end to end" has not been done.
 1.28, Caddy 2.10, Traefik v3.5, and Prometheus v3.5.0. The docs gate now runs all 11 checks
 the pages name. SIN-70 is the chart ([ADR 28](docs/adr/0028-helm-chart-location-and-publishing.md)):
 `scripts/helm-gate.sh` installs it in kind by the guide's commands, pushes and pulls an
-image, upgrades, and confirms the pod was replaced and the image still serves. SIN-27 is the
+image, upgrades, and confirms the pod was replaced and the image still serves. It then runs
+the guide's Ingress on ingress-nginx v1.15.1, the last release of a project now archived, and
+pushes and pulls through it with TLS; removing the body-size annotation must make a push
+fail. By hand, a real Docker client (a 400 MB layer), twine and pip, and npm with a scoped
+package also worked through that Ingress. SIN-27 is the
 deployment and operations guide: `scripts/deploy-compose-gate.sh` pushes and pulls through
 nginx, Caddy, and Traefik, then destroys the deployment with its volumes and restores it
 from the page's backup. The ticket's alerts needed a metric that did not exist, so

@@ -72,7 +72,16 @@ because Sindri's own defaults for them are for local development.
 
 ## Reaching it
 
-Enable the Ingress and terminate TLS there:
+Sindri needs its own hostname, because Docker requires `/v2` at the root of the host, so it
+cannot be served under a path. TLS ends at the Ingress and Sindri receives plain HTTP,
+which needs no forwarded headers. `publicUrl` must be the https address clients use.
+
+> **ingress-nginx is retired.** The `kubernetes/ingress-nginx` project is archived, so
+> expect no more releases or security fixes. The example below is tested against its last
+> release, controller v1.15.1, because many clusters still run it. On a new cluster, choose
+> another controller and apply the settings listed after the example.
+
+Save this as `ingress.yaml`:
 
 <!-- helm:ingress -->
 ```yaml
@@ -92,9 +101,25 @@ ingress:
 ```
 <!-- /helm:ingress -->
 
-Those annotations are for ingress-nginx. On another controller, set the equivalents: no
-limit on the request body, no buffering, and long timeouts. The
-[reverse proxy guide](reverse-proxy.md) explains why each one matters.
+Create the certificate's Secret, or let cert-manager create it, then add
+`--values ingress.yaml` to your `helm install` or `helm upgrade` command:
+
+<!-- helm:tls -->
+```bash
+kubectl -n sindri create secret tls sindri-tls --cert=fullchain.pem --key=privkey.pem
+```
+<!-- /helm:tls -->
+
+Those annotations are for ingress-nginx, and other controllers name them differently. F5's
+NGINX Ingress Controller, for one, uses `nginx.org/` annotations. Whichever you run, set
+the equivalents of:
+
+- **No limit on the request body.** ingress-nginx's default of 1 MB refuses most image
+  layers with a 413.
+- **No buffering** of requests or responses.
+- **Long timeouts,** enough for your largest layer on your slowest link.
+
+The [reverse proxy guide](reverse-proxy.md) explains why each one matters.
 
 The Ingress routes Sindri's public paths only. `/metrics`, `/healthz`, and `/readyz` carry
 no authentication, so they stay inside the cluster, where Prometheus can reach them
