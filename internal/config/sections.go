@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -669,6 +671,115 @@ func (w *Worker) validate() error {
 	if w.Retention.UploadMaxIdle.Duration() < time.Minute {
 		return fmt.Errorf("worker.retention.uploadMaxIdle: %s would discard uploads clients are still sending; use at least 1m",
 			w.Retention.UploadMaxIdle)
+	}
+	return nil
+}
+
+// Scanning configures vulnerability scanning of hosted publishes (ADR 23, ADR 29).
+//
+// Short form: `scanning: true` turns it on with the defaults below, and
+// `scanning: false` is the default. Long form: a mapping with any of the
+// fields below.
+type Scanning struct {
+	// Scan hosted publishes for known vulnerabilities and attach the result
+	// to the artifact. Off when the section is absent. An absent `enabled` in
+	// the mapping means `true`, because writing the section signals intent.
+	Enabled bool `yaml:"enabled"`
+	// The Trivy executable. A bare name is looked up on the PATH. Sindri runs
+	// it as a separate process and never links it in.
+	Trivy string `yaml:"trivy"`
+	// A mirror of the Trivy vulnerability database, passed as
+	// `--db-repository`, for a server that cannot reach the public one. Cannot
+	// be combined with `skipDBUpdate`.
+	DBRepository string `yaml:"dbRepository"`
+	// Where Trivy keeps its database and caches between scans.
+	CacheDir string `yaml:"cacheDir"`
+	// How long one scan may run before it is cancelled and retried. At least
+	// `1m`.
+	Timeout Duration `yaml:"timeout"`
+	// Never download the vulnerability database, and scan with the one already
+	// in `cacheDir`. For an air-gapped server with a pre-seeded cache. Cannot
+	// be combined with `dbRepository`.
+	SkipDBUpdate bool `yaml:"skipDBUpdate"`
+	// The most bytes unpacked from one wheel or tarball while scanning it, so
+	// that an archive bomb cannot fill the disk. At least 1048576 (1 MiB).
+	MaxUnpackedBytes int64 `yaml:"maxUnpackedBytes"`
+}
+
+const minScanUnpackedBytes = 1 << 20
+
+func defaultScanning() Scanning {
+	return Scanning{
+		Trivy:            "trivy",
+		CacheDir:         filepath.Join(os.TempDir(), "sindri-trivy"),
+		Timeout:          Duration(10 * time.Minute),
+		MaxUnpackedBytes: 1 << 30,
+	}
+}
+
+// UnmarshalYAML accepts a boolean or the full mapping. In the mapping an
+// absent enabled means true; an absent section means false.
+func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		var enabled bool
+		if err := node.Decode(&enabled); err != nil {
+			return fmt.Errorf("line %d: scanning must be true, false, or a mapping", node.Line)
+		}
+		*s = Scanning{Enabled: enabled}
+		return nil
+	}
+
+	var raw struct {
+		Enabled          *bool    `yaml:"enabled"`
+		Trivy            string   `yaml:"trivy"`
+		DBRepository     string   `yaml:"dbRepository"`
+		CacheDir         string   `yaml:"cacheDir"`
+		Timeout          Duration `yaml:"timeout"`
+		SkipDBUpdate     bool     `yaml:"skipDBUpdate"`
+		MaxUnpackedBytes int64    `yaml:"maxUnpackedBytes"`
+	}
+	if err := strictDecode(node, &raw); err != nil {
+		return err
+	}
+	*s = Scanning{
+		Enabled:          raw.Enabled == nil || *raw.Enabled,
+		Trivy:            raw.Trivy,
+		DBRepository:     raw.DBRepository,
+		CacheDir:         raw.CacheDir,
+		Timeout:          raw.Timeout,
+		SkipDBUpdate:     raw.SkipDBUpdate,
+		MaxUnpackedBytes: raw.MaxUnpackedBytes,
+	}
+	return nil
+}
+
+func (s *Scanning) applyDefaults() {
+	d := defaultScanning()
+	if s.Trivy == "" {
+		s.Trivy = d.Trivy
+	}
+	if s.CacheDir == "" {
+		s.CacheDir = d.CacheDir
+	}
+	if s.Timeout == 0 {
+		s.Timeout = d.Timeout
+	}
+	if s.MaxUnpackedBytes == 0 {
+		s.MaxUnpackedBytes = d.MaxUnpackedBytes
+	}
+}
+
+// validate checks the values whether or not scanning is on: a bad value is a
+// bad value. It does not look for the executable; `sindri config check` does.
+func (s *Scanning) validate() error {
+	if s.Timeout.Duration() < time.Minute {
+		return fmt.Errorf("scanning.timeout: %s would cancel scans that are still working; use at least 1m", s.Timeout)
+	}
+	if s.MaxUnpackedBytes < minScanUnpackedBytes {
+		return fmt.Errorf("scanning.maxUnpackedBytes: %d is below the 1048576 (1 MiB) minimum", s.MaxUnpackedBytes)
+	}
+	if s.SkipDBUpdate && s.DBRepository != "" {
+		return fmt.Errorf("scanning.dbRepository: cannot be set with skipDBUpdate, which never downloads the database")
 	}
 	return nil
 }

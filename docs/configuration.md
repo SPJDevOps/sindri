@@ -46,7 +46,7 @@ it; where it does not, the key is unset.
 
 These keys configure the process. They have no manifest form: manifests describe
 repositories and lifecycle, so `listen`, `storage`, `database`, `log`, `auth`, `worker`,
-`credentials`, and `publicUrl` appear in `sindri.yaml` only.
+`scanning`, `credentials`, and `publicUrl` appear in `sindri.yaml` only.
 
 ### `listen`
 
@@ -232,6 +232,30 @@ Short form: `worker: true` is the same as `worker: {enabled: true}`.
 | `retention.uploadMaxIdle` | duration | How long a staged upload may go unwritten before it is discarded. At least `1m`. | `24h` |
 | `retention.proxyStaleAfter` | duration | How long past its TTL a proxy cache entry is kept to serve through an upstream outage, before retention evicts it. Also how long a cached file that upstream no longer lists is kept before its row is removed. | `168h` |
 <!-- END GENERATED: worker -->
+
+### `scanning`
+
+Vulnerability scanning is off by default. When it is on, the worker scans hosted
+publishes only; proxied content is never scanned. It needs a `trivy` executable, which
+the `-trivy` release image ships. See [ADR 29](adr/0029-what-a-scan-covers.md).
+
+<!-- BEGIN GENERATED: scanning -->
+<!-- Generated from internal/config by `make reference`. Edit the struct comments, not this table. -->
+
+Short form: `scanning: false` is the same as `scanning: {enabled: false}`.
+
+Short form: `scanning: true` is the same as `scanning: {enabled: true}`.
+
+| Key | Type | Meaning | Default |
+|---|---|---|---|
+| `enabled` | boolean | Scan hosted publishes for known vulnerabilities and attach the result to the artifact. Off when the section is absent. An absent `enabled` in the mapping means `true`, because writing the section signals intent. | `false` |
+| `trivy` | string | The Trivy executable. A bare name is looked up on the PATH. Sindri runs it as a separate process and never links it in. | `trivy` |
+| `dbRepository` | string | A mirror of the Trivy vulnerability database, passed as `--db-repository`, for a server that cannot reach the public one. Cannot be combined with `skipDBUpdate`. | unset |
+| `cacheDir` | string | Where Trivy keeps its database and caches between scans. | `/tmp/sindri-trivy` |
+| `timeout` | duration | How long one scan may run before it is cancelled and retried. At least `1m`. | `10m` |
+| `skipDBUpdate` | boolean | Never download the vulnerability database, and scan with the one already in `cacheDir`. For an air-gapped server with a pre-seeded cache. Cannot be combined with `dbRepository`. | `false` |
+| `maxUnpackedBytes` | integer | The most bytes unpacked from one wheel or tarball while scanning it, so that an archive bomb cannot fill the disk. At least 1048576 (1 MiB). | `1073741824` |
+<!-- END GENERATED: scanning -->
 
 ## Repositories, lifecycle, and defaults
 

@@ -99,9 +99,9 @@ There are two golden tests. `TestManifests_ShortAndLongFormsAreIdentical` compar
 loaded trees. `TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState` compares the
 database each form produces. A new configuration field is not done until
 `testdata/config/sindri.yaml` and `testdata/manifests/` both use it. The exception is
-server-level settings (`listen`, `storage`, `database`, `auth`, `publicUrl`): manifests
-describe repositories and lifecycle, so these have no manifest form and appear in
-`testdata/config/sindri.yaml` only.
+server-level settings (`listen`, `storage`, `database`, `log`, `auth`, `worker`,
+`scanning`, `publicUrl`): manifests describe repositories and lifecycle, so these have
+no manifest form and appear in `testdata/config/sindri.yaml` only.
 
 The reconciler owns rows with `managed_by = config`, and records which trigger owns
 each (`serve --config` or `sindri apply`). The API, the reconciler, and the two

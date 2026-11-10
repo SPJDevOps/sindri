@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 
 	"github.com/spf13/cobra"
 
@@ -110,6 +111,13 @@ func loadSource(path string) (*configSource, error) {
 }
 
 func (s *configSource) validate() error {
+	// Config.Validate never looks for the executable, so that loading stays
+	// free of the host; this is the one place a missing trivy is reported.
+	if s.server != nil && s.server.Scanning.Enabled {
+		if _, err := exec.LookPath(s.server.Scanning.Trivy); err != nil {
+			return fmt.Errorf("scanning.trivy: %q not found: %w", s.server.Scanning.Trivy, err)
+		}
+	}
 	if s.manifests == nil {
 		return nil
 	}
