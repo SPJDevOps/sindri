@@ -141,6 +141,29 @@ Read these before upgrading a server that other people depend on.
   holds a NUL byte or invalid UTF-8 is a 400 (SIN-63), as a bad provenance header already
   was.
 
+## Behaviour changes in 1.2
+
+1.2 adds no migration and changes no setting, so upgrading from 1.1.1 means replacing the
+image or binary and nothing else. It adds the Helm chart
+([ADR 28](adr/0028-helm-chart-location-and-publishing.md)), the `sindri_queue_jobs`
+metric, and a `token:` form for upstream credentials
+([ADR 27](adr/0027-upstream-credentials-may-be-a-bearer-token.md)). Four things behave
+differently:
+
+- **A large `n` on an OCI tags list is capped, not refused.** Above 200 it was a 400. It
+  is now treated as 200, and the response carries a `Link` header for the next page, as
+  Distribution does. A zero or negative `n` is still refused, and the management API's
+  page limit is unchanged (SIN-79).
+- **OCI manifest reads honour every `Accept` line.** Only the first line was read, so a
+  Docker daemon, which sends one line per media type, could get a 404 through a proxy of
+  a Distribution registry (SIN-78).
+- **A PyPI proxy resolves relative file links against the project page,** as PEP 503
+  says, not against the upstream's base. This is what makes a devpi upstream work. The
+  cached copy of an index page now stores its links absolute (SIN-77).
+- **An OCI proxy refuses a `token:` credential.** Configuration validation rejects one,
+  and none is sent on an OCI request. `token:` is new in 1.2, so no existing
+  configuration is affected (SIN-53).
+
 ## Rolling back
 
 Every migration stays backward compatible for one release, so the previous
