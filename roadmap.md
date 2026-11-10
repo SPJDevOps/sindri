@@ -1115,7 +1115,10 @@ severity. This is what the announcement claims. M11 was split in two by
 - [x] A release image variant that includes Trivy, tagged `-trivy`; the default image and
   the binary stay dependency-free (SIN-36)
 - [ ] A docs page on enabling scanning that states its limits: off by default, hosted
-  publishes only, and what each protocol's scan covers (SIN-72)
+  publishes only, and what each protocol's scan covers. It also covers air-gapped installs:
+  mirroring the Trivy and Java databases, pointing `dbRepository` and `javaDbRepository` at the
+  mirror, keeping it fresh, and pre-seeding the cache instead. The gate script runs the mirror
+  example (SIN-72)
 - [ ] `pitch.md`'s open-core table updated to the line ADR 23 draws
 
 **Out of scope.** Everything in M11b. Per-CVE waivers, licence policy, org-wide rules, and
@@ -1135,7 +1138,9 @@ make ci && make test-integration
 make up && make build && ./scripts/m11-scan-gate.sh
 # push an image with a known-vulnerable package: an sbom and a scan appear as evidence;
 # promotion to a stage gated on max_severity high is refused with the CVE named;
-# the same for a wheel and an npm tarball
+# the same for a wheel and an npm tarball;
+# with the Trivy and Java databases mirrored to a local registry and no route to the public
+# ones, a scan still succeeds (the scanning page's air-gapped example)
 ```
 
 ---
