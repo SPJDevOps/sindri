@@ -3,6 +3,7 @@ package scan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -63,8 +64,22 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		return nil, fmt.Errorf("creating staging directory: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(root) }()
+	// Trivy is given absolute paths whatever TempDir looked like.
+	if root, err = filepath.Abs(root); err != nil {
+		return nil, fmt.Errorf("resolving staging directory: %w", err)
+	}
 
 	targets, err := s.stage(ctx, root, kind, digest)
+	if errors.Is(err, errTooManyPlatforms) || errors.Is(err, errNoPlatforms) {
+		// Partial or empty scans are never attached, so a severity gate
+		// refuses the subject (fail closed). Retrying would not change it.
+		reason := "no scannable platforms"
+		if errors.Is(err, errTooManyPlatforms) {
+			reason = "too many platforms"
+		}
+		s.logger.Warn("scan skipped", "job", job.ID, "subject", digest.String(), "reason", reason)
+		return json.RawMessage(`{"skipped":"` + reason + `"}`), nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("staging %s: %w", digest, err)
 	}

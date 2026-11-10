@@ -28,6 +28,23 @@ const (
 
 	// maxManifestBytes bounds a manifest or index read into memory.
 	maxManifestBytes = 8 << 20
+
+	// maxArchiveEntries caps the entries of an archive: files, directories
+	// and skipped entries alike.
+	maxArchiveEntries = 100000
+	// entryCharge is charged against MaxUnpackedBytes for every entry, so
+	// an archive of empty files cannot exhaust inodes for free.
+	entryCharge = 512
+	// maxPlatforms caps the distinct scannable children of one index.
+	maxPlatforms = 64
+)
+
+var (
+	// errTooManyPlatforms means an index lists more distinct scannable
+	// children than maxPlatforms. The job attaches nothing.
+	errTooManyPlatforms = errors.New("index has too many platforms")
+	// errNoPlatforms means an index has no scannable child.
+	errNoPlatforms = errors.New("index has no scannable platforms")
 )
 
 // target is one thing Trivy is pointed at.
@@ -122,6 +139,11 @@ func (s *Scanner) stageManifest(ctx context.Context, dir string, digest model.Di
 	}
 	descs := append([]ocispec.Descriptor{manifest.Config}, manifest.Layers...)
 	for _, d := range descs {
+		if d.Size < 0 {
+			return fmt.Errorf("manifest %s: descriptor %s has negative size %d", digest, d.Digest, d.Size)
+		}
+	}
+	for _, d := range descs {
 		dd, err := model.ParseDigest(d.Digest.String())
 		if err != nil {
 			return fmt.Errorf("manifest %s: descriptor digest: %w", digest, err)
@@ -170,29 +192,47 @@ func (s *Scanner) stageIndex(ctx context.Context, root string, digest model.Dige
 	if _, err := s.readJSON(ctx, digest, &index); err != nil {
 		return nil, err
 	}
-	var targets []target
-	for i, child := range index.Manifests {
-		if child.Annotations[annotationReferenceType] == attestationManifest {
-			s.logger.Info("skipping attestation manifest in index", "index", digest.String(), "child", child.Digest.String())
+	type child struct {
+		digest   model.Digest
+		platform string
+	}
+	var children []child
+	seen := make(map[string]bool)
+	for _, c := range index.Manifests {
+		if c.Annotations[annotationReferenceType] == attestationManifest {
+			s.logger.Info("skipping attestation manifest in index", "index", digest.String(), "child", c.Digest.String())
 			continue
 		}
-		if child.MediaType != ocispec.MediaTypeImageManifest && child.MediaType != mediaTypeDockerManifest {
+		if c.MediaType != ocispec.MediaTypeImageManifest && c.MediaType != mediaTypeDockerManifest {
 			s.logger.Info("skipping index child that is not an image manifest",
-				"index", digest.String(), "child", child.Digest.String(), "media_type", child.MediaType)
+				"index", digest.String(), "child", c.Digest.String(), "media_type", c.MediaType)
 			continue
 		}
-		cd, err := model.ParseDigest(child.Digest.String())
+		cd, err := model.ParseDigest(c.Digest.String())
 		if err != nil {
 			return nil, fmt.Errorf("index %s: child digest: %w", digest, err)
 		}
-		dir := filepath.Join(root, "image-"+strconv.Itoa(i))
-		if err := s.stageManifest(ctx, dir, cd); err != nil {
-			return nil, fmt.Errorf("staging child %s of index %s: %w", cd, digest, err)
+		// A digest listed twice is staged once, under the first platform.
+		if seen[cd.String()] {
+			continue
 		}
-		targets = append(targets, target{dir: dir, coverage: "image", platform: platformString(child.Platform)})
+		seen[cd.String()] = true
+		children = append(children, child{cd, platformString(c.Platform)})
 	}
-	if len(targets) == 0 {
-		return nil, fmt.Errorf("index %s has no image manifests to scan: %w", digest, ErrUnsupportedKind)
+	// Count before staging anything: an over-large index costs no disk.
+	if len(children) == 0 {
+		return nil, fmt.Errorf("index %s: %w", digest, errNoPlatforms)
+	}
+	if len(children) > maxPlatforms {
+		return nil, fmt.Errorf("index %s: %d distinct children, more than %d: %w", digest, len(children), maxPlatforms, errTooManyPlatforms)
+	}
+	var targets []target
+	for i, c := range children {
+		dir := filepath.Join(root, "image-"+strconv.Itoa(i))
+		if err := s.stageManifest(ctx, dir, c.digest); err != nil {
+			return nil, fmt.Errorf("staging child %s of index %s: %w", c.digest, digest, err)
+		}
+		targets = append(targets, target{dir: dir, coverage: "image", platform: c.platform})
 	}
 	return targets, nil
 }
@@ -228,18 +268,35 @@ func (s *Scanner) stageArchive(ctx context.Context, dir string, digest model.Dig
 	magic = magic[:n]
 	body := io.MultiReader(bytes.NewReader(magic), rc)
 
-	budget := &unpackBudget{remaining: s.opts.MaxUnpackedBytes}
+	budget := &unpackBudget{remaining: s.opts.MaxUnpackedBytes, entriesLeft: s.maxEntries}
 	switch {
 	case bytes.HasPrefix(magic, []byte("PK\x03\x04")):
-		return unpackZip(dir, body, budget)
+		return unpackZip(ctx, dir, body, budget)
 	case bytes.HasPrefix(magic, []byte{0x1f, 0x8b}):
-		return unpackTarGz(dir, body, budget)
+		return unpackTarGz(ctx, dir, body, budget)
 	}
 	return fmt.Errorf("archive %s is neither zip nor gzip: %w", digest, ErrUnsupportedKind)
 }
 
-// unpackBudget counts bytes actually written.
-type unpackBudget struct{ remaining int64 }
+// unpackBudget counts bytes actually written and entries seen.
+type unpackBudget struct {
+	remaining   int64
+	entriesLeft int
+}
+
+// entry charges one archive entry, skipped or not, and stops early when the
+// job is cancelled.
+func (b *unpackBudget) entry(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("unpacking archive: %w", err)
+	}
+	b.entriesLeft--
+	b.remaining -= entryCharge
+	if b.entriesLeft < 0 || b.remaining < 0 {
+		return ErrArchiveTooLarge
+	}
+	return nil
+}
 
 // copyFile writes r to path within the budget, with mode 0o600.
 func (b *unpackBudget) copyFile(path string, r io.Reader) error {
@@ -273,7 +330,7 @@ func safeJoin(dir, name string) (string, error) {
 	return filepath.Join(dir, filepath.FromSlash(name)), nil
 }
 
-func unpackTarGz(dir string, r io.Reader, budget *unpackBudget) error {
+func unpackTarGz(ctx context.Context, dir string, r io.Reader, budget *unpackBudget) error {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("opening gzip stream: %w", err)
@@ -287,6 +344,9 @@ func unpackTarGz(dir string, r io.Reader, budget *unpackBudget) error {
 		}
 		if err != nil {
 			return fmt.Errorf("reading tar: %w", err)
+		}
+		if err := budget.entry(ctx); err != nil {
+			return err
 		}
 		// Links, devices and the like are not needed to scan and are never
 		// created, so nothing unpacked can point outside dir.
@@ -312,7 +372,7 @@ func unpackTarGz(dir string, r io.Reader, budget *unpackBudget) error {
 // unpackZip needs random access, so the archive is spooled to a file beside
 // the destination first. The spool is bounded by the stored blob, and the
 // unpacked bytes are bounded by the budget.
-func unpackZip(dir string, r io.Reader, budget *unpackBudget) error {
+func unpackZip(ctx context.Context, dir string, r io.Reader, budget *unpackBudget) error {
 	spool, err := os.CreateTemp(filepath.Dir(dir), "spool-*.zip")
 	if err != nil {
 		return fmt.Errorf("spooling archive: %w", err)
@@ -330,6 +390,9 @@ func unpackZip(dir string, r io.Reader, budget *unpackBudget) error {
 		return fmt.Errorf("opening zip: %w", err)
 	}
 	for _, zf := range zr.File {
+		if err := budget.entry(ctx); err != nil {
+			return err
+		}
 		mode := zf.Mode()
 		if !mode.IsRegular() && !mode.IsDir() {
 			continue

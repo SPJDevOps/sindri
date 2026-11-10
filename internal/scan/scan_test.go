@@ -4,15 +4,18 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"hash/crc32"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -74,11 +77,14 @@ func (f *fixture) scanner(opts Options) *Scanner {
 }
 
 // image stores a config, one layer and a manifest, returning the manifest digest.
-func (f *fixture) image(mediaType string) model.Digest {
+func (f *fixture) image(mediaType string) model.Digest { return f.imageN(mediaType, 0) }
+
+// imageN is image with a layer that differs per n, so digests differ.
+func (f *fixture) imageN(mediaType string, n int) model.Digest {
 	f.t.Helper()
 	cfgBytes := []byte(`{"architecture":"amd64","os":"linux"}`)
 	cfg := f.put(cfgBytes)
-	layerBytes := []byte("layer bytes for " + mediaType)
+	layerBytes := []byte("layer bytes for " + mediaType + strconv.Itoa(n))
 	layer := f.put(layerBytes)
 	m := ocispec.Manifest{
 		MediaType: mediaType,
@@ -352,7 +358,7 @@ func TestReport_CountsSeverities(t *testing.T) {
 	}{
 		{"no results", `{"SchemaVersion":2}`, map[string]int{"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0}},
 		{"mixed with unrecognised severity",
-			`{"Results":[{"Vulnerabilities":[{"Severity":"CRITICAL"},{"Severity":"HIGH"},{"Severity":"HIGH"}]},{"Vulnerabilities":[{"Severity":"LOW"},{"Severity":"BOGUS"},{"Severity":"UNKNOWN"}]},{"Target":"no vulns"}]}`,
+			`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[{"Severity":"CRITICAL"},{"Severity":"HIGH"},{"Severity":"HIGH"}]},{"Vulnerabilities":[{"Severity":"LOW"},{"Severity":"BOGUS"},{"Severity":"UNKNOWN"}]},{"Target":"no vulns"}]}`,
 			map[string]int{"CRITICAL": 1, "HIGH": 2, "MEDIUM": 0, "LOW": 1, "UNKNOWN": 2}},
 	}
 	for _, tc := range cases {
@@ -530,7 +536,268 @@ func TestRun_PassesMirrorAndSkipUpdateFlags(t *testing.T) {
 			t.Errorf("image args %q lack %q", image, want)
 		}
 	}
+	if !strings.Contains(string(readFile(t, argsFile)), "--version --format json --cache-dir /cache") {
+		t.Errorf("version probe lacks --cache-dir: %s", readFile(t, argsFile))
+	}
 	if !strings.Contains(convert, "--format cyclonedx") {
 		t.Errorf("convert args = %q", convert)
+	}
+}
+
+func TestReport_NonReportsAreErrorsNotZeroCounts(t *testing.T) {
+	for name, doc := range map[string]string{
+		"empty object":    `{}`,
+		"null":            `null`,
+		"array":           `[]`,
+		"old schema":      `{"SchemaVersion":1}`,
+		"trailing junk":   `{"SchemaVersion":2} garbage`,
+		"second document": `{"SchemaVersion":2}{"SchemaVersion":2}`,
+		"empty input":     ``,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := countSeverities(strings.NewReader(doc)); err == nil {
+				t.Fatalf("countSeverities = %v, want an error", got)
+			}
+		})
+	}
+	if _, err := countSeverities(strings.NewReader(`{"SchemaVersion":2}`)); err != nil {
+		t.Errorf("a schema 2 report without Results was refused: %v", err)
+	}
+}
+
+func TestStage_ArchiveWithTooManyEntriesIsRefused(t *testing.T) {
+	var hdrs []tar.Header
+	for i := 0; i < 5; i++ {
+		hdrs = append(hdrs, tar.Header{Name: "d" + strconv.Itoa(i), Typeflag: tar.TypeDir, Mode: 0o755})
+	}
+	hdrs = append(hdrs, tar.Header{Name: "l", Typeflag: tar.TypeSymlink, Linkname: "x"})
+	f := newFixture(t)
+	digest := f.put(tarGz(t, hdrs, nil))
+	s := f.scanner(Options{MaxUnpackedBytes: 1 << 30})
+	s.maxEntries = 4
+	_, err := s.stage(t.Context(), t.TempDir(), model.SubjectKindNPMTarball, digest)
+	if !errors.Is(err, ErrArchiveTooLarge) {
+		t.Fatalf("stage error = %v, want ErrArchiveTooLarge", err)
+	}
+}
+
+func TestStage_EmptyFilesAreChargedPerEntry(t *testing.T) {
+	var hdrs []tar.Header
+	for i := 0; i < 10; i++ {
+		hdrs = append(hdrs, tar.Header{Name: "f" + strconv.Itoa(i), Typeflag: tar.TypeReg, Mode: 0o644})
+	}
+	f := newFixture(t)
+	digest := f.put(tarGz(t, hdrs, nil))
+	_, err := f.scanner(Options{MaxUnpackedBytes: 1000}).stage(t.Context(), t.TempDir(), model.SubjectKindNPMTarball, digest)
+	if !errors.Is(err, ErrArchiveTooLarge) {
+		t.Fatalf("stage error = %v, want ErrArchiveTooLarge", err)
+	}
+}
+
+func TestStage_CancelledContextStopsUnpacking(t *testing.T) {
+	f := newFixture(t)
+	digest := f.put(zipOf(t, map[string]string{"a": "x"}))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := f.scanner(Options{MaxUnpackedBytes: 1 << 20}).stage(ctx, t.TempDir(), model.SubjectKindPyPIDist, digest)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("stage error = %v, want context.Canceled", err)
+	}
+}
+
+func TestStage_ZipTraversalIsRefused(t *testing.T) {
+	for _, name := range []string{"../x", "/abs"} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			digest := f.put(zipOf(t, map[string]string{name: "x"}))
+			_, err := f.scanner(Options{MaxUnpackedBytes: 1 << 20}).stage(t.Context(), t.TempDir(), model.SubjectKindPyPIDist, digest)
+			if !errors.Is(err, ErrUnsafePath) {
+				t.Fatalf("stage error = %v, want ErrUnsafePath", err)
+			}
+		})
+	}
+}
+
+func TestStage_ZipSymlinksAreSkipped(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	h := &zip.FileHeader{Name: "link"}
+	h.SetMode(os.ModeSymlink | 0o777)
+	w, err := zw.CreateHeader(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write([]byte("/etc/passwd"))
+	w, _ = zw.Create("real")
+	_, _ = w.Write([]byte("ok"))
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t)
+	targets, err := f.scanner(Options{MaxUnpackedBytes: 1 << 20}).stage(t.Context(), t.TempDir(), model.SubjectKindPyPIDist, f.put(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(targets[0].dir, "link")); !os.IsNotExist(err) {
+		t.Errorf("symlink was created (err %v)", err)
+	}
+	if string(readFile(t, filepath.Join(targets[0].dir, "real"))) != "ok" {
+		t.Error("regular file missing")
+	}
+}
+
+// A zip header can claim a small size for data that inflates to far more; the
+// cap counts the bytes actually written.
+func TestStage_ZipUnderstatedSizeIsStillCapped(t *testing.T) {
+	data := []byte(strings.Repeat("a", 1<<16))
+	var comp bytes.Buffer
+	fw, _ := flate.NewWriter(&comp, flate.BestSpeed)
+	_, _ = fw.Write(data)
+	_ = fw.Close()
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateRaw(&zip.FileHeader{
+		Name: "big", Method: zip.Deflate, CRC32: crc32.ChecksumIEEE(data),
+		CompressedSize64: uint64(comp.Len()), UncompressedSize64: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write(comp.Bytes())
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t)
+	_, err = f.scanner(Options{MaxUnpackedBytes: 2000}).stage(t.Context(), t.TempDir(), model.SubjectKindPyPIDist, f.put(buf.Bytes()))
+	if err == nil {
+		t.Fatal("stage accepted an archive that unpacks past the cap")
+	}
+	t.Logf("error: %v", err)
+}
+
+func (f *fixture) index(children ...ocispec.Descriptor) model.Digest {
+	f.t.Helper()
+	raw, err := json.Marshal(ocispec.Index{Manifests: children})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return f.put(raw)
+}
+
+func TestStage_IndexListingOneChildRepeatedlyStagesItOnce(t *testing.T) {
+	f := newFixture(t)
+	child := f.image(ocispec.MediaTypeImageManifest)
+	var descs []ocispec.Descriptor
+	for i := 0; i < 100; i++ {
+		descs = append(descs, ocispec.Descriptor{
+			MediaType: ocispec.MediaTypeImageManifest, Digest: godigest.Digest(child.String()),
+			Platform: &ocispec.Platform{OS: "linux", Architecture: "amd" + strconv.Itoa(i)},
+		})
+	}
+	targets, err := f.scanner(Options{}).stage(t.Context(), t.TempDir(), model.SubjectKindOCIIndex, f.index(descs...))
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if len(targets) != 1 || targets[0].platform != "linux/amd0" {
+		t.Fatalf("targets = %+v, want one with the first platform", targets)
+	}
+}
+
+func TestRun_IndexWithTooManyPlatformsIsSkippedWithNoEvidence(t *testing.T) {
+	f := newFixture(t)
+	var descs []ocispec.Descriptor
+	for i := 0; i < maxPlatforms+1; i++ {
+		d := f.imageN(ocispec.MediaTypeImageManifest, i)
+		descs = append(descs, ocispec.Descriptor{MediaType: ocispec.MediaTypeImageManifest, Digest: godigest.Digest(d.String())})
+	}
+	res, err := f.scanner(Options{Trivy: "/nonexistent"}).Handle(t.Context(), f.job(f.index(descs...), "oci-index"))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if string(res) != `{"skipped":"too many platforms"}` || len(f.ev.attached) != 0 {
+		t.Fatalf("result = %s, attached = %d", res, len(f.ev.attached))
+	}
+}
+
+func TestRun_IndexWithNoScannablePlatformsIsSkippedWithNoEvidence(t *testing.T) {
+	f := newFixture(t)
+	idx := f.index(ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest, Digest: godigest.Digest(f.image(ocispec.MediaTypeImageManifest).String()),
+		Annotations: map[string]string{annotationReferenceType: attestationManifest},
+	})
+	res, err := f.scanner(Options{Trivy: "/nonexistent"}).Handle(t.Context(), f.job(idx, "oci-index"))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if string(res) != `{"skipped":"no scannable platforms"}` || len(f.ev.attached) != 0 {
+		t.Fatalf("result = %s, attached = %d", res, len(f.ev.attached))
+	}
+}
+
+func TestStage_NegativeDescriptorSizeIsRefused(t *testing.T) {
+	f := newFixture(t)
+	cfg := f.put([]byte(`{}`))
+	raw, _ := json.Marshal(ocispec.Manifest{Config: ocispec.Descriptor{Digest: godigest.Digest(cfg.String()), Size: -1}})
+	_, err := f.scanner(Options{}).stage(t.Context(), t.TempDir(), model.SubjectKindOCIManifest, f.put(raw))
+	if err == nil || !strings.Contains(err.Error(), "negative size") {
+		t.Fatalf("stage error = %v, want negative size", err)
+	}
+}
+
+func TestRun_StagingDirectoryIsRemovedOnFailure(t *testing.T) {
+	t.Run("trivy failure", func(t *testing.T) {
+		t.Setenv("TRIVY_STUB_FAIL", "1")
+		f := newFixture(t)
+		tmp := t.TempDir()
+		_, err := f.scanner(Options{Trivy: stubPath(t), TempDir: tmp}).Handle(t.Context(), f.job(f.image(ocispec.MediaTypeImageManifest), "oci-manifest"))
+		if err == nil {
+			t.Fatal("Handle succeeded")
+		}
+		if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
+			t.Errorf("%d staging entries left", len(entries))
+		}
+	})
+	t.Run("archive too large", func(t *testing.T) {
+		f := newFixture(t)
+		tmp := t.TempDir()
+		digest := f.put(zipOf(t, map[string]string{"big": strings.Repeat("a", 4096)}))
+		_, err := f.scanner(Options{Trivy: "/nonexistent", TempDir: tmp, MaxUnpackedBytes: 1000}).Handle(t.Context(), f.job(digest, "pypi-dist"))
+		if !errors.Is(err, ErrArchiveTooLarge) {
+			t.Fatalf("Handle error = %v, want ErrArchiveTooLarge", err)
+		}
+		if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
+			t.Errorf("%d staging entries left", len(entries))
+		}
+	})
+}
+
+func TestRun_DatabaseTimestampIsReadForEveryJob(t *testing.T) {
+	f := newFixture(t)
+	stub := stubPath(t)
+	// A wrapper that reports a different DB time on each version probe.
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "n")
+	wrapper := filepath.Join(dir, "trivy")
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then\n n=$(cat " + counter + " 2>/dev/null || echo 0); n=$((n+1)); echo $n >" + counter +
+		"\n echo \"{\\\"Version\\\":\\\"0.58.1\\\",\\\"VulnerabilityDB\\\":{\\\"UpdatedAt\\\":\\\"probe-$n\\\"}}\"\n exit 0\nfi\nexec " + stub + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := f.scanner(Options{Trivy: wrapper, CacheDir: dir})
+	digest := f.image(ocispec.MediaTypeImageManifest)
+	for i := 0; i < 2; i++ {
+		if _, err := s.Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
+			t.Fatalf("Handle: %v", err)
+		}
+	}
+	var got []string
+	for _, a := range f.ev.attached {
+		var m evidenceMetadata
+		_ = json.Unmarshal(a.params.Metadata, &m)
+		got = append(got, m.DBUpdatedAt)
+	}
+	if strings.Join(got, ",") != "probe-1,probe-1,probe-2,probe-2" {
+		t.Fatalf("db_updated_at = %v", got)
 	}
 }

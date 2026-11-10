@@ -8,10 +8,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // stderrTail is how much of Trivy's stderr an error message keeps.
 const stderrTail = 4 << 10
+
+const (
+	// versionTimeout bounds the version probe.
+	versionTimeout = 30 * time.Second
+	// waitDelay bounds how long Wait lingers on I/O after Trivy is killed.
+	waitDelay = 10 * time.Second
+)
 
 // trivyVersion is what `trivy --version --format json` reports.
 type trivyVersion struct {
@@ -37,6 +45,7 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 func (s *Scanner) run(ctx context.Context, args ...string) ([]byte, error) {
 	// #nosec G204 -- the executable is the operator's configured trivy path; the arguments are fixed flags and paths of directories this process created.
 	cmd := exec.CommandContext(ctx, s.opts.Trivy, args...)
+	cmd.WaitDelay = waitDelay
 	var stdout bytes.Buffer
 	var stderr tailBuffer
 	cmd.Stdout = &stdout
@@ -47,23 +56,31 @@ func (s *Scanner) run(ctx context.Context, args ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-// versionInfo reports the scanner version and vulnerability database time,
-// asking Trivy once. A failure leaves both empty and does not fail a scan.
+// versionInfo reports the scanner version and the vulnerability database
+// time by asking Trivy, for every job: the database timestamp is part of the
+// scan's point-in-time claim, so it is never cached. Only the version is
+// remembered, as a fallback when a later probe fails. A failed probe leaves
+// the fields empty and does not fail the scan; the next job probes again.
 func (s *Scanner) versionInfo(ctx context.Context) trivyVersion {
-	s.versionOnce.Do(func() {
-		out, err := s.run(ctx, "--version", "--format", "json")
-		if err != nil {
-			s.logger.Warn("could not read trivy version", "error", err)
-			return
-		}
-		var v trivyVersion
-		if err := json.Unmarshal(out, &v); err != nil {
-			s.logger.Warn("could not decode trivy version", "error", err)
-			return
-		}
-		s.version = v
-	})
-	return s.version
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), versionTimeout)
+	defer cancel()
+	args := []string{"--version", "--format", "json"}
+	if s.opts.CacheDir != "" {
+		args = append(args, "--cache-dir", s.opts.CacheDir)
+	}
+	var v trivyVersion
+	out, err := s.run(probeCtx, args...)
+	if err == nil {
+		err = json.Unmarshal(out, &v)
+	}
+	s.versionMu.Lock()
+	defer s.versionMu.Unlock()
+	if err != nil {
+		s.logger.Warn("could not read trivy version", "error", err)
+		return trivyVersion{Version: s.scannerVersion}
+	}
+	s.scannerVersion = v.Version
+	return v
 }
 
 // scanTarget runs Trivy on t and writes report.json and sbom.cdx.json into

@@ -81,8 +81,13 @@ type Scanner struct {
 	opts   Options
 	logger *slog.Logger
 
-	versionOnce sync.Once
-	version     trivyVersion
+	// maxEntries caps archive entries; a field so tests can lower it.
+	maxEntries int
+
+	versionMu sync.Mutex
+	// scannerVersion is the last Trivy version successfully read. The
+	// database timestamp is never cached: it is read for every job.
+	scannerVersion string
 }
 
 // New returns a Scanner reading subject bytes from store and attaching
@@ -91,5 +96,5 @@ func New(store *cas.Store, ev attacher, opts Options, logger *slog.Logger) *Scan
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Scanner{store: store, ev: ev, opts: opts, logger: logger}
+	return &Scanner{store: store, ev: ev, opts: opts, logger: logger, maxEntries: maxArchiveEntries}
 }
