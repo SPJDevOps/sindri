@@ -27,7 +27,12 @@ satisfied by anyone who can publish.
   It claims nothing about what is not in the layers.
 - `oci-index`: each child image manifest is scanned the same way, and the index subject
   gets one `sbom` and `scan` pair per platform, with `platform` in the metadata. Children
-  pushed on their own are subjects too and have their own scans.
+  pushed on their own are subjects too and have their own scans. Only a BuildKit
+  attestation (annotated as one and with platform `unknown/unknown`) is skipped; the label
+  alone proves nothing. A nested index or a child of unknown media type fails the whole job
+  with no evidence, as does any blob the publishing repository does not hold (the job names
+  that repository, and the scanner checks placement before reading each blob). Shared layers
+  are staged once per job and hard-linked into each platform's layout.
 - `pypi-dist` (wheel or sdist) and `npm-tarball`: the worker unpacks the archive into a
   temp directory, with a size cap and path traversal refused, and runs `trivy rootfs`. The
   evidence claims the package's own name and version, and anything pinned inside the

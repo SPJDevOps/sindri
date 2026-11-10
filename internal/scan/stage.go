@@ -14,10 +14,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	godigest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
+	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/model"
 )
 
@@ -47,6 +49,114 @@ var (
 	errNoPlatforms = errors.New("index has no scannable platforms")
 )
 
+// notInRepositoryError means a blob the scan needs is not linked to the
+// publishing repository. Reading it would serve another tenant's bytes by
+// digest alone (invariant I2), so the job attaches nothing.
+type notInRepositoryError struct{ digest model.Digest }
+
+func (e *notInRepositoryError) Error() string {
+	return fmt.Sprintf("blob %s is not in the publishing repository", e.digest)
+}
+
+// unsupportedChildError means an index lists a child the scanner cannot
+// stage (a nested index or an unknown media type). Scanning the others would
+// let an attacker hide the vulnerable part behind the unsupported one, so the
+// job attaches nothing.
+type unsupportedChildError struct {
+	digest    model.Digest
+	mediaType string
+}
+
+func (e *unsupportedChildError) Error() string {
+	return fmt.Sprintf("index child %s has unsupported media type %q", e.digest, e.mediaType)
+}
+
+// placementChecker is the part of *db.Queries the scanner uses to enforce
+// invariant I2 on what it reads.
+type placementChecker interface {
+	CheckPlacement(ctx context.Context, arg db.CheckPlacementParams) (bool, error)
+}
+
+// jobStage is the state of staging one job: the repository whose blobs may be
+// read and the blobs already written to the shared directory. Every distinct
+// blob is fetched and written once; each image layout links to it.
+type jobStage struct {
+	s      *Scanner
+	repo   string
+	shared string
+	sizes  map[string]int64
+}
+
+func (s *Scanner) newJobStage(repo, root string) (*jobStage, error) {
+	shared := filepath.Join(root, "blobs", "sha256")
+	if err := os.MkdirAll(shared, 0o700); err != nil {
+		return nil, fmt.Errorf("creating shared blob directory: %w", err)
+	}
+	return &jobStage{s: s, repo: repo, shared: shared, sizes: make(map[string]int64)}, nil
+}
+
+// open reads digest from the store after checking that the publishing
+// repository holds it.
+func (j *jobStage) open(ctx context.Context, digest model.Digest) (io.ReadCloser, error) {
+	placed, err := j.s.placement.CheckPlacement(ctx, db.CheckPlacementParams{RepoName: j.repo, Digest: digest.String()})
+	if err != nil {
+		return nil, fmt.Errorf("checking placement of %s: %w", digest, err)
+	}
+	if !placed {
+		return nil, &notInRepositoryError{digest}
+	}
+	rc, err := j.s.store.Get(ctx, digest)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", digest, err)
+	}
+	return rc, nil
+}
+
+// ensure writes digest to the shared directory unless an earlier call did.
+// r supplies the bytes when they are already in hand; nil reads the store.
+func (j *jobStage) ensure(ctx context.Context, digest model.Digest, r io.Reader, want int64) error {
+	if got, ok := j.sizes[digest.Hex()]; ok {
+		if got != want {
+			return fmt.Errorf("blob %s is %d bytes, descriptor says %d", digest, got, want)
+		}
+		return nil
+	}
+	if r == nil {
+		rc, err := j.open(ctx, digest)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rc.Close() }()
+		r = rc
+	}
+	if err := writeBlob(j.shared, digest, r, want); err != nil {
+		return err
+	}
+	j.sizes[digest.Hex()] = want
+	return nil
+}
+
+// link gives an image layout its copy of a shared blob: a hard link, or a
+// copy when the layout is on another device.
+func (j *jobStage) link(blobDir string, digest model.Digest) error {
+	src := filepath.Join(j.shared, digest.Hex())
+	dst := filepath.Join(blobDir, digest.Hex())
+	err := os.Link(src, dst)
+	if err == nil || errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if !errors.Is(err, syscall.EXDEV) {
+		return fmt.Errorf("linking blob %s: %w", digest, err)
+	}
+	// #nosec G304 -- src is in this process's staging directory and the name is a validated digest hex.
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("opening blob %s: %w", digest, err)
+	}
+	defer func() { _ = in.Close() }()
+	return writeBlob(blobDir, digest, in, j.sizes[digest.Hex()])
+}
+
 // target is one thing Trivy is pointed at.
 type target struct {
 	// dir is an OCI image layout (image) or an unpacked tree (package).
@@ -58,19 +168,24 @@ type target struct {
 }
 
 // stage writes the subject's bytes under root and returns what to scan.
-func (s *Scanner) stage(ctx context.Context, root string, kind model.SubjectKind, digest model.Digest) ([]target, error) {
+// Every blob it reads must be linked to repo, the publishing repository.
+func (s *Scanner) stage(ctx context.Context, repo, root string, kind model.SubjectKind, digest model.Digest) ([]target, error) {
+	js, err := s.newJobStage(repo, root)
+	if err != nil {
+		return nil, err
+	}
 	switch kind {
 	case model.SubjectKindOCIManifest:
 		dir := filepath.Join(root, "image")
-		if err := s.stageManifest(ctx, dir, digest); err != nil {
+		if err := js.stageManifest(ctx, dir, digest); err != nil {
 			return nil, err
 		}
 		return []target{{dir: dir, coverage: "image"}}, nil
 	case model.SubjectKindOCIIndex:
-		return s.stageIndex(ctx, root, digest)
+		return js.stageIndex(ctx, root, digest)
 	case model.SubjectKindPyPIDist, model.SubjectKindNPMTarball:
 		dir := filepath.Join(root, "package")
-		if err := s.stageArchive(ctx, dir, digest); err != nil {
+		if err := js.stageArchive(ctx, dir, digest); err != nil {
 			return nil, err
 		}
 		return []target{{dir: dir, coverage: "package"}}, nil
@@ -80,10 +195,10 @@ func (s *Scanner) stage(ctx context.Context, root string, kind model.SubjectKind
 	return nil, fmt.Errorf("staging %s of kind %q: %w", digest, kind, ErrUnsupportedKind)
 }
 
-func (s *Scanner) readJSON(ctx context.Context, digest model.Digest, v any) ([]byte, error) {
-	rc, err := s.store.Get(ctx, digest)
+func (j *jobStage) readJSON(ctx context.Context, digest model.Digest, v any) ([]byte, error) {
+	rc, err := j.open(ctx, digest)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", digest, err)
+		return nil, err
 	}
 	defer func() { _ = rc.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(rc, maxManifestBytes+1))
@@ -100,9 +215,9 @@ func (s *Scanner) readJSON(ctx context.Context, digest model.Digest, v any) ([]b
 }
 
 // stageManifest writes an OCI image layout for the image manifest at digest.
-func (s *Scanner) stageManifest(ctx context.Context, dir string, digest model.Digest) error {
+func (j *jobStage) stageManifest(ctx context.Context, dir string, digest model.Digest) error {
 	var manifest ocispec.Manifest
-	raw, err := s.readJSON(ctx, digest, &manifest)
+	raw, err := j.readJSON(ctx, digest, &manifest)
 	if err != nil {
 		return err
 	}
@@ -134,7 +249,10 @@ func (s *Scanner) stageManifest(ctx context.Context, dir string, digest model.Di
 		return fmt.Errorf("writing index.json: %w", err)
 	}
 
-	if err := writeBlob(blobDir, digest, bytes.NewReader(raw), int64(len(raw))); err != nil {
+	if err := j.ensure(ctx, digest, bytes.NewReader(raw), int64(len(raw))); err != nil {
+		return err
+	}
+	if err := j.link(blobDir, digest); err != nil {
 		return err
 	}
 	descs := append([]ocispec.Descriptor{manifest.Config}, manifest.Layers...)
@@ -148,13 +266,10 @@ func (s *Scanner) stageManifest(ctx context.Context, dir string, digest model.Di
 		if err != nil {
 			return fmt.Errorf("manifest %s: descriptor digest: %w", digest, err)
 		}
-		rc, err := s.store.Get(ctx, dd)
-		if err != nil {
-			return fmt.Errorf("reading blob %s of manifest %s: %w", dd, digest, err)
+		if err := j.ensure(ctx, dd, nil, d.Size); err != nil {
+			return fmt.Errorf("staging blob %s of manifest %s: %w", dd, digest, err)
 		}
-		err = writeBlob(blobDir, dd, rc, d.Size)
-		_ = rc.Close()
-		if err != nil {
+		if err := j.link(blobDir, dd); err != nil {
 			return err
 		}
 	}
@@ -186,10 +301,11 @@ func writeBlob(blobDir string, digest model.Digest, r io.Reader, want int64) err
 }
 
 // stageIndex stages every image child of an index, one layout per platform.
-// Attestation manifests, nested indexes and unknown children are skipped.
-func (s *Scanner) stageIndex(ctx context.Context, root string, digest model.Digest) ([]target, error) {
+// A BuildKit attestation (unknown/unknown platform) is skipped; a nested index
+// or any child that is not an image manifest fails the whole index.
+func (j *jobStage) stageIndex(ctx context.Context, root string, digest model.Digest) ([]target, error) {
 	var index ocispec.Index
-	if _, err := s.readJSON(ctx, digest, &index); err != nil {
+	if _, err := j.readJSON(ctx, digest, &index); err != nil {
 		return nil, err
 	}
 	type child struct {
@@ -199,18 +315,19 @@ func (s *Scanner) stageIndex(ctx context.Context, root string, digest model.Dige
 	var children []child
 	seen := make(map[string]bool)
 	for _, c := range index.Manifests {
-		if c.Annotations[annotationReferenceType] == attestationManifest {
-			s.logger.InfoContext(ctx, "skipping attestation manifest in index", "index", digest.String(), "child", c.Digest.String())
-			continue
-		}
-		if c.MediaType != ocispec.MediaTypeImageManifest && c.MediaType != mediaTypeDockerManifest {
-			s.logger.InfoContext(ctx, "skipping index child that is not an image manifest",
-				"index", digest.String(), "child", c.Digest.String(), "media_type", c.MediaType)
-			continue
-		}
 		cd, err := model.ParseDigest(c.Digest.String())
 		if err != nil {
 			return nil, fmt.Errorf("index %s: child digest: %w", digest, err)
+		}
+		if c.MediaType != ocispec.MediaTypeImageManifest && c.MediaType != mediaTypeDockerManifest {
+			return nil, &unsupportedChildError{digest: cd, mediaType: c.MediaType}
+		}
+		// The annotation alone proves nothing: a publisher can label a real
+		// platform as an attestation. Only BuildKit's unknown/unknown
+		// platform is skipped.
+		if c.Annotations[annotationReferenceType] == attestationManifest && isUnknownPlatform(c.Platform) {
+			j.s.logger.InfoContext(ctx, "skipping attestation manifest in index", "index", digest.String(), "child", cd.String())
+			continue
 		}
 		// A digest listed twice is staged once, under the first platform.
 		if seen[cd.String()] {
@@ -229,12 +346,16 @@ func (s *Scanner) stageIndex(ctx context.Context, root string, digest model.Dige
 	var targets []target
 	for i, c := range children {
 		dir := filepath.Join(root, "image-"+strconv.Itoa(i))
-		if err := s.stageManifest(ctx, dir, c.digest); err != nil {
+		if err := j.stageManifest(ctx, dir, c.digest); err != nil {
 			return nil, fmt.Errorf("staging child %s of index %s: %w", c.digest, digest, err)
 		}
 		targets = append(targets, target{dir: dir, coverage: "image", platform: c.platform})
 	}
 	return targets, nil
+}
+
+func isUnknownPlatform(p *ocispec.Platform) bool {
+	return p != nil && p.OS == "unknown" && p.Architecture == "unknown"
 }
 
 func platformString(p *ocispec.Platform) string {
@@ -250,13 +371,13 @@ func platformString(p *ocispec.Platform) string {
 
 // stageArchive unpacks the zip or gzipped tar at digest into dir. The kind is
 // decided by content, not by file name.
-func (s *Scanner) stageArchive(ctx context.Context, dir string, digest model.Digest) error {
+func (j *jobStage) stageArchive(ctx context.Context, dir string, digest model.Digest) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
-	rc, err := s.store.Get(ctx, digest)
+	rc, err := j.open(ctx, digest)
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", digest, err)
+		return err
 	}
 	defer func() { _ = rc.Close() }()
 
@@ -268,7 +389,7 @@ func (s *Scanner) stageArchive(ctx context.Context, dir string, digest model.Dig
 	magic = magic[:n]
 	body := io.MultiReader(bytes.NewReader(magic), rc)
 
-	budget := &unpackBudget{remaining: s.opts.MaxUnpackedBytes, entriesLeft: s.maxEntries}
+	budget := &unpackBudget{remaining: j.s.opts.MaxUnpackedBytes, entriesLeft: j.s.maxEntries}
 	switch {
 	case bytes.HasPrefix(magic, []byte("PK\x03\x04")):
 		return unpackZip(ctx, dir, body, budget)

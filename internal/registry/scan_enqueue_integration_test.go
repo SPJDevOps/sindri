@@ -119,13 +119,13 @@ func TestScanOnPublish_HostedPublishesEnqueueOneScanJob(t *testing.T) {
 			if len(got) != 1 {
 				t.Fatalf("jobs = %+v, want exactly one", got)
 			}
-			var args struct{ Digest, Kind string }
+			var args struct{ Digest, Kind, Repository string }
 			if err := json.Unmarshal([]byte(got[0].Args), &args); err != nil {
 				t.Fatalf("args %q: %v", got[0].Args, err)
 			}
 			if got[0].Kind != "scan" || got[0].DedupeKey != "scan:"+digest.String() ||
 				got[0].CreatedBy != "system:scanner" ||
-				args.Digest != digest.String() || args.Kind != string(tt.kind) {
+				args.Digest != digest.String() || args.Kind != string(tt.kind) || args.Repository == "" {
 				t.Fatalf("job = %+v args = %+v; want a scan of %s (%s)", got[0], args, digest, tt.kind)
 			}
 		})

@@ -43,10 +43,7 @@ type scanned struct {
 // Handle runs one scan job; it matches worker.Handler. Args are
 // {"digest": ..., "kind": ...}.
 func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, error) {
-	var args struct {
-		Digest string `json:"digest"`
-		Kind   string `json:"kind"`
-	}
+	var args scanjob.Args
 	if err := json.Unmarshal(job.Args, &args); err != nil {
 		return nil, fmt.Errorf("decoding scan job %d args: %w", job.ID, err)
 	}
@@ -76,7 +73,26 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		return nil, fmt.Errorf("resolving staging directory: %w", err)
 	}
 
-	targets, err := s.stage(ctx, root, kind, digest)
+	if args.Repository == "" {
+		// Enqueued before jobs named their repository: there is nothing to
+		// check placement against, so fail closed.
+		return s.skippedNotInRepository(ctx, job, digest)
+	}
+
+	targets, err := s.stage(ctx, args.Repository, root, kind, digest)
+	var notIn *notInRepositoryError
+	if errors.As(err, &notIn) {
+		return s.skippedNotInRepository(ctx, job, notIn.digest)
+	}
+	var unsupported *unsupportedChildError
+	if errors.As(err, &unsupported) {
+		s.logger.WarnContext(ctx, "scan skipped: unsupported index child", "job", job.ID, "digest", unsupported.digest.String(), "media_type", unsupported.mediaType)
+		return skipResult(struct {
+			Skipped   string `json:"skipped"`
+			Digest    string `json:"digest"`
+			MediaType string `json:"mediaType"`
+		}{"unsupported child", unsupported.digest.String(), unsupported.mediaType})
+	}
 	if errors.Is(err, errTooManyPlatforms) || errors.Is(err, errNoPlatforms) {
 		// Partial or empty scans are never attached, so a severity gate
 		// refuses the subject (fail closed). Retrying would not change it.
@@ -138,6 +154,25 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 	out, err := json.Marshal(struct {
 		Targets []targetResult `json:"targets"`
 	}{results})
+	if err != nil {
+		return nil, fmt.Errorf("encoding scan result: %w", err)
+	}
+	return out, nil
+}
+
+// skippedNotInRepository ends a job that would read a blob the publishing
+// repository does not hold. Nothing is attached, so a severity gate refuses
+// the subject; retrying would not change it.
+func (s *Scanner) skippedNotInRepository(ctx context.Context, job queue.Job, digest model.Digest) (json.RawMessage, error) {
+	s.logger.WarnContext(ctx, "scan skipped: blob not in repository", "job", job.ID, "digest", digest.String())
+	return skipResult(struct {
+		Skipped string `json:"skipped"`
+		Digest  string `json:"digest"`
+	}{"blob not in repository", digest.String()})
+}
+
+func skipResult[T any](v T) (json.RawMessage, error) {
+	out, err := json.Marshal(v)
 	if err != nil {
 		return nil, fmt.Errorf("encoding scan result: %w", err)
 	}

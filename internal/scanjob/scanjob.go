@@ -14,3 +14,13 @@ const Actor = "system:scanner"
 // DedupeKey returns the queue dedupe key for scanning the subject with the
 // given digest string.
 func DedupeKey(digest string) string { return "scan:" + digest }
+
+// Args are the arguments of a scan job. Repository is the hosted repository
+// that published the subject: the scanner reads only blobs that repository
+// holds (invariant I2). A job without one, enqueued before this field
+// existed, is skipped rather than scanned unchecked.
+type Args struct {
+	Digest     string `json:"digest"`
+	Kind       string `json:"kind"`
+	Repository string `json:"repository,omitempty"`
+}

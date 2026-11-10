@@ -128,7 +128,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		// started later) can run them. Only a process that runs the worker
 		// builds the scanner and prepares its cache directory.
 		if cfg.Worker.Enabled {
-			scanner, scanMx, err = buildScanner(ctx, cfg.Scanning, logger, casStore, evidence.New(database, casStore, string(cfg.Storage.Backend)), metricsReg)
+			scanner, scanMx, err = buildScanner(ctx, cfg.Scanning, logger, casStore, database.Queries(), evidence.New(database, casStore, string(cfg.Storage.Backend)), metricsReg)
 			if err != nil {
 				database.Close()
 				return nil, nil, err
@@ -297,7 +297,7 @@ func (a *app) reconcileFile(ctx context.Context, cfg *config.Config) error {
 // buildScanner is the one place the scanning configuration meets the scan
 // package. It prepares Trivy's cache directory, which fails startup when
 // someone else could write the vulnerability database there.
-func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, store *cas.Store, ev *evidence.Service, reg prometheus.Registerer) (*scan.Scanner, *scanMetrics, error) {
+func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, store *cas.Store, placement *db.Queries, ev *evidence.Service, reg prometheus.Registerer) (*scan.Scanner, *scanMetrics, error) {
 	cacheDir, err := sc.ResolvedCacheDir()
 	if err != nil {
 		return nil, nil, err
@@ -321,7 +321,7 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 		"db_mirror", sc.DBRepository != "", // the values may carry credentials
 		"java_db_mirror", sc.JavaDBRepository != "",
 		"skip_db_update", sc.SkipDBUpdate)
-	return scan.New(store, ev, scan.Options{
+	return scan.New(store, ev, placement, scan.Options{
 		Trivy:            sc.Trivy,
 		DBRepository:     sc.DBRepository,
 		JavaDBRepository: sc.JavaDBRepository,

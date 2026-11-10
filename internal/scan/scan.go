@@ -72,10 +72,12 @@ type attacher interface {
 
 // Scanner runs scan jobs.
 type Scanner struct {
-	store  *cas.Store
-	ev     attacher
-	opts   Options
-	logger *slog.Logger
+	store *cas.Store
+	ev    attacher
+	// placement answers whether a repository holds a blob (invariant I2).
+	placement placementChecker
+	opts      Options
+	logger    *slog.Logger
 
 	// maxEntries caps archive entries; a field so tests can lower it.
 	maxEntries int
@@ -91,10 +93,12 @@ type Scanner struct {
 }
 
 // New returns a Scanner reading subject bytes from store and attaching
-// evidence through ev (normally *evidence.Service).
-func New(store *cas.Store, ev attacher, opts Options, logger *slog.Logger) *Scanner {
+// evidence through ev (normally *evidence.Service). It reads a blob only
+// when placement says the publishing repository holds it (normally
+// *db.Queries).
+func New(store *cas.Store, ev attacher, placement placementChecker, opts Options, logger *slog.Logger) *Scanner {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Scanner{store: store, ev: ev, opts: opts, logger: logger, maxEntries: maxArchiveEntries}
+	return &Scanner{store: store, ev: ev, placement: placement, opts: opts, logger: logger, maxEntries: maxArchiveEntries}
 }

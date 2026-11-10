@@ -69,7 +69,7 @@ func TestBuildScanner_UnsafeCacheDirNamesTheSetting(t *testing.T) {
 	if err := mkdirMode(dir, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := buildScanner(t.Context(), scanningWithCache(dir), nil, nil, nil, prometheus.NewRegistry())
+	_, _, err := buildScanner(t.Context(), scanningWithCache(dir), nil, nil, nil, nil, prometheus.NewRegistry())
 	if err == nil || !strings.Contains(err.Error(), "scanning.cacheDir") {
 		t.Fatalf("err = %v, want a refusal naming scanning.cacheDir", err)
 	}

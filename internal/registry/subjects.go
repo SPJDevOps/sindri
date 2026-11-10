@@ -58,23 +58,21 @@ func (r *Registry) recordSubject(ctx context.Context, q *db.Queries, repo db.Rep
 			return fmt.Errorf("recording provenance of %s: %w", digest, err)
 		}
 	}
-	return r.enqueueScan(ctx, q, digest, kind)
+	return r.enqueueScan(ctx, q, repo.Name, digest, kind)
 }
 
 // enqueueScan hands a hosted subject to the scanner in the publish
 // transaction, so the job exists exactly when the publish commits and a
 // rolled-back publish leaves none. A re-publish of an existing digest enqueues
-// again: the dedupe key collapses it while a scan is queued or running, and a
+// again (the job names the publishing repository, which bounds what the
+// scanner may read): the dedupe key collapses it while a scan is queued or running, and a
 // finished (or failed) scan is deliberately re-run, so a re-push after a
 // failed scan rescans.
-func (r *Registry) enqueueScan(ctx context.Context, q *db.Queries, digest model.Digest, kind model.SubjectKind) error {
+func (r *Registry) enqueueScan(ctx context.Context, q *db.Queries, repoName string, digest model.Digest, kind model.SubjectKind) error {
 	if !r.scanOnPublish || !scannable(kind) {
 		return nil
 	}
-	args, err := json.Marshal(struct {
-		Digest string `json:"digest"`
-		Kind   string `json:"kind"`
-	}{digest.String(), string(kind)})
+	args, err := json.Marshal(scanjob.Args{Digest: digest.String(), Kind: string(kind), Repository: repoName})
 	if err != nil {
 		return fmt.Errorf("encoding scan job for %s: %w", digest, err)
 	}
