@@ -1,0 +1,28 @@
+{
+  "SchemaVersion": 2,
+  "CreatedAt": "2026-11-10T13:05:00.000000000Z",
+  "ArtifactName": "package",
+  "ArtifactType": "filesystem",
+  "Results": [
+    {
+      "Target": "package/package-lock.json",
+      "Class": "lang-pkgs",
+      "Type": "npm",
+      "Packages": [
+        {"ID": "left-pad@1.3.0", "Name": "left-pad", "Version": "1.3.0", "Identifier": {"PURL": "pkg:npm/left-pad@1.3.0"}}
+      ],
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-0003",
+          "PkgID": "left-pad@1.3.0",
+          "PkgName": "left-pad",
+          "InstalledVersion": "1.3.0",
+          "FixedVersion": "1.3.1",
+          "Status": "fixed",
+          "Title": "left-pad: example medium flaw",
+          "Severity": "MEDIUM"
+        }
+      ]
+    }
+  ]
+}

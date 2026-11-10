@@ -1,0 +1,16 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-11-10T13:05:01+00:00",
+    "tools": {"components": [{"type": "application", "group": "aquasecurity", "name": "trivy", "version": "0.58.1"}]},
+    "component": {"bom-ref": "root", "type": "container", "name": "layout"}
+  },
+  "components": [
+    {"bom-ref": "pkg:deb/debian/openssl@3.0.15-1~deb12u1?distro=debian-12.8", "type": "library", "name": "openssl", "version": "3.0.15-1~deb12u1", "purl": "pkg:deb/debian/openssl@3.0.15-1~deb12u1?distro=debian-12.8"}
+  ],
+  "dependencies": [{"ref": "root", "dependsOn": []}]
+}
