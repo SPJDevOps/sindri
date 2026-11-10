@@ -6,7 +6,11 @@
 #   - docker-compose   the development stack (deploy/compose) and the
 #                      quickstart (deploy/quickstart)
 #   - docker           the image's distroless base and the source build's
-#                      golang builder (/Dockerfile, deploy/docker/Dockerfile)
+#                      golang builder (/Dockerfile, deploy/docker/Dockerfile),
+#                      and the Trivy stage of deploy/docker/Dockerfile.trivy.
+#                      Its pin must move together with the one in
+#                      internal/testsupport/trivy.go; a unit test in
+#                      internal/scan fails when they differ.
 #
 # Not covered, deliberately:
 #   - testdata/demo/Dockerfile is `FROM scratch`; there is nothing to update,

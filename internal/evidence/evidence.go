@@ -243,7 +243,9 @@ func (s *Service) fromRow(ctx context.Context, subject model.Digest, row db.Evid
 	}, nil
 }
 
-// normalizeMetadata returns raw as compact-valid JSON object bytes, or {}.
+// normalizeMetadata returns raw unchanged when it is a JSON object, and {}
+// when it is empty. It does not compact or re-encode raw (the database
+// normalizes jsonb on storage); anything that is not an object is rejected.
 func normalizeMetadata(raw json.RawMessage) ([]byte, error) {
 	if len(raw) == 0 {
 		return []byte("{}"), nil
