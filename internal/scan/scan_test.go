@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/queue"
+	"github.com/spj/sindri/internal/scanjob"
 	"github.com/spj/sindri/internal/storage/memstore"
 )
 
@@ -76,6 +78,14 @@ func (f *fixture) scanner(opts Options) *Scanner {
 	return New(f.store, f.ev, opts, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
+// scannerEnv is scanner with extra environment for the Trivy stub, which the
+// filtered environment would otherwise not carry.
+func (f *fixture) scannerEnv(opts Options, env ...string) *Scanner {
+	s := f.scanner(opts)
+	s.extraEnv = env
+	return s
+}
+
 // image stores a config, one layer and a manifest, returning the manifest digest.
 func (f *fixture) image(mediaType string) model.Digest { return f.imageN(mediaType, 0) }
 
@@ -101,7 +111,7 @@ func (f *fixture) imageN(mediaType string, n int) model.Digest {
 
 func (f *fixture) job(digest model.Digest, kind string) queue.Job {
 	args, _ := json.Marshal(map[string]string{"digest": digest.String(), "kind": kind})
-	return queue.Job{ID: 7, Kind: JobKind, Args: args}
+	return queue.Job{ID: 7, Kind: scanjob.JobKind, Args: args}
 }
 
 func stubPath(t *testing.T) string {
@@ -425,7 +435,7 @@ func TestRun_ImageAttachesSbomAndScanWithProducerMetadata(t *testing.T) {
 		t.Errorf("types = %s/%s, media = %s/%s", sbom.params.Type, scan.params.Type, sbom.params.MediaType, scan.params.MediaType)
 	}
 	for _, a := range f.ev.attached {
-		if a.params.Actor != Actor || a.params.Subject != digest {
+		if a.params.Actor != scanjob.Actor || a.params.Subject != digest {
 			t.Errorf("actor/subject = %s/%s", a.params.Actor, a.params.Subject)
 		}
 		var meta map[string]any
@@ -499,10 +509,9 @@ func TestRun_IndexAttachesOnePairPerPlatform(t *testing.T) {
 }
 
 func TestRun_TrivyFailureReturnsErrorAndAttachesNothing(t *testing.T) {
-	t.Setenv("TRIVY_STUB_FAIL", "1")
 	f := newFixture(t)
 	digest := f.image(ocispec.MediaTypeImageManifest)
-	_, err := f.scanner(Options{Trivy: stubPath(t)}).Handle(t.Context(), f.job(digest, "oci-manifest"))
+	_, err := f.scannerEnv(Options{Trivy: stubPath(t)}, "TRIVY_STUB_FAIL=1").Handle(t.Context(), f.job(digest, "oci-manifest"))
 	if err == nil || !strings.Contains(err.Error(), "vulnerability database unavailable") {
 		t.Fatalf("Handle error = %v, want stderr in the message", err)
 	}
@@ -513,10 +522,10 @@ func TestRun_TrivyFailureReturnsErrorAndAttachesNothing(t *testing.T) {
 
 func TestRun_PassesMirrorAndSkipUpdateFlags(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
-	t.Setenv("TRIVY_STUB_ARGS", argsFile)
 	f := newFixture(t)
 	digest := f.image(ocispec.MediaTypeImageManifest)
-	s := f.scanner(Options{Trivy: stubPath(t), DBRepository: "registry.example/trivy-db", JavaDBRepository: "registry.example/java-db", CacheDir: "/cache", SkipDBUpdate: true})
+	s := f.scannerEnv(Options{Trivy: stubPath(t), DBRepository: "registry.example/trivy-db", JavaDBRepository: "registry.example/java-db", CacheDir: "/cache", SkipDBUpdate: true},
+		"TRIVY_STUB_ARGS="+argsFile)
 	if _, err := s.Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -747,10 +756,9 @@ func TestStage_NegativeDescriptorSizeIsRefused(t *testing.T) {
 
 func TestRun_StagingDirectoryIsRemovedOnFailure(t *testing.T) {
 	t.Run("trivy failure", func(t *testing.T) {
-		t.Setenv("TRIVY_STUB_FAIL", "1")
 		f := newFixture(t)
 		tmp := t.TempDir()
-		_, err := f.scanner(Options{Trivy: stubPath(t), TempDir: tmp}).Handle(t.Context(), f.job(f.image(ocispec.MediaTypeImageManifest), "oci-manifest"))
+		_, err := f.scannerEnv(Options{Trivy: stubPath(t), TempDir: tmp}, "TRIVY_STUB_FAIL=1").Handle(t.Context(), f.job(f.image(ocispec.MediaTypeImageManifest), "oci-manifest"))
 		if err == nil {
 			t.Fatal("Handle succeeded")
 		}
@@ -824,8 +832,69 @@ func TestRun_TrivyErrorRedactsMirrorCredentials(t *testing.T) {
 	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil { //nolint:gosec // an executable test double
 		t.Fatal(err)
 	}
-	_, err := (&Scanner{opts: Options{Trivy: bin}}).run(t.Context(), "image")
+	_, err := (&Scanner{opts: Options{Trivy: bin}}).run(t.Context(), "", "image")
 	if err == nil || strings.Contains(err.Error(), "pw") || !strings.Contains(err.Error(), "REDACTED@mirror.example") {
 		t.Fatalf("err = %v, want the credentials redacted", err)
+	}
+}
+
+func TestRun_TrivyRunsWithAFilteredEnvironmentInTheStagingDirectory(t *testing.T) {
+	t.Setenv("TRIVY_SEVERITY", "CRITICAL")
+	t.Setenv("TRIVY_CONFIG", "/etc/evil.yaml")
+	t.Setenv("SINDRI_DATABASE_URL", "postgres://u:hunter2@db/sindri")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "hunter2")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example:3128")
+	t.Setenv("no_proxy", "localhost")
+	t.Setenv("SSL_CERT_FILE", "/etc/ssl/ca.pem")
+	envFile := filepath.Join(t.TempDir(), "env")
+	f := newFixture(t)
+	tmp := t.TempDir()
+	digest := f.image(ocispec.MediaTypeImageManifest)
+	s := f.scannerEnv(Options{Trivy: stubPath(t), TempDir: tmp}, "TRIVY_STUB_ENV="+envFile)
+	if _, err := s.Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	recorded := string(readFile(t, envFile))
+	lines := strings.Split(recorded, "\n")
+	has := func(line string) bool { return slices.Contains(lines, line) }
+	for _, want := range []string{"HTTPS_PROXY=http://proxy.example:3128", "no_proxy=localhost", "SSL_CERT_FILE=/etc/ssl/ca.pem"} {
+		if !has(want) {
+			t.Errorf("environment lacks %q:\n%s", want, recorded)
+		}
+	}
+	for _, banned := range []string{"TRIVY_SEVERITY", "TRIVY_CONFIG", "SINDRI_DATABASE_URL", "AWS_SECRET_ACCESS_KEY", "hunter2"} {
+		if strings.Contains(recorded, banned) {
+			t.Errorf("environment leaks %q:\n%s", banned, recorded)
+		}
+	}
+	resolved, err := filepath.EvalSymlinks(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(lines[0], "CWD="+resolved+string(filepath.Separator)+"sindri-scan-") {
+		t.Errorf("trivy ran in %q, want a directory under %s", lines[0], resolved)
+	}
+}
+
+func TestTrivyEnv_KeepsOnlyTheAllowList(t *testing.T) {
+	got := trivyEnv([]string{"PATH=/bin", "TRIVY_X=1", "Http_Proxy=p", "HOME=/h", "SECRET=s", "malformed"}, []string{"EXTRA=1"})
+	want := []string{"PATH=/bin", "Http_Proxy=p", "HOME=/h", "EXTRA=1"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("trivyEnv = %v, want %v", got, want)
+	}
+}
+
+func TestRun_StagingParentIsCreatedPrivate(t *testing.T) {
+	f := newFixture(t)
+	parent := filepath.Join(t.TempDir(), "cache", "sindri-staging")
+	if _, err := f.scanner(Options{Trivy: stubPath(t), TempDir: parent}).Handle(t.Context(), f.job(f.image(ocispec.MediaTypeImageManifest), "oci-manifest")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	info, err := os.Stat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("staging parent mode = %v, want 0700", info.Mode().Perm())
 	}
 }

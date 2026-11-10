@@ -16,6 +16,7 @@ import (
 	"maps"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,10 +38,32 @@ const (
 // which answers with fixtures whose severity counts these tests assert.
 func startScan(t *testing.T, dbURL string, enabled bool, extraRepos string) *stack {
 	t.Helper()
+	return startScanWith(t, dbURL, enabled, trivyStub(t), extraRepos)
+}
+
+func trivyStub(t *testing.T) string {
+	t.Helper()
 	stub, err := filepath.Abs("../../internal/scan/testdata/trivy-stub.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
+	return stub
+}
+
+// failingTrivyStub is the stub told to fail. The scanner gives Trivy a
+// filtered environment, so the switch has to live in the executable itself.
+func failingTrivyStub(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "trivy")
+	script := "#!/bin/sh\nTRIVY_STUB_FAIL=1 exec " + trivyStub(t) + " \"$@\"\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // an executable test double
+		t.Fatal(err)
+	}
+	return path
+}
+
+func startScanWith(t *testing.T, dbURL string, enabled bool, stub, extraRepos string) *stack {
+	t.Helper()
 	// npm repositories need publicUrl, which must name the bound address.
 	addr := freeAddr(t)
 	body := fmt.Sprintf("publicUrl: http://%s\nscanning:\n  enabled: %t\n  trivy: %q\n  cacheDir: %q\n%s%s",
@@ -346,9 +369,8 @@ func TestScan_DisabledEnqueuesNothing(t *testing.T) {
 }
 
 func TestScan_FailingTrivyIsRetried(t *testing.T) {
-	t.Setenv("TRIVY_STUB_FAIL", "1")
 	db := testsupport.DatabaseURL(t)
-	s := startScan(t, db, true, "")
+	s := startScanWith(t, db, true, failingTrivyStub(t), "")
 	digest := s.push("docker/demo/app", "1.0", "scan-failing")
 
 	// last_error is cleared while an attempt runs, so wait for a moment when

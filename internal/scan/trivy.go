@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -48,11 +49,42 @@ var userinfoRE = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/@]+@`)
 // mirror that Trivy echoes in an error, before the text is stored in a job.
 func redactURLUserinfo(s string) string { return userinfoRE.ReplaceAllString(s, "${1}REDACTED@") }
 
-// run executes Trivy with args and returns its stdout. The error carries the
-// tail of stderr, never the report.
-func (s *Scanner) run(ctx context.Context, args ...string) ([]byte, error) {
+// passedEnv names the environment variables Trivy inherits; anything else is
+// dropped. A name matches case-insensitively, which covers the lowercase proxy
+// variants some tools read.
+var passedEnv = map[string]bool{
+	"PATH": true, "HOME": true, "XDG_CACHE_HOME": true, "TMPDIR": true,
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
+	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
+}
+
+// trivyEnv returns the environment Trivy runs with: the entries of environ
+// whose names are in passedEnv, then extra. It is deliberately a short
+// allow-list. The evidence a scan produces claims producer "sindri", so an
+// operator's TRIVY_* variables or trivy.yaml (severity filters, ignore files,
+// skipped scanners, an alternative database) must not change the counts it
+// records. And the server's own environment holds secrets (database URL, S3
+// and OIDC credentials) that have no business reaching a third-party binary.
+// TRIVY_* is never passed; trivy.yaml is not found because the working
+// directory is the job's staging directory.
+func trivyEnv(environ, extra []string) []string {
+	out := make([]string, 0, len(passedEnv)+len(extra))
+	for _, kv := range environ {
+		name, _, ok := strings.Cut(kv, "=")
+		if ok && passedEnv[strings.ToUpper(name)] {
+			out = append(out, kv)
+		}
+	}
+	return append(out, extra...)
+}
+
+// run executes Trivy with args in dir, the job's staging directory, and
+// returns its stdout. The error carries the tail of stderr, never the report.
+func (s *Scanner) run(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	// #nosec G204 -- the executable is the operator's configured trivy path; the arguments are fixed flags and paths of directories this process created.
 	cmd := exec.CommandContext(ctx, s.opts.Trivy, args...)
+	cmd.Dir = dir
+	cmd.Env = trivyEnv(os.Environ(), s.extraEnv)
 	cmd.WaitDelay = waitDelay
 	var stdout bytes.Buffer
 	var stderr tailBuffer
@@ -69,7 +101,7 @@ func (s *Scanner) run(ctx context.Context, args ...string) ([]byte, error) {
 // scan's point-in-time claim, so it is never cached. Only the version is
 // remembered, as a fallback when a later probe fails. A failed probe leaves
 // the fields empty and does not fail the scan; the next job probes again.
-func (s *Scanner) versionInfo(ctx context.Context) trivyVersion {
+func (s *Scanner) versionInfo(ctx context.Context, dir string) trivyVersion {
 	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), versionTimeout)
 	defer cancel()
 	args := []string{"--version", "--format", "json"}
@@ -77,14 +109,14 @@ func (s *Scanner) versionInfo(ctx context.Context) trivyVersion {
 		args = append(args, "--cache-dir", s.opts.CacheDir)
 	}
 	var v trivyVersion
-	out, err := s.run(probeCtx, args...)
+	out, err := s.run(probeCtx, dir, args...)
 	if err == nil {
 		err = json.Unmarshal(out, &v)
 	}
 	s.versionMu.Lock()
 	defer s.versionMu.Unlock()
 	if err != nil {
-		s.logger.Warn("could not read trivy version", "error", err)
+		s.logger.WarnContext(ctx, "could not read trivy version", "error", err)
 		return trivyVersion{Version: s.scannerVersion}
 	}
 	s.scannerVersion = v.Version
@@ -125,10 +157,10 @@ func (s *Scanner) scanTarget(ctx context.Context, t target, outDir string) (repo
 		args = append(args, "--skip-db-update", "--skip-java-db-update")
 	}
 	args = append(args, "--output", report)
-	if _, err := s.run(ctx, args...); err != nil {
+	if _, err := s.run(ctx, outDir, args...); err != nil {
 		return "", "", err
 	}
-	if _, err := s.run(ctx, "convert", "--format", "cyclonedx", "--output", sbom, report); err != nil {
+	if _, err := s.run(ctx, outDir, "convert", "--format", "cyclonedx", "--output", sbom, report); err != nil {
 		return "", "", err
 	}
 	return report, sbom, nil

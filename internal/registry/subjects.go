@@ -11,7 +11,7 @@ import (
 	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/queue"
-	"github.com/spj/sindri/internal/scan"
+	"github.com/spj/sindri/internal/scanjob"
 )
 
 // OwnerPrefix starts a repository owner reference.
@@ -79,10 +79,10 @@ func (r *Registry) enqueueScan(ctx context.Context, q *db.Queries, digest model.
 		return fmt.Errorf("encoding scan job for %s: %w", digest, err)
 	}
 	if _, err := queue.EnqueueTx(ctx, q, queue.EnqueueParams{
-		Kind:      scan.JobKind,
+		Kind:      scanjob.JobKind,
 		Args:      args,
-		DedupeKey: scan.DedupeKey(digest.String()),
-		CreatedBy: scan.Actor,
+		DedupeKey: scanjob.DedupeKey(digest.String()),
+		CreatedBy: scanjob.Actor,
 	}); err != nil {
 		return fmt.Errorf("enqueueing scan of %s: %w", digest, err)
 	}

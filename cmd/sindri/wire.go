@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -122,10 +124,15 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 	var scanner *scan.Scanner
 	var scanMx *scanMetrics
 	if cfg.Scanning.Enabled {
-		scanner, scanMx, err = buildScanner(ctx, cfg.Scanning, logger, casStore, evidence.New(database, casStore, string(cfg.Storage.Backend)), metricsReg)
-		if err != nil {
-			database.Close()
-			return nil, nil, err
+		// Jobs are enqueued whenever scanning is on, so a worker elsewhere (or
+		// started later) can run them. Only a process that runs the worker
+		// builds the scanner and prepares its cache directory.
+		if cfg.Worker.Enabled {
+			scanner, scanMx, err = buildScanner(ctx, cfg.Scanning, logger, casStore, evidence.New(database, casStore, string(cfg.Storage.Backend)), metricsReg)
+			if err != nil {
+				database.Close()
+				return nil, nil, err
+			}
 		}
 		reg.SetScanOnPublish(true)
 	}
@@ -302,6 +309,12 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 	if err != nil {
 		return nil, nil, err
 	}
+	if _, err := exec.LookPath(sc.Trivy); err != nil {
+		// Not fatal: scan jobs fail and retry until Trivy appears, and the
+		// operator may be about to mount it.
+		logger.WarnContext(ctx, "the configured scanning.trivy executable was not found; scan jobs will fail until it is installed",
+			"trivy", sc.Trivy, "error", err)
+	}
 	logger.InfoContext(ctx, "scanning enabled",
 		"trivy", sc.Trivy,
 		"cache_dir", cacheDir,
@@ -313,6 +326,7 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 		DBRepository:     sc.DBRepository,
 		JavaDBRepository: sc.JavaDBRepository,
 		CacheDir:         cacheDir,
+		TempDir:          filepath.Join(cacheDir, "sindri-staging"),
 		Timeout:          sc.Timeout.Duration(),
 		SkipDBUpdate:     sc.SkipDBUpdate,
 		MaxUnpackedBytes: sc.MaxUnpackedBytes,

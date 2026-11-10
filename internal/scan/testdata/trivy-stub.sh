@@ -1,11 +1,20 @@
 #!/bin/sh
 # A stand-in for the trivy executable in unit tests. It copies a fixture to the
 # --output path. TRIVY_STUB_FAIL=1 makes it fail; TRIVY_STUB_ARGS names a file
-# that receives one line per invocation with the argv.
+# that receives one line per invocation with the argv. TRIVY_STUB_ENV names a
+# file that receives the working directory and the environment of each
+# invocation.
 dir=$(cd "$(dirname "$0")" && pwd)
 
 if [ -n "$TRIVY_STUB_ARGS" ]; then
 	echo "$*" >>"$TRIVY_STUB_ARGS"
+fi
+
+if [ -n "$TRIVY_STUB_ENV" ]; then
+	{
+		echo "CWD=$(pwd -P)"
+		env
+	} >>"$TRIVY_STUB_ENV"
 fi
 
 if [ "$1" = "--version" ]; then

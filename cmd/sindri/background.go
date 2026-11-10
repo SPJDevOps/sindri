@@ -13,7 +13,7 @@ import (
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/gc"
 	"github.com/spj/sindri/internal/queue"
-	"github.com/spj/sindri/internal/scan"
+	"github.com/spj/sindri/internal/scanjob"
 	"github.com/spj/sindri/internal/worker"
 )
 
@@ -59,7 +59,7 @@ func (a *app) handlers(cfg config.Worker) map[string]worker.Handler {
 	// Present only when scanning is enabled, so a worker without scanning
 	// never claims a scan job it cannot run.
 	if a.scanner != nil {
-		h[scan.JobKind] = a.scanMetrics.wrap(a.scanner.Handle)
+		h[scanjob.JobKind] = a.scanMetrics.wrap(a.scanner.Handle)
 	}
 	return h
 }

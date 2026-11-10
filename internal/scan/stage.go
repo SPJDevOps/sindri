@@ -200,11 +200,11 @@ func (s *Scanner) stageIndex(ctx context.Context, root string, digest model.Dige
 	seen := make(map[string]bool)
 	for _, c := range index.Manifests {
 		if c.Annotations[annotationReferenceType] == attestationManifest {
-			s.logger.Info("skipping attestation manifest in index", "index", digest.String(), "child", c.Digest.String())
+			s.logger.InfoContext(ctx, "skipping attestation manifest in index", "index", digest.String(), "child", c.Digest.String())
 			continue
 		}
 		if c.MediaType != ocispec.MediaTypeImageManifest && c.MediaType != mediaTypeDockerManifest {
-			s.logger.Info("skipping index child that is not an image manifest",
+			s.logger.InfoContext(ctx, "skipping index child that is not an image manifest",
 				"index", digest.String(), "child", c.Digest.String(), "media_type", c.MediaType)
 			continue
 		}

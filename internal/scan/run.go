@@ -11,6 +11,7 @@ import (
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/queue"
+	"github.com/spj/sindri/internal/scanjob"
 )
 
 // evidenceMetadata is what the worker writes on Sindri's own evidence. Only
@@ -55,10 +56,16 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 	}
 	kind := model.SubjectKind(args.Kind)
 	if kind == model.SubjectKindFile {
-		s.logger.Info("scan skipped: unsupported kind", "job", job.ID, "kind", args.Kind)
+		s.logger.InfoContext(ctx, "scan skipped: unsupported kind", "job", job.ID, "kind", args.Kind)
 		return json.RawMessage(`{"skipped":"unsupported kind"}`), nil
 	}
 
+	if s.opts.TempDir != "" {
+		// #nosec G301,G703 -- 0700, under the cache directory the operator configured.
+		if err := os.MkdirAll(s.opts.TempDir, 0o700); err != nil {
+			return nil, fmt.Errorf("creating staging parent directory: %w", err)
+		}
+	}
 	root, err := os.MkdirTemp(s.opts.TempDir, "sindri-scan-*")
 	if err != nil {
 		return nil, fmt.Errorf("creating staging directory: %w", err)
@@ -77,7 +84,7 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		if errors.Is(err, errTooManyPlatforms) {
 			reason = "too many platforms"
 		}
-		s.logger.Warn("scan skipped", "job", job.ID, "subject", digest.String(), "reason", reason)
+		s.logger.WarnContext(ctx, "scan skipped", "job", job.ID, "subject", digest.String(), "reason", reason)
 		return json.RawMessage(`{"skipped":"` + reason + `"}`), nil
 	}
 	if err != nil {
@@ -106,7 +113,7 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		done = append(done, scanned{t: t, report: report, sbom: sbom, counts: counts})
 	}
 
-	version := s.versionInfo(ctx)
+	version := s.versionInfo(ctx, root)
 	results := make([]targetResult, 0, len(done))
 	for _, d := range done {
 		meta, err := json.Marshal(evidenceMetadata{
@@ -126,7 +133,7 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 			return nil, err
 		}
 		results = append(results, targetResult{Platform: d.t.platform, SBOMID: sbom.ID, ScanID: scan.ID, SeverityCounts: d.counts})
-		s.logger.Info("scan attached", "job", job.ID, "subject", digest.String(), "platform", d.t.platform)
+		s.logger.InfoContext(ctx, "scan attached", "job", job.ID, "subject", digest.String(), "platform", d.t.platform)
 	}
 	out, err := json.Marshal(struct {
 		Targets []targetResult `json:"targets"`
@@ -160,7 +167,7 @@ func (s *Scanner) attachFile(ctx context.Context, subject model.Digest, typ mode
 	}
 	ev, err := s.ev.Attach(ctx, evidence.AttachParams{
 		Subject: subject, Type: typ, MediaType: mediaType, Body: f, Size: info.Size(),
-		Actor: Actor, Metadata: meta,
+		Actor: scanjob.Actor, Metadata: meta,
 	})
 	if err != nil {
 		return evidence.Evidence{}, fmt.Errorf("attaching %s to %s: %w", typ, subject, err)
