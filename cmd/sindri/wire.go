@@ -305,11 +305,13 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 	logger.InfoContext(ctx, "scanning enabled",
 		"trivy", sc.Trivy,
 		"cache_dir", cacheDir,
-		"db_mirror", sc.DBRepository != "", // the value may carry credentials
+		"db_mirror", sc.DBRepository != "", // the values may carry credentials
+		"java_db_mirror", sc.JavaDBRepository != "",
 		"skip_db_update", sc.SkipDBUpdate)
 	return scan.New(store, ev, scan.Options{
 		Trivy:            sc.Trivy,
 		DBRepository:     sc.DBRepository,
+		JavaDBRepository: sc.JavaDBRepository,
 		CacheDir:         cacheDir,
 		Timeout:          sc.Timeout.Duration(),
 		SkipDBUpdate:     sc.SkipDBUpdate,

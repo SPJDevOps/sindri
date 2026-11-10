@@ -516,7 +516,7 @@ func TestRun_PassesMirrorAndSkipUpdateFlags(t *testing.T) {
 	t.Setenv("TRIVY_STUB_ARGS", argsFile)
 	f := newFixture(t)
 	digest := f.image(ocispec.MediaTypeImageManifest)
-	s := f.scanner(Options{Trivy: stubPath(t), DBRepository: "registry.example/trivy-db", CacheDir: "/cache", SkipDBUpdate: true})
+	s := f.scanner(Options{Trivy: stubPath(t), DBRepository: "registry.example/trivy-db", JavaDBRepository: "registry.example/java-db", CacheDir: "/cache", SkipDBUpdate: true})
 	if _, err := s.Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestRun_PassesMirrorAndSkipUpdateFlags(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"--input ", "--format json", "--list-all-pkgs", "--scanners vuln", "--quiet",
-		"--cache-dir /cache", "--db-repository registry.example/trivy-db", "--skip-db-update", "--skip-java-db-update", "--output "} {
+		"--cache-dir /cache", "--db-repository registry.example/trivy-db", "--java-db-repository registry.example/java-db", "--skip-db-update", "--skip-java-db-update", "--output "} {
 		if !strings.Contains(image, want) {
 			t.Errorf("image args %q lack %q", image, want)
 		}
@@ -799,5 +799,33 @@ func TestRun_DatabaseTimestampIsReadForEveryJob(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "probe-1,probe-1,probe-2,probe-2" {
 		t.Fatalf("db_updated_at = %v", got)
+	}
+}
+
+func TestRedactURLUserinfo(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"UserAndPassword", "FATAL pull https://bob:s3cret@mirror.example/v2/ failed", "FATAL pull https://REDACTED@mirror.example/v2/ failed"},
+		{"TokenOnly", "oci://tok@host/x", "oci://REDACTED@host/x"},
+		{"NoCredentials", "get https://mirror.example/v2/: timeout", "get https://mirror.example/v2/: timeout"},
+		{"AtSignInPathIsKept", "https://host/a@b", "https://host/a@b"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := redactURLUserinfo(tc.in); got != tc.want {
+				t.Errorf("redactURLUserinfo(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRun_TrivyErrorRedactsMirrorCredentials(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "trivy")
+	script := "#!/bin/sh\necho 'FATAL https://u:pw@mirror.example/db unreachable' >&2\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil { //nolint:gosec // an executable test double
+		t.Fatal(err)
+	}
+	_, err := (&Scanner{opts: Options{Trivy: bin}}).run(t.Context(), "image")
+	if err == nil || strings.Contains(err.Error(), "pw") || !strings.Contains(err.Error(), "REDACTED@mirror.example") {
+		t.Fatalf("err = %v, want the credentials redacted", err)
 	}
 }

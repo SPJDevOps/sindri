@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -40,6 +41,13 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// userinfoRE matches the credentials in scheme://user:pass@host.
+var userinfoRE = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/@]+@`)
+
+// redactURLUserinfo hides URL credentials, such as those of a configured
+// mirror that Trivy echoes in an error, before the text is stored in a job.
+func redactURLUserinfo(s string) string { return userinfoRE.ReplaceAllString(s, "${1}REDACTED@") }
+
 // run executes Trivy with args and returns its stdout. The error carries the
 // tail of stderr, never the report.
 func (s *Scanner) run(ctx context.Context, args ...string) ([]byte, error) {
@@ -51,7 +59,7 @@ func (s *Scanner) run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("running trivy %s: %w: %s", args[0], err, strings.TrimSpace(string(stderr.buf)))
+		return nil, fmt.Errorf("running trivy %s: %w: %s", args[0], err, redactURLUserinfo(strings.TrimSpace(string(stderr.buf))))
 	}
 	return stdout.Bytes(), nil
 }
@@ -106,6 +114,9 @@ func (s *Scanner) scanTarget(ctx context.Context, t target, outDir string) (repo
 	}
 	if s.opts.DBRepository != "" {
 		args = append(args, "--db-repository", s.opts.DBRepository)
+	}
+	if s.opts.JavaDBRepository != "" {
+		args = append(args, "--java-db-repository", s.opts.JavaDBRepository)
 	}
 	if s.opts.SkipDBUpdate {
 		// The Java database is a second download, made only when an image or

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -132,7 +133,7 @@ func TestRealTrivy_ScansAnImageWithAKnownVulnerablePackage(t *testing.T) {
 		}
 	}
 	t.Logf("openssl findings: %v", ids)
-	if !bytes.Contains(scan.body, []byte("CVE-2019-1543")) {
+	if !slices.Contains(ids, "CVE-2019-1543") {
 		t.Errorf("report has no CVE-2019-1543 for openssl 1.1.1a; findings = %v", ids)
 	}
 	if !bytes.Contains(sbom.body, []byte(`"bomFormat": "CycloneDX"`)) && !bytes.Contains(sbom.body, []byte(`"bomFormat":"CycloneDX"`)) {

@@ -692,6 +692,13 @@ type Scanning struct {
 	// `--db-repository`, for a server that cannot reach the public one. Cannot
 	// be combined with `skipDBUpdate`.
 	DBRepository string `yaml:"dbRepository"`
+	// A mirror of Trivy's Java vulnerability database, passed as
+	// `--java-db-repository`. Trivy fetches that database separately, and only
+	// when a scanned image or package holds a jar. An air-gapped install that
+	// scans jar-containing images sets this, or pre-seeds the Java database in
+	// `cacheDir`; otherwise, with `skipDBUpdate`, such a scan fails (fail
+	// closed). Cannot be combined with `skipDBUpdate`.
+	JavaDBRepository string `yaml:"javaDbRepository"`
 	// Where Trivy keeps its database and caches between scans. Empty uses
 	// `sindri/trivy` under the user's cache directory (`$XDG_CACHE_HOME`, or
 	// `~/.cache` on Linux). The `-trivy` release image sets
@@ -737,6 +744,7 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		Enabled          *bool    `yaml:"enabled"`
 		Trivy            string   `yaml:"trivy"`
 		DBRepository     string   `yaml:"dbRepository"`
+		JavaDBRepository string   `yaml:"javaDbRepository"`
 		CacheDir         string   `yaml:"cacheDir"`
 		Timeout          Duration `yaml:"timeout"`
 		SkipDBUpdate     bool     `yaml:"skipDBUpdate"`
@@ -749,6 +757,7 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		Enabled:          raw.Enabled == nil || *raw.Enabled,
 		Trivy:            raw.Trivy,
 		DBRepository:     raw.DBRepository,
+		JavaDBRepository: raw.JavaDBRepository,
 		CacheDir:         raw.CacheDir,
 		Timeout:          raw.Timeout,
 		SkipDBUpdate:     raw.SkipDBUpdate,
@@ -792,6 +801,9 @@ func (s *Scanning) validate() error {
 	}
 	if s.MaxUnpackedBytes < minScanUnpackedBytes {
 		return fmt.Errorf("scanning.maxUnpackedBytes: %d is below the 1048576 (1 MiB) minimum", s.MaxUnpackedBytes)
+	}
+	if s.SkipDBUpdate && s.JavaDBRepository != "" {
+		return fmt.Errorf("scanning.javaDbRepository: cannot be set with skipDBUpdate, which never downloads the Java database")
 	}
 	if s.SkipDBUpdate && s.DBRepository != "" {
 		return fmt.Errorf("scanning.dbRepository: cannot be set with skipDBUpdate, which never downloads the database")

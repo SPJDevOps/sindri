@@ -56,6 +56,8 @@ type Options struct {
 	Trivy string
 	// DBRepository is an optional --db-repository mirror.
 	DBRepository string
+	// JavaDBRepository is an optional --java-db-repository mirror.
+	JavaDBRepository string
 	// CacheDir is Trivy's --cache-dir.
 	CacheDir string
 	// Timeout bounds each target's scan. Zero means no limit.

@@ -543,8 +543,8 @@ func TestParse_Scanning(t *testing.T) {
 			s.Trivy = "/opt/trivy"
 			return s
 		}},
-		{name: "MappingFieldsAreKept", input: "scanning:\n  dbRepository: registry.example.com/trivy-db\n  cacheDir: /var/cache/trivy\n  maxUnpackedBytes: 2097152\n", want: func(s config.Scanning) config.Scanning {
-			s.Enabled, s.DBRepository, s.CacheDir, s.MaxUnpackedBytes = true, "registry.example.com/trivy-db", "/var/cache/trivy", 2097152
+		{name: "MappingFieldsAreKept", input: "scanning:\n  dbRepository: registry.example.com/trivy-db\n  javaDbRepository: registry.example.com/trivy-java-db\n  cacheDir: /var/cache/trivy\n  maxUnpackedBytes: 2097152\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.DBRepository, s.JavaDBRepository, s.CacheDir, s.MaxUnpackedBytes = true, "registry.example.com/trivy-db", "registry.example.com/trivy-java-db", "/var/cache/trivy", 2097152
 			return s
 		}},
 	}
@@ -574,6 +574,7 @@ func TestParse_RejectsScanning(t *testing.T) {
 		{name: "UnknownKey", input: "scanning:\n  trivvy: x\n", want: `unknown field "trivvy"`},
 		{name: "TimeoutTooShort", input: "scanning:\n  timeout: 30s\n", want: "scanning.timeout"},
 		{name: "TooSmallUnpackLimit", input: "scanning:\n  maxUnpackedBytes: 1024\n", want: "scanning.maxUnpackedBytes"},
+		{name: "SkipDBUpdateWithJavaMirror", input: "scanning:\n  skipDBUpdate: true\n  javaDbRepository: mirror.example.com/java-db\n", want: "scanning.javaDbRepository"},
 		{name: "SkipDBUpdateWithMirror", input: "scanning:\n  skipDBUpdate: true\n  dbRepository: mirror.example.com/db\n", want: "scanning.dbRepository"},
 		{name: "BadValueWhileDisabled", input: "scanning:\n  enabled: false\n  timeout: 1s\n", want: "scanning.timeout"},
 	}

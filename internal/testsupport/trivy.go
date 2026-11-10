@@ -38,8 +38,10 @@ func TrivyBinary(t *testing.T) string {
 		// The image's entrypoint is trivy itself; the container only has to
 		// exist for its filesystem to be read.
 		return testcontainers.Run(ctx, trivyImage,
-			testcontainers.WithEntrypoint("sleep"),
-			testcontainers.WithCmd("600"),
+			testcontainers.WithEntrypoint("sh"),
+			// sleep as PID 1 ignores SIGTERM, so a plain sleep made every stop
+			// wait out the 10s kill timeout. A shell that traps it exits at once.
+			testcontainers.WithCmd("-c", "trap 'exit 0' TERM; sleep 600 & wait"),
 			testcontainers.WithWaitStrategy(wait.ForExec([]string{"true"})),
 		)
 	})
