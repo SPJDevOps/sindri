@@ -80,6 +80,8 @@ internet. Sindri's own series:
 | `sindri_http_requests_total` | Requests by `method`, matched `route`, and `status` |
 | `sindri_http_request_duration_seconds` | Request duration by `method` and `route` |
 | `sindri_queue_jobs` | Background jobs by `state`: `queued`, `running`, `failed` |
+| `sindri_scans_total` | Scan job attempts by `result`: `succeeded`, `failed`, or `skipped` (nothing scannable). Present with value 0 only when scanning is enabled |
+| `sindri_scan_duration_seconds` | Duration of scan job attempts, in seconds |
 | `sindri_build_info` | The running `version` and `commit`, always 1 |
 
 A starting set of alerts, assuming the scrape job is named `sindri`. Tune the thresholds to

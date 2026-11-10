@@ -531,7 +531,7 @@ func TestRun_PassesMirrorAndSkipUpdateFlags(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"--input ", "--format json", "--list-all-pkgs", "--scanners vuln", "--quiet",
-		"--cache-dir /cache", "--db-repository registry.example/trivy-db", "--skip-db-update", "--output "} {
+		"--cache-dir /cache", "--db-repository registry.example/trivy-db", "--skip-db-update", "--skip-java-db-update", "--output "} {
 		if !strings.Contains(image, want) {
 			t.Errorf("image args %q lack %q", image, want)
 		}

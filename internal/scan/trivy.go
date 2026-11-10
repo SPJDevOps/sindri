@@ -108,7 +108,10 @@ func (s *Scanner) scanTarget(ctx context.Context, t target, outDir string) (repo
 		args = append(args, "--db-repository", s.opts.DBRepository)
 	}
 	if s.opts.SkipDBUpdate {
-		args = append(args, "--skip-db-update")
+		// The Java database is a second download, made only when an image or
+		// package holds a jar. Without this flag a "never download" server
+		// would reach out for it. Trivy then needs it already in the cache.
+		args = append(args, "--skip-db-update", "--skip-java-db-update")
 	}
 	args = append(args, "--output", report)
 	if _, err := s.run(ctx, args...); err != nil {
