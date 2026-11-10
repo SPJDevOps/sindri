@@ -52,9 +52,6 @@ var shortForms = map[string][]shortForm{
 }
 
 func TestReference_PageMatchesStructs(t *testing.T) {
-	// scanning.cacheDir defaults to a directory under the temporary directory,
-	// which differs per host; the page states the Linux one.
-	t.Setenv("TMPDIR", "/tmp")
 	page, err := os.ReadFile(referencePage)
 	if err != nil {
 		t.Fatal(err)

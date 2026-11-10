@@ -692,7 +692,10 @@ type Scanning struct {
 	// `--db-repository`, for a server that cannot reach the public one. Cannot
 	// be combined with `skipDBUpdate`.
 	DBRepository string `yaml:"dbRepository"`
-	// Where Trivy keeps its database and caches between scans.
+	// Where Trivy keeps its database and caches between scans. Empty uses
+	// `sindri/trivy` under the user's cache directory (`$XDG_CACHE_HOME`, or
+	// `~/.cache` on Linux). The `-trivy` release image sets
+	// `/var/cache/sindri-trivy`.
 	CacheDir string `yaml:"cacheDir"`
 	// How long one scan may run before it is cancelled and retried. At least
 	// `1m`.
@@ -711,7 +714,6 @@ const minScanUnpackedBytes = 1 << 20
 func defaultScanning() Scanning {
 	return Scanning{
 		Trivy:            "trivy",
-		CacheDir:         filepath.Join(os.TempDir(), "sindri-trivy"),
 		Timeout:          Duration(10 * time.Minute),
 		MaxUnpackedBytes: 1 << 30,
 	}
@@ -758,15 +760,26 @@ func (s *Scanning) applyDefaults() {
 	if s.Trivy == "" {
 		s.Trivy = d.Trivy
 	}
-	if s.CacheDir == "" {
-		s.CacheDir = d.CacheDir
-	}
 	if s.Timeout == 0 {
 		s.Timeout = d.Timeout
 	}
 	if s.MaxUnpackedBytes == 0 {
 		s.MaxUnpackedBytes = d.MaxUnpackedBytes
 	}
+}
+
+// ResolvedCacheDir is the directory Trivy keeps its database in: CacheDir, or
+// `sindri/trivy` under the user's cache directory when that is empty. It does
+// not create the directory or check who can write to it; the scanner does.
+func (s Scanning) ResolvedCacheDir() (string, error) {
+	if s.CacheDir != "" {
+		return s.CacheDir, nil
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("scanning.cacheDir is unset and the user cache directory is unknown: %w", err)
+	}
+	return filepath.Join(base, "sindri", "trivy"), nil
 }
 
 // validate checks the values whether or not scanning is on: a bad value is a

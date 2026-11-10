@@ -559,7 +559,7 @@ func TestParse_Scanning(t *testing.T) {
 			}
 		})
 	}
-	if defaults.Trivy != "trivy" || defaults.Timeout.Duration() != 10*time.Minute || defaults.MaxUnpackedBytes != 1<<30 || defaults.CacheDir == "" {
+	if defaults.Trivy != "trivy" || defaults.Timeout.Duration() != 10*time.Minute || defaults.MaxUnpackedBytes != 1<<30 || defaults.CacheDir != "" {
 		t.Fatalf("unexpected scanning defaults: %+v", defaults)
 	}
 }
@@ -585,4 +585,36 @@ func TestParse_RejectsScanning(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScanning_ResolvedCacheDir(t *testing.T) {
+	t.Run("ConfiguredDirectoryWins", func(t *testing.T) {
+		got, err := config.Scanning{CacheDir: "/var/cache/x"}.ResolvedCacheDir()
+		if err != nil || got != "/var/cache/x" {
+			t.Fatalf("ResolvedCacheDir() = %q, %v, want /var/cache/x", got, err)
+		}
+	})
+	t.Run("EmptyUsesTheUserCacheDirectory", func(t *testing.T) {
+		base := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", base)
+		t.Setenv("HOME", base)
+		want, err := os.UserCacheDir()
+		if err != nil {
+			t.Skipf("no user cache directory on this host: %v", err)
+		}
+		got, err := config.Scanning{}.ResolvedCacheDir()
+		if err != nil || got != filepath.Join(want, "sindri", "trivy") {
+			t.Fatalf("ResolvedCacheDir() = %q, %v, want %q", got, err, filepath.Join(want, "sindri", "trivy"))
+		}
+	})
+	t.Run("NoUserCacheDirectoryIsAnError", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", "")
+		t.Setenv("HOME", "")
+		if _, err := os.UserCacheDir(); err == nil {
+			t.Skip("this host resolves a cache directory without HOME")
+		}
+		if _, err := (config.Scanning{}).ResolvedCacheDir(); err == nil {
+			t.Fatal("ResolvedCacheDir() succeeded with no cache directory")
+		}
+	})
 }

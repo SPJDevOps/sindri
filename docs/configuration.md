@@ -251,7 +251,7 @@ Short form: `scanning: true` is the same as `scanning: {enabled: true}`.
 | `enabled` | boolean | Scan hosted publishes for known vulnerabilities and attach the result to the artifact. Off when the section is absent. An absent `enabled` in the mapping means `true`, because writing the section signals intent. | `false` |
 | `trivy` | string | The Trivy executable. A bare name is looked up on the PATH. Sindri runs it as a separate process and never links it in. | `trivy` |
 | `dbRepository` | string | A mirror of the Trivy vulnerability database, passed as `--db-repository`, for a server that cannot reach the public one. Cannot be combined with `skipDBUpdate`. | unset |
-| `cacheDir` | string | Where Trivy keeps its database and caches between scans. | `/tmp/sindri-trivy` |
+| `cacheDir` | string | Where Trivy keeps its database and caches between scans. Empty uses `sindri/trivy` under the user's cache directory (`$XDG_CACHE_HOME`, or `~/.cache` on Linux). The `-trivy` release image sets `/var/cache/sindri-trivy`. | unset |
 | `timeout` | duration | How long one scan may run before it is cancelled and retried. At least `1m`. | `10m` |
 | `skipDBUpdate` | boolean | Never download the vulnerability database, and scan with the one already in `cacheDir`. For an air-gapped server with a pre-seeded cache. Cannot be combined with `dbRepository`. | `false` |
 | `maxUnpackedBytes` | integer | The most bytes unpacked from one wheel or tarball while scanning it, so that an archive bomb cannot fill the disk. At least 1048576 (1 MiB). | `1073741824` |
