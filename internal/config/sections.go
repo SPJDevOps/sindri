@@ -701,8 +701,8 @@ type Scanning struct {
 	JavaDBRepository string `yaml:"javaDbRepository"`
 	// Where Trivy keeps its database and caches between scans. Empty uses
 	// `sindri/trivy` under the user's cache directory (`$XDG_CACHE_HOME`, or
-	// `~/.cache` on Linux). The `-trivy` release image sets
-	// `/var/cache/sindri-trivy`.
+	// `~/.cache` on Linux). The `-trivy` release image sets `$XDG_CACHE_HOME`
+	// to `/var/cache`, so there it is `/var/cache/sindri/trivy`.
 	CacheDir string `yaml:"cacheDir"`
 	// How long one scan may run before it is cancelled and retried. At least
 	// `1m`.

@@ -1,7 +1,7 @@
 name: Release
 
 # A v* tag publishes binaries, checksums, and a multi-architecture image to
-# ghcr.io/spjdevops/sindri. `goreleaser release --snapshot --clean` builds the
+# ghcr.io/spjdevops/sindri, plus a `-trivy` image variant (ADR 23). `goreleaser release --snapshot --clean` builds the
 # same artifacts locally without publishing anything.
 on:
   push:

@@ -3,7 +3,9 @@
 
 image:
   repository: ghcr.io/spjdevops/sindri
-  # Empty means the chart's appVersion.
+  # Empty means the chart's appVersion. To scan with Trivy, use the image
+  # variant that includes it: the same version with a `-trivy` suffix, for
+  # example `1.2.0-trivy`, or `latest-trivy`.
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -53,6 +55,15 @@ persistence:
 # the limit must exceed the largest package you accept.
 tmp:
   sizeLimit: 2Gi
+
+# Opt-in vulnerability scanning (the `scanning:` section of `config`). It needs
+# the `-trivy` image tag above. Trivy's database must live somewhere writable,
+# and the root filesystem is read-only, so cacheVolume mounts an emptyDir at
+# /var/cache/sindri, where the -trivy image's default cache directory
+# /var/cache/sindri/trivy is created on start. The database is downloaded again
+# when the pod is replaced.
+scanning:
+  cacheVolume: false
 
 resources: {}
 nodeSelector: {}

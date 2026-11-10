@@ -58,7 +58,28 @@ dockers_v2:
       - deploy/docker/data
     labels:
       org.opencontainers.image.title: Sindri
-      org.opencontainers.image.description: A self-hosted artifact registry for OCI and PyPI with lifecycle and evidence
+      org.opencontainers.image.description: A self-hosted artifact registry for OCI, PyPI, and npm with lifecycle and evidence
+      org.opencontainers.image.source: https://github.com/SPJDevOps/sindri
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+
+  - id: sindri-trivy
+    images:
+      - ghcr.io/spjdevops/sindri
+    tags:
+      - "{{ .Version }}-trivy"
+      - "{{ if not .IsSnapshot }}latest-trivy{{ end }}"
+    dockerfile: deploy/docker/Dockerfile.trivy
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    extra_files:
+      - deploy/docker/data
+    labels:
+      org.opencontainers.image.title: Sindri with Trivy
+      org.opencontainers.image.description: A self-hosted artifact registry for OCI, PyPI, and npm with lifecycle and evidence, including Trivy for vulnerability scanning
       org.opencontainers.image.source: https://github.com/SPJDevOps/sindri
       org.opencontainers.image.licenses: Apache-2.0
       org.opencontainers.image.version: "{{ .Version }}"
