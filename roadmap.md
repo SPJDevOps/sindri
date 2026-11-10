@@ -830,15 +830,16 @@ publish is scanned, and promotion is refused above a severity.
 | 7, Nov 6–22 | M10 migration | SIN-24, 25, 26, 53 | |
 | 8, Nov 9–15 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
 | 9, Nov 10–22 | M11a scan | SIN-30, 31, 32, 36 | |
-| 10, Nov 23–29 | M11a gate | SIN-34, 38, 39, 72 | v1.3.0, then announce |
+| 10, Nov 23–29 | M11a gate | SIN-34, 38, 39, 72, 80 | v1.3.0, then announce |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
 week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9 and 10
 moved up two weeks. Sprint 9 started early on Nov 10.
 
 Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic, and the follow-ups
-from the Sprint 9 reviews: SIN-80 (`PutManifest` must require children in the publishing
-repository; security, before the announcement), 81, 82, 83, 84, and 85.
+from the Sprint 9 reviews: SIN-81, 82, 83, 84, and 85. SIN-80, the other follow-up, is in
+Sprint 10: `PutManifest` must require children in the publishing repository before the
+announcement.
 
 ---
 
