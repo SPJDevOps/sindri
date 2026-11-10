@@ -32,7 +32,9 @@ satisfied by anyone who can publish.
   alone proves nothing. A nested index or a child of unknown media type fails the whole job
   with no evidence, as does any blob the publishing repository does not hold (the job names
   that repository, and the scanner checks placement before reading each blob). Shared layers
-  are staged once per job and hard-linked into each platform's layout.
+  are staged once per job and hard-linked into each platform's layout. Two distinct children with the same platform
+  (os, architecture, variant, os.version, os.features) fail the job with no evidence, so a
+  gate reading the newest scan per platform cannot be shown the benign one only.
 - `pypi-dist` (wheel or sdist) and `npm-tarball`: the worker unpacks the archive into a
   temp directory, with a size cap and path traversal refused, and runs `trivy rootfs`. The
   evidence claims the package's own name and version, and anything pinned inside the

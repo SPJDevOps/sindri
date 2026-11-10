@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -69,6 +70,14 @@ type unsupportedChildError struct {
 
 func (e *unsupportedChildError) Error() string {
 	return fmt.Sprintf("index child %s has unsupported media type %q", e.digest, e.mediaType)
+}
+
+// duplicatePlatformError means two distinct children of an index share a
+// platform key, so the scans could not be told apart. The job attaches nothing.
+type duplicatePlatformError struct{ platform string }
+
+func (e *duplicatePlatformError) Error() string {
+	return fmt.Sprintf("index has two distinct children for platform %q", e.platform)
 }
 
 // placementChecker is the part of *db.Queries the scanner uses to enforce
@@ -226,7 +235,9 @@ func (j *jobStage) stageManifest(ctx context.Context, dir string, digest model.D
 		mediaType = ocispec.MediaTypeImageManifest
 	}
 	if mediaType != ocispec.MediaTypeImageManifest && mediaType != mediaTypeDockerManifest {
-		return fmt.Errorf("manifest %s has media type %q: %w", digest, mediaType, ErrUnsupportedKind)
+		// The descriptor said image manifest but the body is something else
+		// (an index, say). Permanent: retrying reads the same bytes.
+		return &unsupportedChildError{digest: digest, mediaType: mediaType}
 	}
 
 	blobDir := filepath.Join(dir, "blobs", "sha256")
@@ -343,6 +354,15 @@ func (j *jobStage) stageIndex(ctx context.Context, root string, digest model.Dig
 	if len(children) > maxPlatforms {
 		return nil, fmt.Errorf("index %s: %d distinct children, more than %d: %w", digest, len(children), maxPlatforms, errTooManyPlatforms)
 	}
+	// Two distinct manifests under one platform key would leave a gate
+	// reading the newest scan per platform to see only one of them.
+	byPlatform := make(map[string]bool, len(children))
+	for _, c := range children {
+		if byPlatform[c.platform] {
+			return nil, &duplicatePlatformError{platform: c.platform}
+		}
+		byPlatform[c.platform] = true
+	}
 	var targets []target
 	for i, c := range children {
 		dir := filepath.Join(root, "image-"+strconv.Itoa(i))
@@ -358,6 +378,8 @@ func isUnknownPlatform(p *ocispec.Platform) bool {
 	return p != nil && p.OS == "unknown" && p.Architecture == "unknown"
 }
 
+// platformString is the key a child is told apart by: os/arch[/variant],
+// then :os.version and +os.features (sorted) when present.
 func platformString(p *ocispec.Platform) string {
 	if p == nil || p.OS == "" || p.Architecture == "" {
 		return ""
@@ -365,6 +387,14 @@ func platformString(p *ocispec.Platform) string {
 	out := p.OS + "/" + p.Architecture
 	if p.Variant != "" {
 		out += "/" + p.Variant
+	}
+	if p.OSVersion != "" {
+		out += ":" + p.OSVersion
+	}
+	if len(p.OSFeatures) > 0 {
+		features := slices.Clone(p.OSFeatures)
+		slices.Sort(features)
+		out += "+" + strings.Join(features, "+")
 	}
 	return out
 }

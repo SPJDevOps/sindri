@@ -1088,3 +1088,53 @@ func TestStage_IndexPlatformsSharingALayerStageItOnce(t *testing.T) {
 		t.Fatal("the shared layer was written once per platform, want one file linked into both layouts")
 	}
 }
+
+func TestRun_IndexWithTwoChildrenOnOnePlatformIsSkippedWithNoEvidence(t *testing.T) {
+	f := newFixture(t)
+	a := f.imageN(ocispec.MediaTypeImageManifest, 1)
+	b := f.imageN(ocispec.MediaTypeImageManifest, 2)
+	idx := f.index(manifestDesc(a, "linux", "amd64"), manifestDesc(b, "linux", "amd64"))
+	res, err := f.scanner(Options{Trivy: "/nonexistent"}).Handle(t.Context(), f.job(idx, "oci-index"))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if want := `{"skipped":"duplicate platform","platform":"linux/amd64"}`; string(res) != want || len(f.ev.attached) != 0 {
+		t.Fatalf("result = %s (attached %d), want %s", res, len(f.ev.attached), want)
+	}
+}
+
+func TestStage_WindowsChildrenDifferingByOSVersionAreBothStaged(t *testing.T) {
+	f := newFixture(t)
+	a := f.imageN(ocispec.MediaTypeImageManifest, 1)
+	b := f.imageN(ocispec.MediaTypeImageManifest, 2)
+	da, db2 := manifestDesc(a, "windows", "amd64"), manifestDesc(b, "windows", "amd64")
+	da.Platform.OSVersion, db2.Platform.OSVersion = "10.0.17763", "10.0.20348"
+	da.Platform.OSFeatures = []string{"win32k", "b"}
+	targets, err := f.scanner(Options{}).stage(t.Context(), testRepo, t.TempDir(), model.SubjectKindOCIIndex, f.index(da, db2))
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	var got []string
+	for _, tg := range targets {
+		got = append(got, tg.platform)
+	}
+	if want := "windows/amd64:10.0.17763+b+win32k,windows/amd64:10.0.20348"; strings.Join(got, ",") != want {
+		t.Fatalf("platforms = %v, want %s", got, want)
+	}
+}
+
+func TestRun_ChildDescribedAsManifestButAnIndexIsSkippedWithNoEvidence(t *testing.T) {
+	f := newFixture(t)
+	// A manifest-shaped body declaring an index media type.
+	raw, _ := json.Marshal(ocispec.Manifest{MediaType: ocispec.MediaTypeImageIndex})
+	liar := f.put(raw)
+	idx := f.index(manifestDesc(liar, "linux", "amd64"))
+	res, err := f.scanner(Options{Trivy: "/nonexistent"}).Handle(t.Context(), f.job(idx, "oci-index"))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	want := `{"skipped":"unsupported child","digest":"` + liar.String() + `","mediaType":"application/vnd.oci.image.index.v1+json"}`
+	if string(res) != want || len(f.ev.attached) != 0 {
+		t.Fatalf("result = %s (attached %d), want %s", res, len(f.ev.attached), want)
+	}
+}

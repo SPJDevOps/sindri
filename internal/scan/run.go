@@ -84,6 +84,14 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 	if errors.As(err, &notIn) {
 		return s.skippedNotInRepository(ctx, job, notIn.digest)
 	}
+	var dup *duplicatePlatformError
+	if errors.As(err, &dup) {
+		s.logger.WarnContext(ctx, "scan skipped: duplicate platform", "job", job.ID, "platform", dup.platform)
+		return skipResult(struct {
+			Skipped  string `json:"skipped"`
+			Platform string `json:"platform"`
+		}{"duplicate platform", dup.platform})
+	}
 	var unsupported *unsupportedChildError
 	if errors.As(err, &unsupported) {
 		s.logger.WarnContext(ctx, "scan skipped: unsupported index child", "job", job.ID, "digest", unsupported.digest.String(), "media_type", unsupported.mediaType)
