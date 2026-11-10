@@ -836,7 +836,9 @@ Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is long
 week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9 and 10
 moved up two weeks. Sprint 9 started early on Nov 10.
 
-Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic.
+Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic, and the follow-ups
+from the Sprint 9 reviews: SIN-80 (`PutManifest` must require children in the publishing
+repository; security, before the announcement), 81, 82, 83, 84, and 85.
 
 ---
 
