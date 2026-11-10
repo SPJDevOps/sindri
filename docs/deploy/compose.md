@@ -97,3 +97,36 @@ Keep `.env` safe. It holds the only copy of both secrets.
 Next, put TLS in front of it with a [reverse proxy](reverse-proxy.md), and set up
 [backups](../operations.md#backup-and-restore). To upgrade, follow
 [Upgrading](../upgrading.md).
+
+## Scanning
+
+Vulnerability scanning is off by default. It needs the image variant that ships Trivy, so
+set `SINDRI_VERSION` in `.env` to the `-trivy` tag (for example `1.2.0-trivy`, or
+`latest-trivy`), which is `ghcr.io/spjdevops/sindri:<version>-trivy`. Then add this to
+`sindri.yaml`:
+
+```yaml
+scanning:
+  enabled: true
+```
+
+Each hosted publish then gets a CycloneDX sbom and a Trivy scan, kept as evidence on the
+artifact. Proxied content is not scanned.
+
+The `-trivy` image keeps Trivy's vulnerability database and the scan staging area under
+`/var/cache/sindri/trivy`. Mount a named volume at `/var/cache/sindri` on the `sindri`
+service, and declare it under `volumes:`, so the database is not downloaded again each time
+the container is recreated:
+
+```yaml
+    volumes:
+      - blobs:/var/lib/sindri
+      - scan-cache:/var/cache/sindri
+```
+
+The volume must have room for the largest image you scan, because each scan unpacks it
+there. Trivy downloads its database from the internet on first use. An air-gapped install
+sets `scanning.dbRepository` and `scanning.javaDbRepository` to a mirror. A full scanning
+guide, including mirroring the databases, is coming with the severity gate. Until then, see
+the [`scanning` reference](../configuration.md#scanning) and
+[ADR 29](../adr/0029-what-a-scan-covers.md).
