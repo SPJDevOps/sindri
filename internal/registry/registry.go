@@ -69,7 +69,14 @@ type Registry struct {
 	q       *db.Queries
 	cas     *cas.Store
 	backend string
+
+	scanOnPublish bool
 }
+
+// SetScanOnPublish makes every hosted publish of a scannable kind enqueue a
+// scan job in the publish transaction (ADR 23). Call it once while wiring,
+// before serving; it is not safe to call concurrently with publishes.
+func (r *Registry) SetScanOnPublish(on bool) { r.scanOnPublish = on }
 
 // New wires a Registry. backend is recorded on blob rows (filesystem, s3, …).
 func New(database *db.DB, store *cas.Store, backend string) *Registry {
@@ -400,7 +407,7 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		kind = model.SubjectKindNPMTarball
 	case model.ProtocolOCI:
 	}
-	if err := recordSubject(ctx, q, repo, info.Digest, info.Size, kind, p.Provenance); err != nil {
+	if err := r.recordSubject(ctx, q, repo, info.Digest, info.Size, kind, p.Provenance); err != nil {
 		return model.File{}, err
 	}
 

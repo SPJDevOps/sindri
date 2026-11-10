@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,8 @@ import (
 
 	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/queue"
+	"github.com/spj/sindri/internal/scan"
 )
 
 // OwnerPrefix starts a repository owner reference.
@@ -28,7 +31,7 @@ func OwnerRef(repoName string) string {
 // Only hosted repositories hold artifacts that are ours (invariant I4). A
 // proxy cache path must never call this, and the guard below makes a mistaken
 // call a no-op rather than a promotable subject.
-func recordSubject(ctx context.Context, q *db.Queries, repo db.Repository, digest model.Digest, size int64, kind model.SubjectKind, prov model.Provenance) error {
+func (r *Registry) recordSubject(ctx context.Context, q *db.Queries, repo db.Repository, digest model.Digest, size int64, kind model.SubjectKind, prov model.Provenance) error {
 	if repo.Type != string(model.RepoTypeHosted) {
 		return nil
 	}
@@ -45,16 +48,43 @@ func recordSubject(ctx context.Context, q *db.Queries, repo db.Repository, diges
 	}); err != nil {
 		return fmt.Errorf("recording owner of %s: %w", digest, err)
 	}
-	if prov.SourceType == "" {
+	if prov.SourceType != "" {
+		if err := q.RecordProvenance(ctx, db.RecordProvenanceParams{
+			Digest:     digest.String(),
+			SourceType: prov.SourceType,
+			SourceRef:  optionalText(prov.SourceRef),
+			BuildRef:   optionalText(prov.BuildRef),
+		}); err != nil {
+			return fmt.Errorf("recording provenance of %s: %w", digest, err)
+		}
+	}
+	return r.enqueueScan(ctx, q, digest, kind)
+}
+
+// enqueueScan hands a hosted subject to the scanner in the publish
+// transaction, so the job exists exactly when the publish commits and a
+// rolled-back publish leaves none. A re-publish of an existing digest enqueues
+// again: the dedupe key collapses it while a scan is queued or running, and a
+// finished (or failed) scan is deliberately re-run, so a re-push after a
+// failed scan rescans.
+func (r *Registry) enqueueScan(ctx context.Context, q *db.Queries, digest model.Digest, kind model.SubjectKind) error {
+	if !r.scanOnPublish || !scannable(kind) {
 		return nil
 	}
-	if err := q.RecordProvenance(ctx, db.RecordProvenanceParams{
-		Digest:     digest.String(),
-		SourceType: prov.SourceType,
-		SourceRef:  optionalText(prov.SourceRef),
-		BuildRef:   optionalText(prov.BuildRef),
+	args, err := json.Marshal(struct {
+		Digest string `json:"digest"`
+		Kind   string `json:"kind"`
+	}{digest.String(), string(kind)})
+	if err != nil {
+		return fmt.Errorf("encoding scan job for %s: %w", digest, err)
+	}
+	if _, err := queue.EnqueueTx(ctx, q, queue.EnqueueParams{
+		Kind:      scan.JobKind,
+		Args:      args,
+		DedupeKey: scan.DedupeKey(digest.String()),
+		CreatedBy: scan.Actor,
 	}); err != nil {
-		return fmt.Errorf("recording provenance of %s: %w", digest, err)
+		return fmt.Errorf("enqueueing scan of %s: %w", digest, err)
 	}
 	return nil
 }
@@ -65,4 +95,17 @@ func optionalText(value string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: value, Valid: true}
+}
+
+// scannable reports whether a subject kind has contents the scanner reads.
+// Files published through the API are opaque and are not scanned.
+func scannable(kind model.SubjectKind) bool {
+	switch kind {
+	case model.SubjectKindOCIManifest, model.SubjectKindOCIIndex,
+		model.SubjectKindPyPIDist, model.SubjectKindNPMTarball:
+		return true
+	case model.SubjectKindFile:
+		return false
+	}
+	return false
 }

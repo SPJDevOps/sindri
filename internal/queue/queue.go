@@ -92,34 +92,17 @@ type EnqueueParams struct {
 // Enqueue adds a job, or returns the active job with the same dedupe key.
 // created reports which of the two happened.
 func (q *Queue) Enqueue(ctx context.Context, p EnqueueParams) (Job, bool, error) {
-	if p.Kind == "" {
-		return Job{}, false, errors.New("enqueueing a job: kind is required")
+	arg, err := p.insertParams()
+	if err != nil {
+		return Job{}, false, err
 	}
-	if p.CreatedBy == "" {
-		return Job{}, false, errors.New("enqueueing a job: created_by is required")
-	}
-	args := p.Args
-	if len(args) == 0 {
-		args = json.RawMessage(`{}`)
-	}
-	maxAttempts := p.MaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = DefaultMaxAttempts
-	}
-	key := pgtype.Text{String: p.DedupeKey, Valid: p.DedupeKey != ""}
+	key := arg.DedupeKey
 
 	// The insert and the read of the active job are two statements, so the
 	// active job can finish between them. Each round either inserts or finds
 	// one; a few rounds cover any realistic interleaving.
 	for range 3 {
-		row, err := q.q.EnqueueJob(ctx, db.EnqueueJobParams{
-			Kind:         p.Kind,
-			Args:         args,
-			DedupeKey:    key,
-			MaxAttempts:  clampInt32(maxAttempts),
-			DelaySeconds: seconds(p.Delay),
-			CreatedBy:    p.CreatedBy,
-		})
+		row, err := q.q.EnqueueJob(ctx, arg)
 		if err == nil {
 			return jobFromRow(row), true, nil
 		}
@@ -135,6 +118,53 @@ func (q *Queue) Enqueue(ctx context.Context, p EnqueueParams) (Job, bool, error)
 		}
 	}
 	return Job{}, false, fmt.Errorf("enqueueing %s: the active job kept changing", p.Kind)
+}
+
+// EnqueueTx adds a job on q, which is bound to the caller's transaction, so
+// the job exists exactly when the caller's work commits. It reports whether a
+// row was inserted. A dedupe key that is already active makes the call a
+// no-op (the insert is ON CONFLICT DO NOTHING) and created is false; unlike
+// Enqueue it does not read the active job back, because a retry loop cannot
+// run inside a transaction.
+func EnqueueTx(ctx context.Context, q *db.Queries, p EnqueueParams) (created bool, err error) {
+	arg, err := p.insertParams()
+	if err != nil {
+		return false, err
+	}
+	if _, err := q.EnqueueJob(ctx, arg); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("enqueueing %s: %w", p.Kind, err)
+	}
+	return true, nil
+}
+
+// insertParams validates p and applies the defaults shared by Enqueue and
+// EnqueueTx.
+func (p EnqueueParams) insertParams() (db.EnqueueJobParams, error) {
+	if p.Kind == "" {
+		return db.EnqueueJobParams{}, errors.New("enqueueing a job: kind is required")
+	}
+	if p.CreatedBy == "" {
+		return db.EnqueueJobParams{}, errors.New("enqueueing a job: created_by is required")
+	}
+	args := p.Args
+	if len(args) == 0 {
+		args = json.RawMessage(`{}`)
+	}
+	maxAttempts := p.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = DefaultMaxAttempts
+	}
+	return db.EnqueueJobParams{
+		Kind:         p.Kind,
+		Args:         args,
+		DedupeKey:    pgtype.Text{String: p.DedupeKey, Valid: p.DedupeKey != ""},
+		MaxAttempts:  clampInt32(maxAttempts),
+		DelaySeconds: seconds(p.Delay),
+		CreatedBy:    p.CreatedBy,
+	}, nil
 }
 
 // Get returns a job by id.
