@@ -32,6 +32,11 @@ jobs:
           cache: true
       - name: gofmt
         run: make fmt-check
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1
+      - name: Helm chart
+        run: make lint-chart
       - name: go vet
         run: go vet ./...
       - name: golangci-lint

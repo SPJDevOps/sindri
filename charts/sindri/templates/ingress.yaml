@@ -1,0 +1,47 @@
+{{- if .Values.ingress.enabled }}
+{{- if not .Values.ingress.host }}
+{{- fail "ingress.host is required when ingress.enabled is true" }}
+{{- end }}
+{{- $service := include "sindri.fullname" . }}
+{{- $port := .Values.service.port }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "sindri.fullname" . }}
+  labels:
+    {{- include "sindri.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        # Sindri's public paths, listed so that /metrics, /healthz, and /readyz,
+        # which carry no authentication, are not published (ADR 28).
+        paths:
+          - path: /
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $service }}
+                port:
+                  number: {{ $port }}
+          {{- range list "/v2" "/pypi" "/npm" "/api/v1" "/auth" "/ui" }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $service }}
+                port:
+                  number: {{ $port }}
+          {{- end }}
+{{- end }}

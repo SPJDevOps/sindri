@@ -207,8 +207,9 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		NPM:               npmHandler,
 		Auth:              sessions,
 		// Read-only, GET and HEAD only, every page authorized (ADR 21).
-		UI:     auth.GuardUI(chain, uiHandler, signIn),
-		Logger: logger,
+		UI:          auth.GuardUI(chain, uiHandler, signIn),
+		Logger:      logger,
+		QueueCounts: jobs.Counts,
 	})
 	if err != nil {
 		database.Close()

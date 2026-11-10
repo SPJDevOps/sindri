@@ -117,6 +117,73 @@ func TestMetrics_CountsByRoutePatternNotRawPath(t *testing.T) {
 	}
 }
 
+func TestMetrics_QueueJobs(t *testing.T) {
+	tests := []struct {
+		name    string
+		counts  map[string]int64
+		err     error
+		want    []string
+		wantNot []string
+	}{
+		{
+			name:   "ReportsEachState",
+			counts: map[string]int64{"queued": 3, "running": 1, "failed": 2},
+			want: []string{
+				`sindri_queue_jobs{state="queued"} 3`,
+				`sindri_queue_jobs{state="running"} 1`,
+				`sindri_queue_jobs{state="failed"} 2`,
+			},
+		},
+		{
+			// An alert on failed jobs must see 0, not a series that is absent.
+			name:   "AStateWithNoJobsIsZero",
+			counts: map[string]int64{"queued": 3},
+			want: []string{
+				`sindri_queue_jobs{state="queued"} 3`,
+				`sindri_queue_jobs{state="failed"} 0`,
+			},
+		},
+		{
+			name:    "AFailedReadDropsTheSeriesAndKeepsTheScrape",
+			err:     errors.New("database is down"),
+			want:    []string{"sindri_build_info"},
+			wantNot: []string{"sindri_queue_jobs{"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, err := server.New(server.Options{
+				Address:  "127.0.0.1:0",
+				Database: &stubPinger{},
+				Logger:   slog.New(slog.DiscardHandler),
+				QueueCounts: func(context.Context) (map[string]int64, error) {
+					return tt.counts, tt.err
+				},
+			})
+			if err != nil {
+				t.Fatalf("server.New: %v", err)
+			}
+
+			res := get(t, srv, "/metrics")
+			if res.Code != http.StatusOK {
+				t.Fatalf("/metrics = %d, want 200", res.Code)
+			}
+			body := res.Body.String()
+			for _, want := range tt.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("/metrics lacks %q:\n%s", want, body)
+				}
+			}
+			for _, not := range tt.wantNot {
+				if strings.Contains(body, not) {
+					t.Errorf("/metrics contains %q:\n%s", not, body)
+				}
+			}
+		})
+	}
+}
+
 func TestRequestID(t *testing.T) {
 	tests := []struct {
 		name    string

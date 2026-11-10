@@ -28,6 +28,14 @@ checks="$(grep -rhoE '<!-- commands checked by: [^ ]+ -->' --include='*.md' docs
   | sed -E 's/<!-- commands checked by: ([^ ]+) -->/\1/' | sort -u)"
 test -n "${checks}" || { echo "no docs page names a check" >&2; exit 1; }
 
+# The pip and npm pages' gates run ./bin/sindri against the development Postgres.
+echo "== building the binary and starting the development stack"
+make build up
+for _ in $(seq 1 60); do
+  docker exec sindri-dev-postgres-1 pg_isready -q -U sindri -d sindri && break
+  sleep 1
+done
+
 for check in ${checks}; do
   case "${check}" in
     scripts/*)

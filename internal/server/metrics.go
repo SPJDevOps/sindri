@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,11 +15,17 @@ import (
 	"github.com/spj/sindri/internal/version"
 )
 
+// queueStates are the sindri_queue_jobs label values, fixed so that an alert
+// sees 0 rather than a missing series when a state has no jobs.
+var queueStates = []string{"queued", "running", "failed"}
+
 // metrics holds the instruments the HTTP layer reports.
 type metrics struct {
-	registry *prometheus.Registry
-	requests *prometheus.CounterVec
-	duration *prometheus.HistogramVec
+	registry    *prometheus.Registry
+	requests    *prometheus.CounterVec
+	duration    *prometheus.HistogramVec
+	queueJobs   *prometheus.GaugeVec
+	queueCounts func(ctx context.Context) (map[string]int64, error)
 }
 
 // newMetrics registers Sindri's instruments on registry.
@@ -25,9 +33,14 @@ type metrics struct {
 // An explicit registry rather than the global default: a global registry makes
 // two servers in one process collide, which is exactly what an integration test
 // does.
-func newMetrics(registry *prometheus.Registry) (*metrics, error) {
+func newMetrics(registry *prometheus.Registry, queueCounts func(ctx context.Context) (map[string]int64, error)) (*metrics, error) {
 	m := &metrics{
-		registry: registry,
+		registry:    registry,
+		queueCounts: queueCounts,
+		queueJobs: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "sindri_queue_jobs",
+			Help: "Background jobs by state, read from the queue table at scrape time.",
+		}, []string{"state"}),
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "sindri_http_requests_total",
 			Help: "HTTP requests by method, matched route, and status.",
@@ -50,6 +63,7 @@ func newMetrics(registry *prometheus.Registry) (*metrics, error) {
 	for _, c := range []prometheus.Collector{
 		m.requests,
 		m.duration,
+		m.queueJobs,
 		buildInfo,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -68,5 +82,30 @@ func (m *metrics) record(method, route string, status int, took time.Duration) {
 }
 
 func (m *metrics) handler() http.Handler {
-	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
+	serve := promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.refreshQueue(r.Context())
+		serve.ServeHTTP(w, r)
+	})
+}
+
+// refreshQueue reads the queue here rather than in a Collector, because a
+// Collector is given no context to do I/O with.
+//
+// When the read fails the series are dropped: a stale number would tell an
+// alert that all is well, and the rest of the scrape is still worth having.
+func (m *metrics) refreshQueue(ctx context.Context) {
+	if m.queueCounts == nil {
+		return
+	}
+	counts, err := m.queueCounts(ctx)
+	if err != nil {
+		m.queueJobs.Reset()
+		LoggerFromContext(ctx).WarnContext(ctx, "metrics: reading the job queue failed",
+			slog.String("error", err.Error()))
+		return
+	}
+	for _, state := range queueStates {
+		m.queueJobs.WithLabelValues(state).Set(float64(counts[state]))
+	}
 }

@@ -17,8 +17,8 @@
 # Credentials use PATH-level .npmrc keys, //localhost:8080/npm/<repo>/:_authToken.
 # Host-level keys gave ENEEDAUTH on publish and yarn 1 sent no token at all.
 # The token lines live in the user-level .npmrc (pnpm will not expand an env
-# reference in a project one) and the registry lines in each project's. README.md
-# shows these lines, and the gate fails if it stops containing them.
+# reference in a project one) and the registry lines in each project's.
+# docs/clients/npm.md shows these lines, and the gate fails if it stops containing them.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -114,7 +114,7 @@ versions() {
     python3 -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin)["versions"])))'
 }
 
-# registry_line REPO and token_line REPO: the lines README.md shows. The token is
+# registry_line REPO and token_line REPO: the lines the npm page shows. The token is
 # npm's own ${SINDRI_TOKEN} reference, so no file here holds the secret and the
 # gate exercises the same expansion a reader gets. The registry goes in the
 # project .npmrc; the token goes in the user-level one, because pnpm refuses to
@@ -133,33 +133,34 @@ write_npmrc() { registry_line "$2" > "$1/.npmrc"; }
 for repo in internal-js javascript; do token_line "${repo}"; done > "${npm_config_userconfig}"
 cp "${npm_config_userconfig}" "${HOME}/.npmrc"
 
-# The README must show what this gate runs. Each line is looked up whole, so a
-# README that drifts from the gate fails here instead of misleading a reader.
-readme_has() { grep -Fxq -- "$1" "${ROOT}/README.md" || fail "README.md does not contain the line: $1"; }
+# The page must show what this gate runs. Each line is looked up whole, so a
+# page that drifts from the gate fails here instead of misleading a reader.
+PAGE="docs/clients/npm.md"
+page_has() { grep -Fxq -- "$1" "${ROOT}/${PAGE}" || fail "${PAGE} does not contain the line: $1"; }
 for repo in internal-js javascript; do
-  readme_has "$(registry_line "${repo}")"
-  readme_has "$(token_line "${repo}")"
+  page_has "$(registry_line "${repo}")"
+  page_has "$(token_line "${repo}")"
 done
 # The commands are run below with the same name and flags, plus gate-only paths
 # (store, cache and lockfile-version options) on the pnpm and yarn lines.
 for cmd in 'npm publish --access public' 'npm install' 'pnpm import' \
   'pnpm install --frozen-lockfile' 'yarn import' 'yarn install --frozen-lockfile'; do
-  readme_has "${cmd}"
+  page_has "${cmd}"
 done
-# The yarn 4 settings README.md shows. They are written to .yarnrc.yml below.
-YARN4_README_LINES=(
+# The yarn 4 settings the page shows. They are written to .yarnrc.yml below.
+YARN4_PAGE_LINES=(
   'npmRegistryServer: "http://localhost:8080/npm/javascript/"'
   'unsafeHttpWhitelist:'
   '  - localhost'
   'npmAlwaysAuth: true'
   'npmAuthToken: "${SINDRI_TOKEN}"'
 )
-# The scope exemption README.md shows for an internal scope installed within a day.
+# The scope exemption the page shows for an internal scope installed within a day.
 YARN4_PREAPPROVED_LINES=(
   'npmPreapprovedPackages:'
   '  - "@acme/*"'
 )
-for line in "${YARN4_README_LINES[@]}" "${YARN4_PREAPPROVED_LINES[@]}"; do readme_has "${line}"; done
+for line in "${YARN4_PAGE_LINES[@]}" "${YARN4_PREAPPROVED_LINES[@]}"; do page_has "${line}"; done
 
 # tree_hash DIR: one hash over the relative path and content of every file in
 # the installed package, so a changed, missing or extra file changes it.
@@ -242,7 +243,7 @@ enableTelemetry: false
 enableGlobalCache: false
 cacheFolder: ${WORK}/yarn4-cache
 YML
-  printf '%s\n' "${YARN4_README_LINES[@]}"
+  printf '%s\n' "${YARN4_PAGE_LINES[@]}"
 } > "${Y4DIR}/.yarnrc.yml"
 Y4_BASE_RC="$(cat "${Y4DIR}/.yarnrc.yml")"
 # yarn 4 holds back a version younger than npmMinimalAgeGate (1440 minutes by
@@ -257,7 +258,7 @@ fi
 grep -q YN0016 "${WORK}/yarn4-default.log" ||
   { cat "${WORK}/yarn4-default.log" >&2; fail "yarn 4 failed on a new version, but not with the expected YN0016 quarantine"; }
 echo "  yarn 4 holds back a version published seconds ago (YN0016), on defaults"
-# The exemption README.md documents: the same fresh version installs once its
+# The exemption the npm page documents: the same fresh version installs once its
 # scope is pre-approved, so an internal package can be used the day it is published.
 printf '%s\n' "${Y4_BASE_RC}" "${YARN4_PREAPPROVED_LINES[@]}" > "${Y4DIR}/.yarnrc.yml"
 rm -rf "${XDG_DATA_HOME}/yarn/berry/metadata"

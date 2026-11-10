@@ -87,6 +87,39 @@ func (q *Queries) CompleteJob(ctx context.Context, arg CompleteJobParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const countJobsByState = `-- name: CountJobsByState :many
+SELECT state, count(*) AS jobs
+FROM jobs
+WHERE state IN ('queued', 'running', 'failed')
+GROUP BY state
+`
+
+type CountJobsByStateRow struct {
+	State string `json:"state"`
+	Jobs  int64  `json:"jobs"`
+}
+
+// What an operator watches. Succeeded jobs are left out: nothing alerts on them.
+func (q *Queries) CountJobsByState(ctx context.Context) ([]CountJobsByStateRow, error) {
+	rows, err := q.db.Query(ctx, countJobsByState)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountJobsByStateRow{}
+	for rows.Next() {
+		var i CountJobsByStateRow
+		if err := rows.Scan(&i.State, &i.Jobs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteFinishedJobs = `-- name: DeleteFinishedJobs :execrows
 DELETE FROM jobs
 WHERE state IN ('succeeded', 'failed')
