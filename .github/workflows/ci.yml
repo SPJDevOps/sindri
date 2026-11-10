@@ -91,6 +91,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '26'
+      # TestRealTrivy_ runs the real Trivy. With none on PATH it copies the
+      # binary out of the image pinned in internal/testsupport/trivy.go, and
+      # fails, rather than skips, when CI is set and that or the database
+      # download does not work.
       - name: Test
         run: make test-integration
 
