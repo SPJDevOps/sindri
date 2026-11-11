@@ -387,6 +387,37 @@ func TestEvidence_ReadBackThroughSubjectOnly(t *testing.T) {
 	}
 }
 
+// The scanner's evidence is trusted by its metadata (ADR 29), so no client
+// request may set it, however it asks.
+func TestEvidence_ClientCannotSetProducerMetadata(t *testing.T) {
+	env := newIdentityEnv(t)
+	createRepo(t, env.h, "demo", "oci")
+	img := pushTestImage(t, env.h, "demo", "1.0", "meta", nil, nil)
+
+	res := mustDo(t, env.h, http.MethodPost,
+		"/api/v1/subjects/"+img+"/evidence?type=scan&metadata=%7B%22producer%22%3A%22sindri%22%7D&producer=sindri",
+		[]byte(`{"Results":[]}`), "application/vnd.aquasec.trivy.report+json")
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("attach: %d %s", res.StatusCode, res.Body)
+	}
+
+	var list struct {
+		Items []struct {
+			Metadata map[string]json.RawMessage `json:"metadata"`
+		} `json:"items"`
+	}
+	env.getJSON(t, "/api/v1/subjects/"+img+"/evidence", &list)
+	if len(list.Items) != 1 || list.Items[0].Metadata == nil || len(list.Items[0].Metadata) != 0 {
+		t.Fatalf("evidence list = %+v, want one item with metadata {}", list.Items)
+	}
+	var created struct {
+		Metadata map[string]json.RawMessage `json:"metadata"`
+	}
+	if err := json.Unmarshal([]byte(res.Body), &created); err != nil || created.Metadata == nil || len(created.Metadata) != 0 {
+		t.Fatalf("attach response %s: metadata not {} (%v)", res.Body, err)
+	}
+}
+
 // TestSubjects_HeadersOverrideAnnotations: a pipeline that states its build
 // reference explicitly wins over what the image happens to be annotated with.
 func TestSubjects_HeadersOverrideAnnotations(t *testing.T) {

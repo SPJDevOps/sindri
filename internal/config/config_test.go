@@ -524,3 +524,98 @@ func TestCredentials_TokenAndPasswordAreExclusive(t *testing.T) {
 		})
 	}
 }
+
+func TestParse_Scanning(t *testing.T) {
+	defaults := config.Default().Scanning
+	tests := []struct {
+		name  string
+		input string
+		want  func(config.Scanning) config.Scanning // edits the defaults
+	}{
+		{name: "AbsentSectionIsDisabledWithDefaults", input: "listen: :8080\n", want: func(s config.Scanning) config.Scanning { return s }},
+		{name: "TrueEnablesWithDefaults", input: "scanning: true\n", want: func(s config.Scanning) config.Scanning { s.Enabled = true; return s }},
+		{name: "FalseIsDisabled", input: "scanning: false\n", want: func(s config.Scanning) config.Scanning { return s }},
+		{name: "MappingWithoutEnabledIsEnabled", input: "scanning:\n  timeout: 5m\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.Timeout = true, config.Duration(5*time.Minute)
+			return s
+		}},
+		{name: "MappingWithEnabledFalseIsDisabled", input: "scanning:\n  enabled: false\n  trivy: /opt/trivy\n", want: func(s config.Scanning) config.Scanning {
+			s.Trivy = "/opt/trivy"
+			return s
+		}},
+		{name: "MappingFieldsAreKept", input: "scanning:\n  dbRepository: registry.example.com/trivy-db\n  javaDbRepository: registry.example.com/trivy-java-db\n  cacheDir: /var/cache/trivy\n  maxUnpackedBytes: 2097152\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.DBRepository, s.JavaDBRepository, s.CacheDir, s.MaxUnpackedBytes = true, "registry.example.com/trivy-db", "registry.example.com/trivy-java-db", "/var/cache/trivy", 2097152
+			return s
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.Parse([]byte(tc.input), "sindri.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(tc.want(defaults), cfg.Scanning); diff != "" {
+				t.Fatalf("scanning (-want +got):\n%s", diff)
+			}
+		})
+	}
+	if defaults.Trivy != "trivy" || defaults.Timeout.Duration() != 10*time.Minute || defaults.MaxUnpackedBytes != 1<<30 || defaults.CacheDir != "" {
+		t.Fatalf("unexpected scanning defaults: %+v", defaults)
+	}
+}
+
+func TestParse_RejectsScanning(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "NotABoolean", input: "scanning: sometimes\n", want: "scanning must be true, false, or a mapping"},
+		{name: "UnknownKey", input: "scanning:\n  trivvy: x\n", want: `unknown field "trivvy"`},
+		{name: "TimeoutTooShort", input: "scanning:\n  timeout: 30s\n", want: "scanning.timeout"},
+		{name: "TooSmallUnpackLimit", input: "scanning:\n  maxUnpackedBytes: 1024\n", want: "scanning.maxUnpackedBytes"},
+		{name: "SkipDBUpdateWithJavaMirror", input: "scanning:\n  skipDBUpdate: true\n  javaDbRepository: mirror.example.com/java-db\n", want: "scanning.javaDbRepository"},
+		{name: "SkipDBUpdateWithMirror", input: "scanning:\n  skipDBUpdate: true\n  dbRepository: mirror.example.com/db\n", want: "scanning.dbRepository"},
+		{name: "BadValueWhileDisabled", input: "scanning:\n  enabled: false\n  timeout: 1s\n", want: "scanning.timeout"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Parse([]byte(tc.input), "sindri.yaml")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Parse(%q) error = %v, want it to mention %q", tc.input, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestScanning_ResolvedCacheDir(t *testing.T) {
+	t.Run("ConfiguredDirectoryWins", func(t *testing.T) {
+		got, err := config.Scanning{CacheDir: "/var/cache/x"}.ResolvedCacheDir()
+		if err != nil || got != "/var/cache/x" {
+			t.Fatalf("ResolvedCacheDir() = %q, %v, want /var/cache/x", got, err)
+		}
+	})
+	t.Run("EmptyUsesTheUserCacheDirectory", func(t *testing.T) {
+		base := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", base)
+		t.Setenv("HOME", base)
+		want, err := os.UserCacheDir()
+		if err != nil {
+			t.Skipf("no user cache directory on this host: %v", err)
+		}
+		got, err := config.Scanning{}.ResolvedCacheDir()
+		if err != nil || got != filepath.Join(want, "sindri", "trivy") {
+			t.Fatalf("ResolvedCacheDir() = %q, %v, want %q", got, err, filepath.Join(want, "sindri", "trivy"))
+		}
+	})
+	t.Run("NoUserCacheDirectoryIsAnError", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", "")
+		t.Setenv("HOME", "")
+		if _, err := os.UserCacheDir(); err == nil {
+			t.Skip("this host resolves a cache directory without HOME")
+		}
+		if _, err := (config.Scanning{}).ResolvedCacheDir(); err == nil {
+			t.Fatal("ResolvedCacheDir() succeeded with no cache directory")
+		}
+	})
+}

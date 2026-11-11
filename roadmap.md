@@ -829,14 +829,17 @@ publish is scanned, and promotion is refused above a severity.
 | 6, Nov 6–15 | M10 docs site | SIN-22, 23, 29 | |
 | 7, Nov 6–22 | M10 migration | SIN-24, 25, 26, 53 | |
 | 8, Nov 9–15 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
-| 9, Nov 16–22 | M11a scan | SIN-30, 31, 32, 36 | |
-| 10, Nov 23–29 | M11a gate | SIN-34, 38, 39, 72 | v1.3.0, then announce |
+| 9, Nov 10–22 | M11a scan | SIN-30, 31, 32, 36 | |
+| 10, Nov 23–29 | M11a gate | SIN-34, 38, 39, 72, 80 | v1.3.0, then announce |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
 week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9 and 10
-moved up two weeks.
+moved up two weeks. Sprint 9 started early on Nov 10.
 
-Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic.
+Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic, and the follow-ups
+from the Sprint 9 reviews: SIN-81, 82, 83, 84, and 85. SIN-80, the other follow-up, is in
+Sprint 10: `PutManifest` must require children in the publishing repository before the
+announcement.
 
 ---
 
@@ -1101,17 +1104,24 @@ severity. This is what the announcement claims. M11 was split in two by
 [ADR 25](docs/adr/0025-what-the-announcement-requires.md); M11b follows it.
 
 **Scope.**
-- [ ] A `scanning:` section in the one configuration loader, off by default, with the path
-  to `trivy` and an optional mirrored vulnerability database for air-gapped installs
-- [ ] A `scan` job kind on the queue table. A hosted publish enqueues it, and the worker runs
+- [x] What each protocol's scan covers, and which scans a severity gate trusts:
+  [ADR 29](docs/adr/0029-what-a-scan-covers.md) (SIN-30)
+- [x] A `scanning:` section in the one configuration loader, off by default, with the path
+  to `trivy` and optional mirrored vulnerability and Java databases for air-gapped installs
+  (SIN-31)
+- [x] A `scan` job kind on the queue table. A hosted publish enqueues it, and the worker runs
   Trivy and attaches a CycloneDX `sbom` and a `scan` result as evidence on the subject.
   Nothing new bypasses `cas`: evidence documents are written through the existing path
+  (SIN-32)
 - [ ] A second gate rule kind, `{"scan": {"max_severity": "high"}}`, with short-form sugar
   and both golden tests covering it. The decoder still rejects unknown rules
-- [ ] A release image variant that includes Trivy; the default image and the binary stay
-  dependency-free
+- [x] A release image variant that includes Trivy, tagged `-trivy`; the default image and
+  the binary stay dependency-free (SIN-36)
 - [ ] A docs page on enabling scanning that states its limits: off by default, hosted
-  publishes only, and what each protocol's scan covers (SIN-72)
+  publishes only, and what each protocol's scan covers. It also covers air-gapped installs:
+  mirroring the Trivy and Java databases, pointing `dbRepository` and `javaDbRepository` at the
+  mirror, keeping it fresh, and pre-seeding the cache instead. The gate script runs the mirror
+  example (SIN-72)
 - [ ] `pitch.md`'s open-core table updated to the line ADR 23 draws
 
 **Out of scope.** Everything in M11b. Per-CVE waivers, licence policy, org-wide rules, and
@@ -1131,7 +1141,9 @@ make ci && make test-integration
 make up && make build && ./scripts/m11-scan-gate.sh
 # push an image with a known-vulnerable package: an sbom and a scan appear as evidence;
 # promotion to a stage gated on max_severity high is refused with the CVE named;
-# the same for a wheel and an npm tarball
+# the same for a wheel and an npm tarball;
+# with the Trivy and Java databases mirrored to a local registry and no route to the public
+# ones, a scan still succeeds (the scanning page's air-gapped example)
 ```
 
 ---

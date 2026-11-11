@@ -69,6 +69,9 @@ services:
       - "127.0.0.1:5556:5556"
 
   sindri:
+    # To scan what you publish, use the image that includes Trivy and
+    # uncomment `scanning:` in the configuration below:
+    #   export SINDRI_IMAGE=ghcr.io/spjdevops/sindri:latest-trivy
     image: ${SINDRI_IMAGE:-ghcr.io/spjdevops/sindri:latest}
     network_mode: "service:dex"
     depends_on:
@@ -108,6 +111,11 @@ configs:
           clientSecret: quickstart-not-a-secret
           redirectUrl: http://localhost:8080/auth/callback
           scopes: [openid, profile, email, groups]
+      # Opt-in vulnerability scanning of hosted publishes. It needs the
+      # `-trivy` image (see SINDRI_IMAGE above) and downloads Trivy's database
+      # from the internet on first use.
+      # scanning:
+      #   enabled: true
       repos:
         # A hosted npm repository. Container images need no declaration here:
         # docker push creates its repository.

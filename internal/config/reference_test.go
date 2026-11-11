@@ -48,6 +48,7 @@ var shortForms = map[string][]shortForm{
 	"log":      {{short: `debug`, long: `{level: debug}`}},
 	"auth":     {{short: `${SINDRI_TOKEN}`, long: `{static_token: "${SINDRI_TOKEN}"}`}},
 	"worker":   {{short: `false`, long: `{enabled: false}`}, {short: `true`, long: `{enabled: true}`}},
+	"scanning": {{short: `false`, long: `{enabled: false}`}, {short: `true`, long: `{enabled: true}`}},
 }
 
 func TestReference_PageMatchesStructs(t *testing.T) {
@@ -140,7 +141,11 @@ func TestReference_DefaultMatchesWhatEmptySectionsLoadTo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := Default(); !reflect.DeepEqual(*got, want) {
+	want := Default()
+	// A written mapping with no enabled means true, so an empty scanning
+	// mapping is on while an absent section is off.
+	want.Scanning.Enabled = true
+	if !reflect.DeepEqual(*got, want) {
 		t.Errorf("empty sections load to\n %+v\nbut Default() is\n %+v", *got, want)
 	}
 }

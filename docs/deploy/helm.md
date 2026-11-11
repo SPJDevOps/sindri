@@ -154,3 +154,30 @@ The chart stops the old pod before starting the new one, so a push in progress d
 upgrade fails and the client has to retry it. Migrations run when the new pod starts. Read
 [Upgrading](../upgrading.md) for what they guarantee, and take a
 [backup](../operations.md#backup-and-restore) first.
+
+## Scanning
+
+Vulnerability scanning is off by default. It needs the image variant that ships Trivy, so
+set `image.tag` to the `-trivy` tag and turn scanning on in `config`:
+
+```yaml
+image:
+  tag: 1.2.0-trivy
+config:
+  scanning:
+    enabled: true
+```
+
+Each hosted publish then gets a CycloneDX sbom and a Trivy scan, kept as evidence on the
+artifact. Proxied content is not scanned.
+
+Once `config.scanning` is set, the chart mounts an `emptyDir` scan cache at
+`/var/cache/sindri` for Trivy's database and the scan staging area, because the root
+filesystem is read-only. It is sized by the node's ephemeral storage, which must exceed the
+largest image you scan. The database is downloaded again when the pod is replaced.
+
+Trivy downloads its database from the internet on first use. An air-gapped install sets
+`scanning.dbRepository` and `scanning.javaDbRepository` to a mirror. A full scanning guide,
+including mirroring the databases, is coming with the severity gate. Until then, see the
+[`scanning` reference](../configuration.md#scanning) and
+[ADR 29](../adr/0029-what-a-scan-covers.md).

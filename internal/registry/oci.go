@@ -366,7 +366,7 @@ func (r *Registry) PutManifest(ctx context.Context, repoName, image, reference, 
 	if isIndexMediaType(resolvedMediaType) {
 		kind = model.SubjectKindOCIIndex
 	}
-	if err := recordSubject(ctx, q, repo, info.Digest, info.Size, kind, prov); err != nil {
+	if err := r.recordSubject(ctx, q, repo, info.Digest, info.Size, kind, prov); err != nil {
 		return Manifest{}, err
 	}
 

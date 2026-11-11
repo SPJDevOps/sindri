@@ -40,6 +40,7 @@ type Config struct {
 	Log      Log      `yaml:"log"`
 	Auth     Auth     `yaml:"auth"`
 	Worker   Worker   `yaml:"worker"`
+	Scanning Scanning `yaml:"scanning"`
 
 	// The origin clients reach this server at, for example
 	// `https://sindri.example.com`. Required when the file declares any npm
@@ -72,6 +73,7 @@ func Default() Config {
 		Log:      defaultLog(),
 		Auth:     defaultAuth(),
 		Worker:   defaultWorker(),
+		Scanning: defaultScanning(),
 	}
 }
 
@@ -189,6 +191,7 @@ func (c *Config) applyDefaults() {
 	c.Log.applyDefaults()
 	c.Auth.applyDefaults()
 	c.Worker.applyDefaults()
+	c.Scanning.applyDefaults()
 }
 
 // Validate reports the first configuration error, naming the field.
@@ -201,6 +204,7 @@ func (c *Config) Validate() error {
 		c.Auth.validate,
 		c.validatePublicURL,
 		c.Worker.validate,
+		c.Scanning.validate,
 		c.Credentials.validate,
 	} {
 		if err := check(); err != nil {

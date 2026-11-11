@@ -54,3 +54,4 @@
   - [26. The docs site is built by mdBook from plain markdown, and lychee checks its links](adr/0026-docs-site-generator.md)
   - [27. Upstream credentials may be a Bearer token](adr/0027-upstream-credentials-may-be-a-bearer-token.md)
   - [28. The Helm chart lives in this repository and is published to ghcr as an OCI artifact](adr/0028-helm-chart-location-and-publishing.md)
+  - [29. What a scan covers, and which scans a severity gate trusts](adr/0029-what-a-scan-covers.md)

@@ -13,6 +13,7 @@ import (
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/gc"
 	"github.com/spj/sindri/internal/queue"
+	"github.com/spj/sindri/internal/scanjob"
 	"github.com/spj/sindri/internal/worker"
 )
 
@@ -28,7 +29,7 @@ const finishedJobRetention = 30 * 24 * time.Hour
 
 // handlers are the jobs this binary knows how to run.
 func (a *app) handlers(cfg config.Worker) map[string]worker.Handler {
-	return map[string]worker.Handler{
+	h := map[string]worker.Handler{
 		gc.JobKind: func(ctx context.Context, _ queue.Job) (json.RawMessage, error) {
 			res, err := a.collector.Collect(ctx)
 			if err != nil {
@@ -55,6 +56,12 @@ func (a *app) handlers(cfg config.Worker) map[string]worker.Handler {
 			return json.Marshal(map[string]int64{"uploads": int64(uploads), "jobs": jobs})
 		},
 	}
+	// Present only when scanning is enabled, so a worker without scanning
+	// never claims a scan job it cannot run.
+	if a.scanner != nil {
+		h[scanjob.JobKind] = a.scanMetrics.wrap(a.scanner.Handle)
+	}
+	return h
 }
 
 func schedules(cfg config.Worker) []worker.Schedule {
@@ -94,6 +101,7 @@ func (a *app) startBackground(parent context.Context, cfg *config.Config, bo bui
 			Handlers:  handlers,
 			Owner:     workerOwner(),
 			Poll:      bo.WorkerPoll,
+			Backoff:   bo.WorkerBackoff,
 			Schedules: schedules(cfg.Worker),
 			Logger:    a.logger,
 		}

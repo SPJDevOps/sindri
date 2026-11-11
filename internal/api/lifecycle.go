@@ -192,6 +192,8 @@ type evidenceResponse struct {
 	Size      int64  `json:"size"`
 	CreatedAt string `json:"created_at"`
 	CreatedBy string `json:"created_by"`
+	// Metadata is read-only here: only the worker writes it.
+	Metadata json.RawMessage `json:"metadata"`
 }
 
 func evidenceJSON(ev evidence.Evidence) evidenceResponse {
@@ -203,7 +205,15 @@ func evidenceJSON(ev evidence.Evidence) evidenceResponse {
 		Size:      ev.Size,
 		CreatedAt: timestamp(ev.CreatedAt),
 		CreatedBy: ev.CreatedBy,
+		Metadata:  metadataOrEmpty(ev.Metadata),
 	}
+}
+
+func metadataOrEmpty(m json.RawMessage) json.RawMessage {
+	if len(m) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return m
 }
 
 func (a *api) attachEvidence(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +236,8 @@ func (a *api) attachEvidence(w http.ResponseWriter, r *http.Request) {
 		Body:      http.MaxBytesReader(w, r.Body, maxEvidenceBytes),
 		Size:      size,
 		Actor:     actor(r),
+		// Metadata is deliberately never taken from the request: it marks
+		// evidence Sindri itself produced (ADR 29), so a client gets {}.
 	})
 	if err != nil {
 		var tooLarge *http.MaxBytesError

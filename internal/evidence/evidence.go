@@ -10,6 +10,7 @@ package evidence
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -68,6 +69,10 @@ type Evidence struct {
 	Size      int64
 	CreatedAt time.Time
 	CreatedBy string
+	// Metadata is a JSON object. Only Sindri's own worker sets it; the API
+	// always attaches client evidence with an empty object, so a client can
+	// never claim to be a trusted producer.
+	Metadata json.RawMessage
 }
 
 // AttachParams describes a document to attach.
@@ -78,6 +83,8 @@ type AttachParams struct {
 	Body      io.Reader
 	Size      int64 // negative means unknown
 	Actor     string
+	// Metadata must be a JSON object; nil or empty means {}.
+	Metadata json.RawMessage
 }
 
 // Attach stores the body in the CAS under its own digest and records it
@@ -95,6 +102,10 @@ func (s *Service) Attach(ctx context.Context, p AttachParams) (Evidence, error) 
 	}
 	if strings.TrimSpace(p.Actor) == "" {
 		return Evidence{}, fmt.Errorf("%w: actor is required", ErrInvalidInput)
+	}
+	metadata, err := normalizeMetadata(p.Metadata)
+	if err != nil {
+		return Evidence{}, err
 	}
 	mediaType := strings.TrimSpace(p.MediaType)
 	if mediaType == "" {
@@ -139,7 +150,7 @@ func (s *Service) Attach(ctx context.Context, p AttachParams) (Evidence, error) 
 		Type:          string(p.Type),
 		MediaType:     mediaType,
 		BlobDigest:    info.Digest.String(),
-		Metadata:      []byte("{}"),
+		Metadata:      metadata,
 		CreatedBy:     p.Actor,
 	})
 	if err != nil {
@@ -158,6 +169,7 @@ func (s *Service) Attach(ctx context.Context, p AttachParams) (Evidence, error) 
 		Size:      info.Size,
 		CreatedAt: row.CreatedAt,
 		CreatedBy: row.CreatedBy,
+		Metadata:  json.RawMessage(row.Metadata),
 	}, nil
 }
 
@@ -227,7 +239,22 @@ func (s *Service) fromRow(ctx context.Context, subject model.Digest, row db.Evid
 		Size:      blob.Size,
 		CreatedAt: row.CreatedAt,
 		CreatedBy: row.CreatedBy,
+		Metadata:  json.RawMessage(row.Metadata),
 	}, nil
+}
+
+// normalizeMetadata returns raw unchanged when it is a JSON object, and {}
+// when it is empty. It does not compact or re-encode raw (the database
+// normalizes jsonb on storage); anything that is not an object is rejected.
+func normalizeMetadata(raw json.RawMessage) ([]byte, error) {
+	if len(raw) == 0 {
+		return []byte("{}"), nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return nil, fmt.Errorf("%w: metadata must be a JSON object", ErrInvalidInput)
+	}
+	return raw, nil
 }
 
 func (s *Service) requireSubject(ctx context.Context, digest model.Digest) error {

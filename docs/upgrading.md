@@ -191,3 +191,7 @@ backup taken before the upgrade.
 The quickstart uses `ghcr.io/spjdevops/sindri:latest` so that it works first
 time. For anything you depend on, pin a version tag, or a digest, and upgrade
 on purpose.
+
+Each release also publishes an image that includes Trivy, for vulnerability
+scanning: the same tag with a `-trivy` suffix (`<version>-trivy`, `latest-trivy`).
+The default image stays free of it.

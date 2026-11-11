@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -669,6 +671,142 @@ func (w *Worker) validate() error {
 	if w.Retention.UploadMaxIdle.Duration() < time.Minute {
 		return fmt.Errorf("worker.retention.uploadMaxIdle: %s would discard uploads clients are still sending; use at least 1m",
 			w.Retention.UploadMaxIdle)
+	}
+	return nil
+}
+
+// Scanning configures vulnerability scanning of hosted publishes (ADR 23, ADR 29).
+//
+// Short form: `scanning: true` turns it on with the defaults below, and
+// `scanning: false` is the default. Long form: a mapping with any of the
+// fields below.
+type Scanning struct {
+	// Scan hosted publishes for known vulnerabilities and attach the result
+	// to the artifact. Off when the section is absent. An absent `enabled` in
+	// the mapping means `true`, because writing the section signals intent.
+	Enabled bool `yaml:"enabled"`
+	// The Trivy executable. A bare name is looked up on the PATH. Sindri runs
+	// it as a separate process and never links it in.
+	Trivy string `yaml:"trivy"`
+	// A mirror of the Trivy vulnerability database, passed as
+	// `--db-repository`, for a server that cannot reach the public one. Cannot
+	// be combined with `skipDBUpdate`.
+	DBRepository string `yaml:"dbRepository"`
+	// A mirror of Trivy's Java vulnerability database, passed as
+	// `--java-db-repository`. Trivy fetches that database separately, and only
+	// when a scanned image or package holds a jar. An air-gapped install that
+	// scans jar-containing images sets this, or pre-seeds the Java database in
+	// `cacheDir`; otherwise, with `skipDBUpdate`, such a scan fails (fail
+	// closed). Cannot be combined with `skipDBUpdate`.
+	JavaDBRepository string `yaml:"javaDbRepository"`
+	// Where Trivy keeps its database and caches between scans. Empty uses
+	// `sindri/trivy` under the user's cache directory (`$XDG_CACHE_HOME`, or
+	// `~/.cache` on Linux). The `-trivy` release image sets `$XDG_CACHE_HOME`
+	// to `/var/cache`, so there it is `/var/cache/sindri/trivy`.
+	CacheDir string `yaml:"cacheDir"`
+	// How long one scan may run before it is cancelled and retried. At least
+	// `1m`.
+	Timeout Duration `yaml:"timeout"`
+	// Never download the vulnerability database, and scan with the one already
+	// in `cacheDir`, including the Java database that Trivy fetches separately
+	// when it finds a jar. For an air-gapped server with a pre-seeded cache; a
+	// jar-containing subject fails to scan if the Java database is not in it.
+	// Cannot be combined with `dbRepository` or `javaDbRepository`.
+	SkipDBUpdate bool `yaml:"skipDBUpdate"`
+	// The most bytes unpacked from one wheel or tarball while scanning it, so
+	// that an archive bomb cannot fill the disk. At least 1048576 (1 MiB).
+	MaxUnpackedBytes int64 `yaml:"maxUnpackedBytes"`
+}
+
+const minScanUnpackedBytes = 1 << 20
+
+func defaultScanning() Scanning {
+	return Scanning{
+		Trivy:            "trivy",
+		Timeout:          Duration(10 * time.Minute),
+		MaxUnpackedBytes: 1 << 30,
+	}
+}
+
+// UnmarshalYAML accepts a boolean or the full mapping. In the mapping an
+// absent enabled means true; an absent section means false.
+func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		var enabled bool
+		if err := node.Decode(&enabled); err != nil {
+			return fmt.Errorf("line %d: scanning must be true, false, or a mapping", node.Line)
+		}
+		*s = Scanning{Enabled: enabled}
+		return nil
+	}
+
+	var raw struct {
+		Enabled          *bool    `yaml:"enabled"`
+		Trivy            string   `yaml:"trivy"`
+		DBRepository     string   `yaml:"dbRepository"`
+		JavaDBRepository string   `yaml:"javaDbRepository"`
+		CacheDir         string   `yaml:"cacheDir"`
+		Timeout          Duration `yaml:"timeout"`
+		SkipDBUpdate     bool     `yaml:"skipDBUpdate"`
+		MaxUnpackedBytes int64    `yaml:"maxUnpackedBytes"`
+	}
+	if err := strictDecode(node, &raw); err != nil {
+		return err
+	}
+	*s = Scanning{
+		Enabled:          raw.Enabled == nil || *raw.Enabled,
+		Trivy:            raw.Trivy,
+		DBRepository:     raw.DBRepository,
+		JavaDBRepository: raw.JavaDBRepository,
+		CacheDir:         raw.CacheDir,
+		Timeout:          raw.Timeout,
+		SkipDBUpdate:     raw.SkipDBUpdate,
+		MaxUnpackedBytes: raw.MaxUnpackedBytes,
+	}
+	return nil
+}
+
+func (s *Scanning) applyDefaults() {
+	d := defaultScanning()
+	if s.Trivy == "" {
+		s.Trivy = d.Trivy
+	}
+	if s.Timeout == 0 {
+		s.Timeout = d.Timeout
+	}
+	if s.MaxUnpackedBytes == 0 {
+		s.MaxUnpackedBytes = d.MaxUnpackedBytes
+	}
+}
+
+// ResolvedCacheDir is the directory Trivy keeps its database in: CacheDir, or
+// `sindri/trivy` under the user's cache directory when that is empty. It does
+// not create the directory or check who can write to it; the scanner does.
+func (s Scanning) ResolvedCacheDir() (string, error) {
+	if s.CacheDir != "" {
+		return s.CacheDir, nil
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("scanning.cacheDir is unset and the user cache directory is unknown: %w", err)
+	}
+	return filepath.Join(base, "sindri", "trivy"), nil
+}
+
+// validate checks the values whether or not scanning is on: a bad value is a
+// bad value. It does not look for the executable; `sindri config check` does.
+func (s *Scanning) validate() error {
+	if s.Timeout.Duration() < time.Minute {
+		return fmt.Errorf("scanning.timeout: %s would cancel scans that are still working; use at least 1m", s.Timeout)
+	}
+	if s.MaxUnpackedBytes < minScanUnpackedBytes {
+		return fmt.Errorf("scanning.maxUnpackedBytes: %d is below the 1048576 (1 MiB) minimum", s.MaxUnpackedBytes)
+	}
+	if s.SkipDBUpdate && s.JavaDBRepository != "" {
+		return fmt.Errorf("scanning.javaDbRepository: cannot be set with skipDBUpdate, which never downloads the Java database")
+	}
+	if s.SkipDBUpdate && s.DBRepository != "" {
+		return fmt.Errorf("scanning.dbRepository: cannot be set with skipDBUpdate, which never downloads the database")
 	}
 	return nil
 }

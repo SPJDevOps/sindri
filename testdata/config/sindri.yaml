@@ -20,6 +20,10 @@ worker:
   gc:
     grace: ${SINDRI_GC_GRACE:-24h}
 
+# Scanning is off by default; written out here so the loader and the reference
+# both see every field of the section.
+scanning: {enabled: false, timeout: 5m, javaDbRepository: mirror.example.invalid/trivy-java-db}
+
 # Used only by pypi-mirror below, which exists so that the golden tests cover
 # upstream.credentials. Its upstream is under .invalid (RFC 2606), so this
 # value is never sent anywhere.

@@ -1,0 +1,44 @@
+# The release image with Trivy, for servers that turn on `scanning:` (ADR 23).
+# Same shape as Dockerfile: goreleaser supplies the compiled binary, and this
+# adds Trivy's static binary and an empty, correctly owned cache directory.
+# The default image stays dependency-free; pick this one with the `-trivy` tag.
+#
+# Set these in sindri.yaml when scanning is on:
+#
+#   scanning:
+#     enabled: true
+#     trivy: trivy   # /usr/local/bin is on the distroless PATH
+#
+# `cacheDir` needs no setting: XDG_CACHE_HOME below makes the default
+# /var/cache/sindri/trivy, which is created here owned by 65532 with mode 0700,
+# the only kind of directory `serve` accepts. Mount a volume at /var/cache/sindri
+# to keep Trivy's database across restarts; a fresh volume works, because
+# `serve` creates the trivy subdirectory itself.
+#
+# Keep the Trivy version and digest in step with internal/testsupport/trivy.go,
+# so the tests exercise the Trivy that ships.
+FROM aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c AS trivy
+
+# The distroless base has no shell, so the cache directory is made here and
+# copied over with its ownership.
+RUN mkdir /cache
+
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+
+ARG TARGETPLATFORM
+COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=trivy --chown=65532:65532 --chmod=0700 /cache/ /var/cache/sindri/trivy/
+COPY ${TARGETPLATFORM}/sindri /usr/local/bin/sindri
+# A named volume mounted here inherits this ownership, so the non-root user
+# can write blobs without a chown step the image has no shell to run.
+COPY --chown=65532:65532 deploy/docker/data/ /var/lib/sindri/
+
+# os.UserCacheDir honours this, so an empty scanning.cacheDir resolves to
+# /var/cache/sindri/trivy; the user has no home directory in this image.
+ENV XDG_CACHE_HOME=/var/cache
+
+USER 65532:65532
+EXPOSE 8080
+VOLUME ["/var/lib/sindri"]
+ENTRYPOINT ["/usr/local/bin/sindri"]
+CMD ["serve", "--config", "/etc/sindri/sindri.yaml"]

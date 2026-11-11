@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/spj/sindri/internal/api"
 	"github.com/spj/sindri/internal/auth"
@@ -25,6 +29,7 @@ import (
 	"github.com/spj/sindri/internal/registry"
 	"github.com/spj/sindri/internal/remote"
 	"github.com/spj/sindri/internal/resolve"
+	"github.com/spj/sindri/internal/scan"
 	"github.com/spj/sindri/internal/server"
 	"github.com/spj/sindri/internal/storage"
 	"github.com/spj/sindri/internal/ui"
@@ -46,6 +51,9 @@ type app struct {
 	cas         *cas.Store
 	queue       *queue.Queue
 	collector   *gc.Collector
+	// scanner is nil unless scanning is enabled.
+	scanner     *scan.Scanner
+	scanMetrics *scanMetrics
 }
 
 // buildOptions carries what differs between `serve` and a test.
@@ -59,6 +67,9 @@ type buildOptions struct {
 	// WorkerPoll overrides how often an idle worker looks for jobs; tests
 	// shorten it.
 	WorkerPoll time.Duration
+	// WorkerBackoff overrides the first retry delay of a failed job; tests
+	// shorten it.
+	WorkerBackoff time.Duration
 	// ExtraHandlers adds job kinds to the worker; tests use it to hold a
 	// job running while the server stops.
 	ExtraHandlers map[string]worker.Handler
@@ -97,6 +108,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 	casStore := cas.New(blobs, cas.WithReserver(db.NewBlobReserver(database, string(cfg.Storage.Backend))))
 	reg := registry.New(database, casStore, string(cfg.Storage.Backend))
 	jobs := queue.New(database)
+	metricsReg := prometheus.NewRegistry()
 	collector, err := gc.New(gc.Options{
 		Database: database,
 		CAS:      casStore,
@@ -108,6 +120,22 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		return nil, nil, err
 	}
 	creds := config.NewCredentialStore(cfg.Credentials)
+
+	var scanner *scan.Scanner
+	var scanMx *scanMetrics
+	if cfg.Scanning.Enabled {
+		// Jobs are enqueued whenever scanning is on, so a worker elsewhere (or
+		// started later) can run them. Only a process that runs the worker
+		// builds the scanner and prepares its cache directory.
+		if cfg.Worker.Enabled {
+			scanner, scanMx, err = buildScanner(ctx, cfg.Scanning, logger, casStore, database.Queries(), evidence.New(database, casStore, string(cfg.Storage.Backend)), metricsReg)
+			if err != nil {
+				database.Close()
+				return nil, nil, err
+			}
+		}
+		reg.SetScanOnPublish(true)
+	}
 
 	remoteOpts := remote.Options{Registry: reg, Logger: logger, Credentials: creds}
 	if bo.RemoteOptions != nil {
@@ -209,6 +237,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		// Read-only, GET and HEAD only, every page authorized (ADR 21).
 		UI:          auth.GuardUI(chain, uiHandler, signIn),
 		Logger:      logger,
+		Metrics:     metricsReg,
 		QueueCounts: jobs.Counts,
 	})
 	if err != nil {
@@ -228,6 +257,8 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		cas:         casStore,
 		queue:       jobs,
 		collector:   collector,
+		scanner:     scanner,
+		scanMetrics: scanMx,
 	}, database.Close, nil
 }
 
@@ -261,4 +292,43 @@ func (a *app) reconcileFile(ctx context.Context, cfg *config.Config) error {
 			"orphaned", strings.Join(ch.Orphaned, ","))
 	}
 	return nil
+}
+
+// buildScanner is the one place the scanning configuration meets the scan
+// package. It prepares Trivy's cache directory, which fails startup when
+// someone else could write the vulnerability database there.
+func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, store *cas.Store, placement *db.Queries, ev *evidence.Service, reg prometheus.Registerer) (*scan.Scanner, *scanMetrics, error) {
+	cacheDir, err := sc.ResolvedCacheDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := scan.PrepareCacheDir(cacheDir); err != nil {
+		return nil, nil, fmt.Errorf("scanning.cacheDir: %w", err)
+	}
+	mx, err := newScanMetrics(reg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := exec.LookPath(sc.Trivy); err != nil {
+		// Not fatal: scan jobs fail and retry until Trivy appears, and the
+		// operator may be about to mount it.
+		logger.WarnContext(ctx, "the configured scanning.trivy executable was not found; scan jobs will fail until it is installed",
+			"trivy", sc.Trivy, "error", err)
+	}
+	logger.InfoContext(ctx, "scanning enabled",
+		"trivy", sc.Trivy,
+		"cache_dir", cacheDir,
+		"db_mirror", sc.DBRepository != "", // the values may carry credentials
+		"java_db_mirror", sc.JavaDBRepository != "",
+		"skip_db_update", sc.SkipDBUpdate)
+	return scan.New(store, ev, placement, scan.Options{
+		Trivy:            sc.Trivy,
+		DBRepository:     sc.DBRepository,
+		JavaDBRepository: sc.JavaDBRepository,
+		CacheDir:         cacheDir,
+		TempDir:          filepath.Join(cacheDir, "sindri-staging"),
+		Timeout:          sc.Timeout.Duration(),
+		SkipDBUpdate:     sc.SkipDBUpdate,
+		MaxUnpackedBytes: sc.MaxUnpackedBytes,
+	}, logger), mx, nil
 }
