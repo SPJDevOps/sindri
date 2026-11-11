@@ -243,10 +243,12 @@ accepts OCI artifacts. For a first try, this starts a throwaway one:
 
 <!-- scan:mirror-registry -->
 ```bash
-docker run -d --name trivy-mirror -p 127.0.0.1:5000:5000 registry:3
-export MIRROR=localhost:5000
+docker run -d --name trivy-mirror -p 127.0.0.1:5001:5000 registry:3
+export MIRROR=localhost:5001
 ```
 <!-- /scan:mirror-registry -->
+
+The mirror listens on port 5001 because macOS uses 5000 for AirPlay Receiver.
 
 For a real mirror, set `MIRROR` to your registry's host, and log in with
 `oras login "$MIRROR"` if it needs credentials. Then copy both databases. `oras cp` copies
@@ -260,7 +262,9 @@ oras cp --to-plain-http ghcr.io/aquasecurity/trivy-java-db:1 "$MIRROR/trivy/triv
 <!-- /scan:mirror -->
 
 Drop `--to-plain-http` for a mirror that serves HTTPS. Trivy reaches a mirror over HTTPS
-unless its host is `localhost`, so a real mirror needs TLS.
+unless its host is `localhost`, so a real mirror needs TLS. If its certificate comes from
+a private CA, set `SSL_CERT_FILE` in the server's environment to a bundle that holds the
+CA; Sindri passes it on to Trivy.
 
 Point Sindri at the copies. Give each as a full reference with its tag:
 
@@ -321,8 +325,19 @@ tar -C trivy-cache -czf trivy-cache.tar.gz .
 <!-- /scan:preseed -->
 
 Carry `trivy-cache.tar.gz` across the gap and unpack it into the cache directory the
-server uses (`/var/cache/sindri/trivy` in the `-trivy` image), owned by the user the
-server runs as, which is uid 65532 in the release image. Then set:
+server uses (`/var/cache/sindri/trivy` in the `-trivy` image). The server accepts only a
+cache directory with mode `0700`, owned by the user it runs as, which is uid 65532 in the
+release image. With Docker, this fills a named volume that way:
+
+<!-- scan:unpack -->
+```bash
+docker volume create sindri-trivy-cache
+docker run --rm -v sindri-trivy-cache:/cache -v "$PWD:/in:ro" alpine:3.20 sh -c \
+  'tar -xzf /in/trivy-cache.tar.gz -C /cache && chown -R 65532:65532 /cache && chmod 0700 /cache'
+```
+<!-- /scan:unpack -->
+
+Mount that volume at `/var/cache/sindri/trivy`. Then set:
 
 ```yaml
 scanning:
