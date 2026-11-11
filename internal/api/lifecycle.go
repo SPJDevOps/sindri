@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -56,9 +57,16 @@ type stageJSON struct {
 	Gates []gateJSON `json:"gates"`
 }
 
-type gateJSON struct {
-	Evidence string `json:"evidence"`
+// gateJSON is one gate rule on the wire. It is decoded as raw JSON and parsed
+// by lifecycle.ParseGateRule, the one validator for every spelling.
+type gateJSON json.RawMessage
+
+func (g *gateJSON) UnmarshalJSON(b []byte) error {
+	*g = append((*g)[:0], b...)
+	return nil
 }
+
+func (g gateJSON) MarshalJSON() ([]byte, error) { return json.RawMessage(g), nil }
 
 type stagesBody struct {
 	Stages []stageJSON `json:"stages"`
@@ -70,7 +78,7 @@ func (a *api) listStages(w http.ResponseWriter, r *http.Request) {
 		a.writeLifecycleError(w, r, err)
 		return
 	}
-	a.writeJSON(w, r, http.StatusOK, stagesResponse(stages))
+	a.writeStages(w, r, stages)
 }
 
 func (a *api) setStages(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +96,12 @@ func (a *api) setStages(w http.ResponseWriter, r *http.Request) {
 	for _, s := range body.Stages {
 		spec := lifecycle.StageSpec{Name: s.Name}
 		for _, g := range s.Gates {
-			spec.Gates = append(spec.Gates, lifecycle.GateRule{Evidence: model.EvidenceType(g.Evidence)})
+			rule, err := lifecycle.ParseGateRule(g)
+			if err != nil {
+				a.writeLifecycleError(w, r, err)
+				return
+			}
+			spec.Gates = append(spec.Gates, rule)
 		}
 		specs = append(specs, spec)
 	}
@@ -97,19 +110,32 @@ func (a *api) setStages(w http.ResponseWriter, r *http.Request) {
 		a.writeLifecycleError(w, r, err)
 		return
 	}
-	a.writeJSON(w, r, http.StatusOK, stagesResponse(stages))
+	a.writeStages(w, r, stages)
 }
 
-func stagesResponse(stages []lifecycle.Stage) stagesBody {
+func (a *api) writeStages(w http.ResponseWriter, r *http.Request, stages []lifecycle.Stage) {
+	body, err := stagesResponse(stages)
+	if err != nil {
+		a.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	a.writeJSON(w, r, http.StatusOK, body)
+}
+
+func stagesResponse(stages []lifecycle.Stage) (stagesBody, error) {
 	out := stagesBody{Stages: make([]stageJSON, 0, len(stages))}
 	for _, s := range stages {
 		js := stageJSON{Name: s.Name, Gates: make([]gateJSON, 0, len(s.Gates))}
 		for _, g := range s.Gates {
-			js.Gates = append(js.Gates, gateJSON{Evidence: string(g.Evidence)})
+			b, err := json.Marshal(g)
+			if err != nil {
+				return stagesBody{}, fmt.Errorf("encoding gate %s: %w", g, err)
+			}
+			js.Gates = append(js.Gates, gateJSON(b))
 		}
 		out.Stages = append(out.Stages, js)
 	}
-	return out
+	return out, nil
 }
 
 type subjectResponse struct {
@@ -306,6 +332,8 @@ type eventResponse struct {
 	Actor      string `json:"actor"`
 	Reason     string `json:"reason,omitempty"`
 	At         string `json:"at"`
+	// EvidenceIDs are the evidence rows the stage's gates read (approve only).
+	EvidenceIDs []string `json:"evidence_ids,omitempty"`
 }
 
 func eventJSON(ev lifecycle.Event) eventResponse {
@@ -318,6 +346,8 @@ func eventJSON(ev lifecycle.Event) eventResponse {
 		Actor:      ev.Actor,
 		Reason:     ev.Reason,
 		At:         timestamp(ev.At),
+
+		EvidenceIDs: ev.EvidenceIDs,
 	}
 }
 
@@ -464,6 +494,8 @@ func (a *api) writeLifecycleError(w http.ResponseWriter, r *http.Request, err er
 			Message:   gate.Error(),
 			RequestID: a.requestID(r.Context()),
 			Missing:   gate.Missing,
+
+			Violations: gate.Violations,
 		})
 	case errors.Is(err, lifecycle.ErrSubjectNotFound), errors.Is(err, evidence.ErrSubjectNotFound):
 		a.writeError(w, r, http.StatusNotFound, "SUBJECT_NOT_FOUND", "no hosted artifact has this digest")

@@ -82,6 +82,8 @@ func (s *Service) Audit(ctx context.Context, p AuditParams) ([]Event, error) {
 			Actor:      row.Actor,
 			Reason:     row.Reason,
 			At:         row.At,
+
+			EvidenceIDs: uuidStrings(row.EvidenceIds),
 		})
 	}
 	return events, nil

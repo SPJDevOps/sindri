@@ -11,11 +11,66 @@ import (
 	"github.com/spj/sindri/internal/model"
 )
 
-// GateRule is one precondition for promotion into a stage. v1 has a single
-// rule kind: the subject must carry evidence of a type. Stage order is not a
-// rule (ADR 16); "must pass integration first" is not expressible in v1.
+// GateRule is one precondition for promotion into a stage. It is a union of
+// two kinds, exactly one of which is set: the subject must carry evidence of a
+// type, or its Sindri scans must stay under a severity ceiling (ADR 30). Stage
+// order is not a rule (ADR 16); "must pass integration first" is not
+// expressible.
 type GateRule struct {
-	Evidence model.EvidenceType `json:"evidence"`
+	Evidence model.EvidenceType `json:"evidence,omitempty"`
+	Scan     *ScanRule          `json:"scan,omitempty"`
+}
+
+// ScanRule refuses a subject whose newest Sindri scan of any platform holds a
+// finding above MaxSeverity, or an UNKNOWN one.
+type ScanRule struct {
+	MaxSeverity Severity `json:"max_severity"`
+}
+
+// Severity is a vulnerability severity ceiling. Higher ranks are worse.
+type Severity string
+
+// The severities a ceiling may name.
+const (
+	SeverityLow      Severity = "low"
+	SeverityMedium   Severity = "medium"
+	SeverityHigh     Severity = "high"
+	SeverityCritical Severity = "critical"
+)
+
+// Valid reports whether s is a severity a rule may name.
+func (s Severity) Valid() bool { return s.rank() > 0 }
+
+func (s Severity) rank() int {
+	switch s {
+	case SeverityLow:
+		return 1
+	case SeverityMedium:
+		return 2
+	case SeverityHigh:
+		return 3
+	case SeverityCritical:
+		return 4
+	default:
+		return 0
+	}
+}
+
+// Refuses reports whether a finding of the given severity (Trivy's upper-case
+// spelling) is above the ceiling. UNKNOWN and any spelling this build does not
+// recognise are refused by every ceiling: an unrated finding fails closed.
+func (s Severity) Refuses(finding string) bool {
+	rank := Severity(strings.ToLower(finding)).rank()
+	return rank == 0 || rank > s.rank()
+}
+
+// key identifies a rule for duplicate detection: one per evidence type, and at
+// most one scan rule.
+func (r GateRule) key() string {
+	if r.Scan != nil {
+		return "scan"
+	}
+	return "evidence:" + string(r.Evidence)
 }
 
 // ParseGateRule decodes and validates a stored or submitted rule. Unknown keys
@@ -38,13 +93,29 @@ func ParseGateRule(raw []byte) (GateRule, error) {
 }
 
 func (r GateRule) validate() error {
-	if r.Evidence == "" {
-		return fmt.Errorf("%w: gate rule must name an evidence type", ErrInvalidInput)
-	}
-	if !r.Evidence.Valid() {
+	switch {
+	case r.Scan != nil && r.Evidence != "":
+		return fmt.Errorf("%w: gate rule sets both evidence and scan", ErrInvalidInput)
+	case r.Scan != nil:
+		if !r.Scan.MaxSeverity.Valid() {
+			return fmt.Errorf("%w: scan.max_severity %q must be one of critical, high, medium, low", ErrInvalidInput, r.Scan.MaxSeverity)
+		}
+		return nil
+	case r.Evidence == "":
+		return fmt.Errorf("%w: gate rule must name an evidence type or a scan rule", ErrInvalidInput)
+	case !r.Evidence.Valid():
 		return fmt.Errorf("%w: unknown evidence type %q", ErrInvalidInput, r.Evidence)
 	}
 	return nil
+}
+
+// String names a rule for messages: the evidence type, or
+// scan.max_severity=<ceiling>.
+func (r GateRule) String() string {
+	if r.Scan != nil {
+		return "scan.max_severity=" + string(r.Scan.MaxSeverity)
+	}
+	return string(r.Evidence)
 }
 
 // StageSpec declares one stage and its gates.
@@ -73,15 +144,15 @@ func ValidateStages(specs []StageSpec) error {
 		}
 		seen[spec.Name] = struct{}{}
 
-		gates := make(map[model.EvidenceType]struct{}, len(spec.Gates))
+		gates := make(map[string]struct{}, len(spec.Gates))
 		for _, g := range spec.Gates {
 			if err := g.validate(); err != nil {
 				return fmt.Errorf("stage %q: %w", spec.Name, err)
 			}
-			if _, dup := gates[g.Evidence]; dup {
-				return fmt.Errorf("%w: stage %q requires %q twice", ErrInvalidInput, spec.Name, g.Evidence)
+			if _, dup := gates[g.key()]; dup {
+				return fmt.Errorf("%w: stage %q repeats the rule %q", ErrInvalidInput, spec.Name, g.String())
 			}
-			gates[g.Evidence] = struct{}{}
+			gates[g.key()] = struct{}{}
 		}
 	}
 	return nil
