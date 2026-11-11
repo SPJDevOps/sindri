@@ -18,7 +18,7 @@ import (
 // test failure is a change in Sindri, never a change upstream. The digest
 // matters more than the tag: a tag can be moved, and this binary decides
 // whether the scan tests pass.
-const trivyImage = "aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c"
+const trivyImage = "aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb"
 
 // TrivyBinary returns the path of a Trivy executable the host can run. It
 // prefers one on PATH, so a developer's own install is used as is. On linux
