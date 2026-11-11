@@ -237,7 +237,8 @@ Short form: `worker: true` is the same as `worker: {enabled: true}`.
 
 Vulnerability scanning is off by default. When it is on, the worker scans hosted
 publishes only; proxied content is never scanned. It needs a `trivy` executable, which
-the `-trivy` release image ships. See [ADR 29](adr/0029-what-a-scan-covers.md).
+the `-trivy` release image ships. See [Scanning and the severity gate](scanning.md) and
+[ADR 29](adr/0029-what-a-scan-covers.md).
 
 <!-- BEGIN GENERATED: scanning -->
 <!-- Generated from internal/config by `make reference`. Edit the struct comments, not this table. -->
