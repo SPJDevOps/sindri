@@ -34,7 +34,15 @@ with backoff. Every key under `scanning` is in the
 [configuration reference](configuration.md#scanning).
 
 Turning scanning on does not scan what was published earlier. Those artifacts have no
-scan until they are published again.
+scan until something queues one, and what does depends on the protocol:
+
+- **OCI:** pushing the same manifest again queues a scan.
+- **PyPI:** uploading the identical file again queues a scan. A file that was deleted
+  cannot be uploaded again, because a deleted filename is never reused.
+- **npm:** nothing. Publishing a version again is refused, so an existing version cannot
+  be scanned later. A new version is a new artifact and gets its own scan.
+
+A command to scan what is already published arrives with M11b (SIN-33).
 
 ## Refuse promotion above a severity
 
@@ -132,8 +140,10 @@ evidence instead, the violation has a `reason` and no `findings`:
 | `reason` | Cause |
 |---|---|
 | `no Sindri scan for sha256:...` | The scan is queued, failed after its retries, or the artifact predates scanning. |
-| `scan incomplete: no Sindri scan for platform linux/arm64` | One platform of an index has no scan. |
-| `the Sindri scan <id> lists no vulnerabilities; scan again` | A scan written before the gate existed. Publish the artifact again. |
+| `scan incomplete: no Sindri scan for platform linux/arm64` | One platform of an index has no scan: the job is still running, or it failed part way. |
+| `scan incomplete: no Sindri scan for the index child without a platform` | The same, for an index child that declares no platform. |
+| `the Sindri scan <id> lists no vulnerabilities; it needs a new scan, ...` | A scan written before the gate existed. Pushing it again (OCI) or uploading it again (PyPI) queues a new scan; npm has no way to until M11b. |
+| `the Sindri scan <id> does not list the platforms of its index; it needs a new scan, ...` | A scan of an index child written before the gate existed. The same applies. |
 
 A refusal writes no event to the ledger. A promotion that passes records the ids of the
 scan and presence evidence it evaluated, in `evidence_ids` on the event, so an audit can
@@ -225,8 +235,9 @@ each time. Compose and Helm both give the cache a place; their guides show it.
 - **A missing scan refuses.** A queued job, a failed job, or an artifact published before
   scanning was on has no Sindri scan, and the gate refuses it.
 - **A scan is a point in time.** A vulnerability published tomorrow does not change
-  today's scan or a decision made on it. Publish the artifact again to scan it with a
-  newer database.
+  today's scan or a decision made on it. Pushing an OCI image or uploading a PyPI file
+  again scans it with a newer database. npm cannot do this until the re-scan command
+  arrives with M11b (SIN-33).
 
 ## Scan without internet access
 

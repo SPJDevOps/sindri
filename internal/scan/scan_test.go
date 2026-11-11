@@ -592,6 +592,34 @@ func TestRun_IndexMetadataCarriesFullPlatformListOnScansOnly(t *testing.T) {
 	}
 }
 
+func TestRun_IndexPlatformListIncludesPlatformlessChild(t *testing.T) {
+	f := newFixture(t)
+	arm := f.image(mediaTypeDockerManifest)
+	bare := f.imageN(ocispec.MediaTypeImageManifest, 1)
+	raw, _ := json.Marshal(ocispec.Index{Manifests: []ocispec.Descriptor{
+		{MediaType: mediaTypeDockerManifest, Digest: godigest.Digest(arm.String()), Platform: &ocispec.Platform{OS: "linux", Architecture: "arm64"}},
+		{MediaType: ocispec.MediaTypeImageManifest, Digest: godigest.Digest(bare.String())},
+	}})
+	digest := f.put(raw)
+	if _, err := f.scanner(Options{Trivy: stubPath(t)}).Handle(t.Context(), f.job(digest, "oci-index")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(f.ev.attached) != 4 {
+		t.Fatalf("attached %d documents, want 4", len(f.ev.attached))
+	}
+	for _, a := range f.ev.attached {
+		var meta struct {
+			Platforms []string `json:"platforms"`
+		}
+		if err := json.Unmarshal(a.params.Metadata, &meta); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(meta.Platforms, ","); got != ",linux/arm64" {
+			t.Errorf("%s platforms = %q, want the platform-less key and linux/arm64", a.params.Type, got)
+		}
+	}
+}
+
 func TestRun_IndexAttachesOnePairPerPlatform(t *testing.T) {
 	f := newFixture(t)
 	amd := f.image(ocispec.MediaTypeImageManifest)

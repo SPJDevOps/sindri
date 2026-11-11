@@ -448,13 +448,13 @@ func evaluateScanRule(rule GateRule, digest model.Digest, scans []db.ListNewestS
 		case meta.Vulnerabilities == nil:
 			out = append(out, GateViolation{
 				Rule: name, Platform: scan.Platform,
-				Reason: "the Sindri scan " + scan.ID.String() + " lists no vulnerabilities; scan again",
+				Reason: "the Sindri scan " + scan.ID.String() + " lists no vulnerabilities; it needs a new scan, and the scanning guide says what queues one for each protocol",
 			})
 			continue
 		case scan.Platform != "" && len(meta.Platforms) == 0:
 			out = append(out, GateViolation{
 				Rule: name, Platform: scan.Platform,
-				Reason: "the Sindri scan " + scan.ID.String() + " does not list the platforms of its index; scan again",
+				Reason: "the Sindri scan " + scan.ID.String() + " does not list the platforms of its index; it needs a new scan, and the scanning guide says what queues one for each protocol",
 			})
 			continue
 		}
@@ -473,7 +473,11 @@ func evaluateScanRule(rule GateRule, digest model.Digest, scans []db.ListNewestS
 	// must not pass on the part it finished.
 	for _, p := range required {
 		if _, ok := have[p]; !ok {
-			out = append(out, GateViolation{Rule: name, Platform: p, Reason: "scan incomplete: no Sindri scan for platform " + p})
+			label := "platform " + p
+			if p == "" {
+				label = "the index child without a platform"
+			}
+			out = append(out, GateViolation{Rule: name, Platform: p, Reason: "scan incomplete: no Sindri scan for " + label})
 		}
 	}
 	return out, nil

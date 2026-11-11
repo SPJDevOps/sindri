@@ -149,9 +149,12 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 	}
 
 	version := s.versionInfo(ctx, root)
+	// An index lists every target, including a child with no platform, which
+	// is keyed "" exactly as the gate's newest-scan-per-platform query keys
+	// it. A single-manifest subject has no list.
 	var platforms []string
-	for _, d := range done {
-		if d.t.platform != "" {
+	if kind == model.SubjectKindOCIIndex {
+		for _, d := range done {
 			platforms = append(platforms, d.t.platform)
 		}
 	}

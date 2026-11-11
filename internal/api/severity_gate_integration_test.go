@@ -225,8 +225,8 @@ func TestPromote_ScanGateRefusesScanWithoutVulnerabilityList(t *testing.T) {
 	env := newGateEnv(t, "critical")
 	env.attachScanMetadata(t, map[string]any{"producer": "sindri", "severity_counts": map[string]int{"CRITICAL": 0}})
 	body := env.refusal(t)
-	if len(body.Violations) != 1 || !strings.Contains(body.Violations[0].Reason, "scan again") {
-		t.Fatalf("violations = %+v, want a re-scan request", body.Violations)
+	if len(body.Violations) != 1 || !strings.Contains(body.Violations[0].Reason, "needs a new scan") {
+		t.Fatalf("violations = %+v, want a new-scan request", body.Violations)
 	}
 }
 
@@ -261,12 +261,33 @@ func TestPromote_ScanGateRefusesIndexWithAPlatformUnscanned(t *testing.T) {
 	env.mustPromote(t)
 }
 
+func TestPromote_ScanGateRefusesIndexWithPlatformlessChildUnscanned(t *testing.T) {
+	env := newGateEnv(t, "high")
+	// The job scanned a clean linux/arm64 child and a vulnerable child with
+	// no platform ("" is its key), and has attached only the first.
+	both := []string{"", "linux/arm64"}
+	env.sindriScanOf(t, "linux/arm64", both)
+	body := env.refusal(t)
+	if len(body.Violations) != 1 || body.Violations[0].Platform != "" ||
+		!strings.Contains(body.Violations[0].Reason, "scan incomplete: no Sindri scan for the index child without a platform") {
+		t.Fatalf("violations = %+v, want an incomplete scan naming the platform-less child", body.Violations)
+	}
+
+	// Attaching the platform-less child's scan completes the set, and its
+	// finding is then what refuses.
+	env.sindriScanOf(t, "", both, lifecycle.Finding{ID: "CVE-2026-2222", Severity: "CRITICAL"})
+	body = env.refusal(t)
+	if len(body.Violations) != 1 || len(body.Violations[0].Findings) != 1 || body.Violations[0].Findings[0].ID != "CVE-2026-2222" {
+		t.Fatalf("violations = %+v, want CVE-2026-2222 refused", body.Violations)
+	}
+}
+
 func TestPromote_ScanGateRefusesIndexChildScanWithoutPlatformList(t *testing.T) {
 	env := newGateEnv(t, "critical")
 	env.sindriScanOf(t, "linux/amd64", nil)
 	body := env.refusal(t)
-	if len(body.Violations) != 1 || !strings.Contains(body.Violations[0].Reason, "scan again") {
-		t.Fatalf("violations = %+v, want a re-scan request", body.Violations)
+	if len(body.Violations) != 1 || !strings.Contains(body.Violations[0].Reason, "needs a new scan") {
+		t.Fatalf("violations = %+v, want a new-scan request", body.Violations)
 	}
 }
 

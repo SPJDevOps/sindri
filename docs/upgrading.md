@@ -164,6 +164,13 @@ differently:
   and none is sent on an OCI request. `token:` is new in 1.2, so no existing
   configuration is affected (SIN-53).
 
+## Behaviour changes in 1.3
+
+- **Remove scan gates before rolling back to 1.2.x.** A stored `scan` gate rule stops a
+  1.2.x binary from starting under `serve --config`, because that parser does not know
+  the `scan` key and refuses it. Delete the `scan:` gates from the configuration, apply
+  it, and only then start the older binary.
+
 ## Rolling back
 
 Every migration stays backward compatible for one release, so the previous
