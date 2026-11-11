@@ -7,6 +7,7 @@
 - [Quickstart](quickstart.md)
 - [Using pip and twine](clients/pip.md)
 - [Using npm, pnpm, and yarn](clients/npm.md)
+- [Scanning and the severity gate](scanning.md)
 - [Configuration reference](configuration.md)
 - [Upgrading](upgrading.md)
 
@@ -55,3 +56,4 @@
   - [27. Upstream credentials may be a Bearer token](adr/0027-upstream-credentials-may-be-a-bearer-token.md)
   - [28. The Helm chart lives in this repository and is published to ghcr as an OCI artifact](adr/0028-helm-chart-location-and-publishing.md)
   - [29. What a scan covers, and which scans a severity gate trusts](adr/0029-what-a-scan-covers.md)
+  - [30. The severity gate: a ceiling, read from worker metadata](adr/0030-severity-gate.md)

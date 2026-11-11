@@ -201,7 +201,11 @@ func StageSpecs(lc *config.Lifecycle) []lifecycle.StageSpec {
 	for _, st := range lc.Stages {
 		spec := lifecycle.StageSpec{Name: st.Name}
 		for _, g := range st.Gates {
-			spec.Gates = append(spec.Gates, lifecycle.GateRule{Evidence: g})
+			if g.Scan != nil {
+				spec.Gates = append(spec.Gates, lifecycle.GateRule{Scan: &lifecycle.ScanRule{MaxSeverity: lifecycle.Severity(g.Scan.MaxSeverity)}})
+				continue
+			}
+			spec.Gates = append(spec.Gates, lifecycle.GateRule{Evidence: g.Evidence})
 		}
 		specs = append(specs, spec)
 	}

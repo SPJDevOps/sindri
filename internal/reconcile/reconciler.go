@@ -354,7 +354,7 @@ func describeStages(stages []lifecycle.Stage) []string {
 	for _, st := range stages {
 		gates := make([]string, 0, len(st.Gates))
 		for _, g := range st.Gates {
-			gates = append(gates, string(g.Evidence))
+			gates = append(gates, g.String())
 		}
 		if len(gates) == 0 {
 			out = append(out, st.Name)

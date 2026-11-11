@@ -88,14 +88,15 @@ type LifecycleCurrent struct {
 }
 
 type LifecycleEvent struct {
-	ID            int64     `json:"id"`
-	SubjectDigest string    `json:"subject_digest"`
-	RepoID        uuid.UUID `json:"repo_id"`
-	StageID       uuid.UUID `json:"stage_id"`
-	Action        string    `json:"action"`
-	Actor         string    `json:"actor"`
-	Reason        string    `json:"reason"`
-	At            time.Time `json:"at"`
+	ID            int64       `json:"id"`
+	SubjectDigest string      `json:"subject_digest"`
+	RepoID        uuid.UUID   `json:"repo_id"`
+	StageID       uuid.UUID   `json:"stage_id"`
+	Action        string      `json:"action"`
+	Actor         string      `json:"actor"`
+	Reason        string      `json:"reason"`
+	At            time.Time   `json:"at"`
+	EvidenceIds   []uuid.UUID `json:"evidence_ids"`
 }
 
 type LifecycleStage struct {

@@ -44,10 +44,23 @@ ORDER BY created_at, id;
 SELECT * FROM evidence
 WHERE subject_digest = $1 AND id = $2;
 
--- name: ListEvidenceTypes :many
-SELECT DISTINCT type FROM evidence
+-- name: ListNewestEvidenceByType :many
+-- The evidence a presence gate reads: the newest row of each type.
+SELECT DISTINCT ON (type) id, type FROM evidence
 WHERE subject_digest = $1
-ORDER BY type;
+ORDER BY type, created_at DESC, id DESC;
+
+-- name: ListNewestSindriScans :many
+-- The scans a severity gate reads: the newest Sindri-produced scan per
+-- platform (ADR 29, ADR 30). Evidence a client attached carries {} metadata
+-- and never matches; only the worker writes producer.
+SELECT DISTINCT ON (coalesce(metadata->>'platform', ''))
+       id, coalesce(metadata->>'platform', '')::text AS platform, metadata, created_at
+FROM evidence
+WHERE subject_digest = $1
+  AND type = 'scan'
+  AND metadata->>'producer' = 'sindri'
+ORDER BY coalesce(metadata->>'platform', ''), created_at DESC, id DESC;
 
 -- name: ListStages :many
 SELECT * FROM lifecycle_stages
@@ -96,8 +109,8 @@ ORDER BY position;
 -- name: AppendLifecycleEvent :one
 -- The only write to the ledger. There is no UPDATE or DELETE query for this
 -- table, and the database refuses one (invariant I3).
-INSERT INTO lifecycle_events (subject_digest, repo_id, stage_id, action, actor, reason)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO lifecycle_events (subject_digest, repo_id, stage_id, action, actor, reason, evidence_ids)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- name: GetCurrentState :one
@@ -124,7 +137,7 @@ WHERE c.subject_digest = $1
 ORDER BY s.position, r.name;
 
 -- name: ListLifecycleEvents :many
-SELECT e.id, e.action, e.actor, e.reason, e.at, r.name AS repo_name, s.name AS stage_name
+SELECT e.id, e.action, e.actor, e.reason, e.at, e.evidence_ids, r.name AS repo_name, s.name AS stage_name
 FROM lifecycle_events e
 JOIN repositories r ON r.id = e.repo_id
 JOIN lifecycle_stages s ON s.id = e.stage_id
@@ -135,7 +148,7 @@ ORDER BY e.at, e.id;
 -- The audit trail (GET /api/v1/audit), newest first by id, which is stable
 -- where timestamps tie. A null repo_ids means every repository, for an
 -- administrator; anyone else passes the repositories they may read.
-SELECT e.id, e.subject_digest, e.action, e.actor, e.reason, e.at,
+SELECT e.id, e.subject_digest, e.action, e.actor, e.reason, e.at, e.evidence_ids,
        r.name AS repo_name, s.name AS stage_name
 FROM lifecycle_events e
 JOIN repositories r ON r.id = e.repo_id

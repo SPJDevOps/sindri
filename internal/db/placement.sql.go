@@ -613,6 +613,27 @@ func (q *Queries) InsertRetiredFile(ctx context.Context, arg InsertRetiredFilePa
 	return err
 }
 
+const isBlobLinkedToRepository = `-- name: IsBlobLinkedToRepository :one
+SELECT EXISTS (
+  SELECT 1 FROM repository_blobs
+  WHERE repo_id = $1 AND digest = $2
+) AS linked
+`
+
+type IsBlobLinkedToRepositoryParams struct {
+	RepoID uuid.UUID `json:"repo_id"`
+	Digest string    `json:"digest"`
+}
+
+// Placement of one digest in one repository by id: the check a manifest put
+// makes for each child, inside its transaction.
+func (q *Queries) IsBlobLinkedToRepository(ctx context.Context, arg IsBlobLinkedToRepositoryParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isBlobLinkedToRepository, arg.RepoID, arg.Digest)
+	var linked bool
+	err := row.Scan(&linked)
+	return linked, err
+}
+
 const isFilenameRetired = `-- name: IsFilenameRetired :one
 SELECT EXISTS (
     SELECT 1 FROM retired_files

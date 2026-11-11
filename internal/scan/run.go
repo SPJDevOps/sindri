@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/model"
@@ -22,8 +23,17 @@ type evidenceMetadata struct {
 	ScannerVersion string         `json:"scanner_version"`
 	DBUpdatedAt    string         `json:"db_updated_at"`
 	SeverityCounts map[string]int `json:"severity_counts"`
-	Coverage       string         `json:"coverage"`
-	Platform       string         `json:"platform,omitempty"`
+	// Vulnerabilities is what the severity gate reads, so it opens no blob
+	// inside the promotion transaction (ADR 30). Always present.
+	// Scan rows only: the sbom row omits it. A pointer, so an empty list on a
+	// scan is written as [] and not dropped.
+	Vulnerabilities *[]vulnerability `json:"vulnerabilities,omitempty"`
+	Coverage        string           `json:"coverage"`
+	Platform        string           `json:"platform,omitempty"`
+	// Platforms is every platform this job scans, sorted; set on index
+	// children only. The gate requires a newest scan for each (ADR 30), so
+	// a job that attached only some platforms cannot pass.
+	Platforms []string `json:"platforms,omitempty"`
 }
 
 type targetResult struct {
@@ -38,6 +48,7 @@ type scanned struct {
 	report string
 	sbom   string
 	counts map[string]int
+	vulns  []vulnerability
 }
 
 // Handle runs one scan job; it matches worker.Handler. Args are
@@ -130,25 +141,42 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		if err != nil {
 			return nil, fmt.Errorf("scanning %s: %w", digest, err)
 		}
-		counts, err := readCounts(report)
+		counts, vulns, err := readCounts(report)
 		if err != nil {
 			return nil, fmt.Errorf("scanning %s: %w", digest, err)
 		}
-		done = append(done, scanned{t: t, report: report, sbom: sbom, counts: counts})
+		done = append(done, scanned{t: t, report: report, sbom: sbom, counts: counts, vulns: vulns})
 	}
 
 	version := s.versionInfo(ctx, root)
+	// An index lists every target, including a child with no platform, which
+	// is keyed "" exactly as the gate's newest-scan-per-platform query keys
+	// it. A single-manifest subject has no list.
+	var platforms []string
+	if kind == model.SubjectKindOCIIndex {
+		for _, d := range done {
+			platforms = append(platforms, d.t.platform)
+		}
+	}
+	sort.Strings(platforms)
 	results := make([]targetResult, 0, len(done))
 	for _, d := range done {
-		meta, err := json.Marshal(evidenceMetadata{
+		base := evidenceMetadata{
 			Producer: "sindri", Scanner: "trivy",
 			ScannerVersion: version.Version, DBUpdatedAt: version.DB.UpdatedAt,
 			SeverityCounts: d.counts, Coverage: d.t.coverage, Platform: d.t.platform,
-		})
+			Platforms: platforms,
+		}
+		sbomMeta, err := json.Marshal(base)
 		if err != nil {
 			return nil, fmt.Errorf("encoding evidence metadata: %w", err)
 		}
-		sbom, err := s.attachFile(ctx, digest, model.EvidenceSBOM, MediaTypeSBOM, d.sbom, meta)
+		base.Vulnerabilities = &d.vulns
+		meta, err := json.Marshal(base)
+		if err != nil {
+			return nil, fmt.Errorf("encoding evidence metadata: %w", err)
+		}
+		sbom, err := s.attachFile(ctx, digest, model.EvidenceSBOM, MediaTypeSBOM, d.sbom, sbomMeta)
 		if err != nil {
 			return nil, err
 		}
@@ -187,11 +215,11 @@ func skipResult[T any](v T) (json.RawMessage, error) {
 	return out, nil
 }
 
-func readCounts(path string) (map[string]int, error) {
+func readCounts(path string) (map[string]int, []vulnerability, error) {
 	// #nosec G304 -- path is a file this process created inside its own staging directory.
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("opening report: %w", err)
+		return nil, nil, fmt.Errorf("opening report: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 	return countSeverities(f)

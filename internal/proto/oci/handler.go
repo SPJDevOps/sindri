@@ -400,6 +400,8 @@ func (h *handler) startUpload(w http.ResponseWriter, r *http.Request, repo model
 
 	// Cross-repository mount (?mount=&from=) is out of scope for M3. Per the
 	// distribution spec, a failed mount falls back to a fresh upload session.
+	// A future mount must LinkBlob into this repository before any manifest put
+	// that references the blob: PutManifest requires its children placed here.
 	if r.URL.Query().Get("mount") != "" {
 		upload, err := h.cas.NewUpload(r.Context())
 		if err != nil {

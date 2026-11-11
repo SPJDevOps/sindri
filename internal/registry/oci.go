@@ -332,6 +332,18 @@ func (r *Registry) PutManifest(ctx context.Context, repoName, image, reference, 
 		return Manifest{}, fmt.Errorf("clearing manifest children: %w", err)
 	}
 	for _, child := range children {
+		// I2: a child must already be placed in this repository, or a push
+		// here would make another tenant's bytes servable through it.
+		linked, err := q.IsBlobLinkedToRepository(ctx, db.IsBlobLinkedToRepositoryParams{
+			RepoID: repo.ID,
+			Digest: child.String(),
+		})
+		if err != nil {
+			return Manifest{}, fmt.Errorf("checking placement of child %s of %s: %w", child, info.Digest, err)
+		}
+		if !linked {
+			return Manifest{}, fmt.Errorf("%w: %s", ErrBlobUnknown, child)
+		}
 		if err := q.UpsertManifestChild(ctx, db.UpsertManifestChildParams{
 			ParentDigest: info.Digest.String(),
 			ChildDigest:  child.String(),

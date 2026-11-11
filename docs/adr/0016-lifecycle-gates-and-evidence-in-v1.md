@@ -104,6 +104,9 @@ are deployed.
   operator who really needs to delete one has to make that decision in SQL, which is
   deliberate.
 
+(Amended after v1.2.0: a second rule kind, `scan.max_severity`, reads Sindri's own
+scans; see [ADR 30](0030-severity-gate.md).)
+
 ## Rejected
 
 - **A mutable status column**, for the reasons ADR 4 gives.

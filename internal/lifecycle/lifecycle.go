@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -53,14 +54,72 @@ var (
 )
 
 // GateError reports which gates refused a promotion. Missing lists the
-// evidence types the stage requires and the subject lacks.
+// evidence types a presence rule requires and the subject lacks; Violations
+// lists every severity rule that refused it and why.
 type GateError struct {
-	Stage   string
-	Missing []string
+	Stage      string
+	Missing    []string
+	Violations []GateViolation
 }
 
+// GateViolation is one scan rule's refusal. Findings names what is above the
+// ceiling for Platform ("" when the subject has one scan or none). Reason
+// explains a refusal that has no findings: no Sindri scan, or one written
+// before scans listed their vulnerabilities.
+type GateViolation struct {
+	Rule     string    `json:"rule"`
+	Platform string    `json:"platform,omitempty"`
+	Findings []Finding `json:"findings,omitempty"`
+	Reason   string    `json:"reason,omitempty"`
+}
+
+// Finding is one vulnerability in a scan: its id and Trivy's severity
+// (CRITICAL, HIGH, MEDIUM, LOW, or UNKNOWN).
+type Finding struct {
+	ID       string `json:"id"`
+	Severity string `json:"severity"`
+}
+
+// maxNamedFindings bounds how many CVE ids Error() spells out; the rest are
+// counted, and Violations holds all of them.
+const maxNamedFindings = 10
+
 func (e *GateError) Error() string {
-	return fmt.Sprintf("promotion to %s requires evidence: %s", e.Stage, strings.Join(e.Missing, ", "))
+	if len(e.Violations) == 0 {
+		return fmt.Sprintf("promotion to %s requires evidence: %s", e.Stage, strings.Join(e.Missing, ", "))
+	}
+	parts := make([]string, 0, len(e.Violations)+1)
+	if len(e.Missing) > 0 {
+		parts = append(parts, "requires evidence: "+strings.Join(e.Missing, ", "))
+	}
+	named := 0
+	for _, v := range e.Violations {
+		var b strings.Builder
+		b.WriteString(v.Rule)
+		if v.Platform != "" {
+			b.WriteString(" (" + v.Platform + ")")
+		}
+		if v.Reason != "" {
+			b.WriteString(": " + v.Reason)
+		}
+		if len(v.Findings) > 0 {
+			b.WriteString(": findings above the ceiling: ")
+			ids := make([]string, 0, len(v.Findings))
+			for _, f := range v.Findings {
+				if named == maxNamedFindings {
+					break
+				}
+				ids = append(ids, f.ID+" "+f.Severity)
+				named++
+			}
+			b.WriteString(strings.Join(ids, ", "))
+			if more := len(v.Findings) - len(ids); more > 0 {
+				fmt.Fprintf(&b, " and %d more", more)
+			}
+		}
+		parts = append(parts, b.String())
+	}
+	return fmt.Sprintf("promotion to %s refused: %s", e.Stage, strings.Join(parts, "; "))
 }
 
 // Is makes errors.Is(err, ErrGateFailed) true for a *GateError.
@@ -100,6 +159,10 @@ type Event struct {
 	Actor      string
 	Reason     string
 	At         time.Time
+	// EvidenceIDs are the evidence rows the stage's gates read when an
+	// approve was recorded. Empty for a revoke, an ungated approve, and
+	// events older than the column.
+	EvidenceIDs []string
 }
 
 // ChangeParams names a promotion or revocation.
@@ -143,13 +206,15 @@ func (s *Service) change(ctx context.Context, p ChangeParams, action Action) (Ev
 		return Event{}, err
 	}
 
+	var evidenceIDs []uuid.UUID
 	switch action {
 	case ActionApprove:
 		if !repoAllowsStage(repo.Config, stage.Name) {
 			return Event{}, fmt.Errorf("%w: %s may promote only into the stages its lifecycle lists, and %s is not one of them",
 				ErrNotPromotable, repo.Name, stage.Name)
 		}
-		if err := evaluateGates(ctx, q, p.Digest, stage); err != nil {
+		evidenceIDs, err = evaluateGates(ctx, q, p.Digest, stage)
+		if err != nil {
 			return Event{}, err
 		}
 	case ActionRevoke:
@@ -173,6 +238,7 @@ func (s *Service) change(ctx context.Context, p ChangeParams, action Action) (Ev
 		Action:        string(action),
 		Actor:         p.Actor,
 		Reason:        p.Reason,
+		EvidenceIds:   evidenceIDs,
 	})
 	if err != nil {
 		return Event{}, fmt.Errorf("appending %s event for %s: %w", action, p.Digest, err)
@@ -190,7 +256,21 @@ func (s *Service) change(ctx context.Context, p ChangeParams, action Action) (Ev
 		Actor:      row.Actor,
 		Reason:     row.Reason,
 		At:         row.At,
+
+		EvidenceIDs: uuidStrings(row.EvidenceIds),
 	}, nil
+}
+
+// uuidStrings renders ids for an Event; nil stays nil so JSON omits it.
+func uuidStrings(ids []uuid.UUID) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id.String())
+	}
+	return out
 }
 
 // repoAllowsStage reads the repository's lifecycle restriction from its config
@@ -252,41 +332,155 @@ func resolveTarget(ctx context.Context, q *db.Queries, p ChangeParams) (db.Repos
 	return repo, stage, nil
 }
 
-// evaluateGates returns a *GateError naming every required evidence type the
-// subject lacks, in the order the stage declares them.
-func evaluateGates(ctx context.Context, q *db.Queries, digest model.Digest, stage db.LifecycleStage) error {
+// evaluateGates checks every gate of a stage and returns the ids of the
+// evidence they read, for the ledger. A refusal is a *GateError naming every
+// presence rule that lacks its evidence and every severity rule that failed,
+// so one attempt shows everything to fix. Any other failure, including an
+// unreadable stored rule or scan metadata, fails closed.
+func evaluateGates(ctx context.Context, q *db.Queries, digest model.Digest, stage db.LifecycleStage) ([]uuid.UUID, error) {
 	gates, err := q.ListGatesForStage(ctx, stage.ID)
 	if err != nil {
-		return fmt.Errorf("loading gates for %s: %w", stage.Name, err)
+		return nil, fmt.Errorf("loading gates for %s: %w", stage.Name, err)
 	}
 	if len(gates) == 0 {
-		return nil
+		return nil, nil
 	}
-	present, err := q.ListEvidenceTypes(ctx, digest.String())
-	if err != nil {
-		return fmt.Errorf("loading evidence of %s: %w", digest, err)
-	}
-	have := make(map[string]struct{}, len(present))
-	for _, t := range present {
-		have[t] = struct{}{}
-	}
-
-	var missing []string
+	rules := make([]GateRule, 0, len(gates))
 	for _, g := range gates {
 		rule, err := ParseGateRule(g.Rule)
 		if err != nil {
 			// Rules are validated when written; a bad stored rule fails
 			// closed rather than letting a promotion through.
-			return fmt.Errorf("stored gate %s on %s: %w", g.ID, stage.Name, err)
+			return nil, fmt.Errorf("stored gate %s on %s: %w", g.ID, stage.Name, err)
 		}
-		if _, ok := have[string(rule.Evidence)]; !ok {
-			missing = append(missing, string(rule.Evidence))
+		rules = append(rules, rule)
+	}
+
+	var (
+		newest map[string]uuid.UUID // evidence type -> newest row
+		scans  []db.ListNewestSindriScansRow
+		loaded bool
+	)
+	for _, rule := range rules {
+		if rule.Scan != nil && !loaded {
+			scans, err = q.ListNewestSindriScans(ctx, digest.String())
+			if err != nil {
+				return nil, fmt.Errorf("loading scans of %s: %w", digest, err)
+			}
+			loaded = true
+		}
+		if rule.Scan == nil && newest == nil {
+			rows, err := q.ListNewestEvidenceByType(ctx, digest.String())
+			if err != nil {
+				return nil, fmt.Errorf("loading evidence of %s: %w", digest, err)
+			}
+			newest = make(map[string]uuid.UUID, len(rows))
+			for _, r := range rows {
+				newest[r.Type] = r.ID
+			}
 		}
 	}
-	if len(missing) > 0 {
-		return &GateError{Stage: stage.Name, Missing: missing}
+
+	var (
+		ids        []uuid.UUID
+		seen       = make(map[uuid.UUID]struct{})
+		missing    []string
+		violations []GateViolation
+	)
+	read := func(id uuid.UUID) {
+		if _, dup := seen[id]; !dup {
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
 	}
-	return nil
+	for _, rule := range rules {
+		if rule.Scan == nil {
+			id, ok := newest[string(rule.Evidence)]
+			if !ok {
+				missing = append(missing, string(rule.Evidence))
+				continue
+			}
+			read(id)
+			continue
+		}
+		vs, err := evaluateScanRule(rule, digest, scans, read)
+		if err != nil {
+			return nil, err
+		}
+		violations = append(violations, vs...)
+	}
+	if len(missing) > 0 || len(violations) > 0 {
+		return nil, &GateError{Stage: stage.Name, Missing: missing, Violations: violations}
+	}
+	return ids, nil
+}
+
+// evaluateScanRule applies a severity ceiling to the newest Sindri scan of
+// each platform (ADR 30). read is told every scan evaluated.
+func evaluateScanRule(rule GateRule, digest model.Digest, scans []db.ListNewestSindriScansRow, read func(uuid.UUID)) ([]GateViolation, error) {
+	name := rule.String()
+	if len(scans) == 0 {
+		return []GateViolation{{Rule: name, Reason: "no Sindri scan for " + digest.String()}}, nil
+	}
+	var out []GateViolation
+	have := make(map[string]struct{}, len(scans))
+	newest := 0 // the newest scan overall; its platforms list is the required set
+	for i, scan := range scans {
+		if scan.CreatedAt.After(scans[newest].CreatedAt) {
+			newest = i
+		}
+	}
+	var required []string
+	for i, scan := range scans {
+		read(scan.ID)
+		have[scan.Platform] = struct{}{}
+		var meta struct {
+			Vulnerabilities *[]Finding `json:"vulnerabilities"`
+			Platforms       []string   `json:"platforms"`
+		}
+		if err := json.Unmarshal(scan.Metadata, &meta); err != nil {
+			return nil, fmt.Errorf("reading metadata of scan %s: %w", scan.ID, err)
+		}
+		if i == newest {
+			required = meta.Platforms
+		}
+		switch {
+		case meta.Vulnerabilities == nil:
+			out = append(out, GateViolation{
+				Rule: name, Platform: scan.Platform,
+				Reason: "the Sindri scan " + scan.ID.String() + " lists no vulnerabilities; it needs a new scan, and the scanning guide says what queues one for each protocol",
+			})
+			continue
+		case scan.Platform != "" && len(meta.Platforms) == 0:
+			out = append(out, GateViolation{
+				Rule: name, Platform: scan.Platform,
+				Reason: "the Sindri scan " + scan.ID.String() + " does not list the platforms of its index; it needs a new scan, and the scanning guide says what queues one for each protocol",
+			})
+			continue
+		}
+		var above []Finding
+		for _, f := range *meta.Vulnerabilities {
+			if rule.Scan.MaxSeverity.Refuses(f.Severity) {
+				above = append(above, f)
+			}
+		}
+		if len(above) > 0 {
+			out = append(out, GateViolation{Rule: name, Platform: scan.Platform, Findings: above})
+		}
+	}
+	// An index is complete only when every platform its newest scan job
+	// listed has a scan: a job that attached some platforms and then failed
+	// must not pass on the part it finished.
+	for _, p := range required {
+		if _, ok := have[p]; !ok {
+			label := "platform " + p
+			if p == "" {
+				label = "the index child without a platform"
+			}
+			out = append(out, GateViolation{Rule: name, Platform: p, Reason: "scan incomplete: no Sindri scan for " + label})
+		}
+	}
+	return out, nil
 }
 
 // Decision answers "is exactly this digest approved for this environment?"
@@ -373,6 +567,8 @@ func (s *Service) Events(ctx context.Context, digest model.Digest) ([]Event, err
 			Actor:      row.Actor,
 			Reason:     row.Reason,
 			At:         row.At,
+
+			EvidenceIDs: uuidStrings(row.EvidenceIds),
 		})
 	}
 	return events, nil

@@ -175,6 +175,36 @@ func TestDesugar_Rejects(t *testing.T) {
 			want:  []string{"sindri.yaml:4:", "lifecycle.gates.prod", "does not declare"},
 		},
 		{
+			name:  "ScanGateUnknownKey",
+			input: "lifecycle:\n  stages: [dev]\n  gates:\n    dev:\n      - scan: {maxSeverity: high, zzz: 1}\n",
+			want:  []string{"sindri.yaml:5:", "lifecycle.gates.dev[0].scan", `unknown field "zzz", expected one of: maxSeverity`},
+		},
+		{
+			name:  "GateMappingUnknownKey",
+			input: "lifecycle:\n  stages: [dev]\n  gates:\n    dev:\n      - {sca: {maxSeverity: high}}\n",
+			want:  []string{"sindri.yaml:5:", `unknown field "sca", expected one of: scan`},
+		},
+		{
+			name:  "ScanGateUnknownSeverity",
+			input: "lifecycle:\n  stages: [dev]\n  gates:\n    dev:\n      - scan: {maxSeverity: severe}\n",
+			want:  []string{"sindri.yaml:5:", "lifecycle.gates.dev[0].scan.maxSeverity", `unknown severity "severe", expected one of: critical, high, medium, low`},
+		},
+		{
+			name:  "ScanGateWithoutSeverity",
+			input: "lifecycle:\n  stages: [dev]\n  gates:\n    dev:\n      - scan: {}\n",
+			want:  []string{"lifecycle.gates.dev[0].scan", "must set maxSeverity"},
+		},
+		{
+			name:  "TwoScanGatesOnOneStage",
+			input: "lifecycle:\n  stages: [dev]\n  gates:\n    dev:\n      - scan: {maxSeverity: high}\n      - scan: {maxSeverity: low}\n",
+			want:  []string{"sindri.yaml:6:", "lifecycle.gates.dev[1].scan", "one scan rule"},
+		},
+		{
+			name:  "ScanGateInBothPlaces",
+			input: "lifecycle:\n  stages:\n    - {name: dev, gates: [{scan: {maxSeverity: high}}]}\n  gates:\n    dev: [{scan: {maxSeverity: low}}]\n",
+			want:  []string{"lifecycle.gates.dev", "write them in one place"},
+		},
+		{
 			name:  "HostedDefaultsTakeNoTTL",
 			input: "defaults:\n  hosted: { ttl: 1h }\n",
 			want:  []string{"defaults.hosted", `unknown field "ttl"`},
@@ -210,6 +240,8 @@ func TestLoadManifests_Rejects(t *testing.T) {
 		input string
 		want  []string
 	}{
+		{"LongFormScanGateUnknownSeverity", "kind: Lifecycle\nspec:\n  stages:\n    - name: p\n      gates: [{scan: {maxSeverity: severe}}]\n", []string{"Lifecycle.spec.stages[0].gates[0].scan.maxSeverity", `unknown severity "severe"`}},
+		{"LongFormTwoScanGates", "kind: Lifecycle\nspec:\n  stages:\n    - name: p\n      gates: [{scan: {maxSeverity: high}}, {scan: {maxSeverity: low}}]\n", []string{"gates[1].scan", "one scan rule"}},
 		{"MissingKind", "metadata: { name: a }\n", []string{"needs a kind"}},
 		{"UnknownKind", "kind: Repo\n", []string{`"Repo" is not a kind`}},
 		{"MissingType", "kind: Repository\nmetadata: { name: a }\nspec: { protocol: oci }\n", []string{"Repository[a].spec.type", "is required"}},

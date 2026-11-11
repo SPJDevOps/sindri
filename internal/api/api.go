@@ -37,6 +37,9 @@ type ErrorBody struct {
 	// Missing names the evidence types a refused promotion lacks
 	// (GATE_FAILED only).
 	Missing []string `json:"missing,omitempty"`
+	// Violations names each severity rule that refused a promotion, with the
+	// CVE ids above its ceiling (GATE_FAILED only).
+	Violations []lifecycle.GateViolation `json:"violations,omitempty"`
 	// Details locates each problem in a refused configuration, by file,
 	// line, and field.
 	Details []*config.FieldError `json:"details,omitempty"`

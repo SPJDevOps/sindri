@@ -186,8 +186,8 @@ Storage-Layer von Anfang an abstrahiert (Filesystem lokal, S3/GCS in der Cloud) 
 | Alle Protokoll-Adapter (OCI, npm, PyPI, Maven, Helm) | SSO / SAML / LDAP |
 | Storage-Backends (Filesystem, S3) | Audit-Logging mit Aufbewahrungspflicht |
 | Basis-RBAC | Multi-Region / HA-Replikation |
-| Voller Single-Node-Betrieb inkl. Compose | Erweiterte Policy-Engine (z.B. „kein Prod-Promote ohne SBOM") |
-| | Managed Hosting / Cloud-Angebot |
+| Voller Single-Node-Betrieb inkl. Compose | Erweiterte Policy-Engine: Ausnahmen pro CVE mit Ablaufdatum, Lizenz-Policy, organisationsweite Regeln, Compliance-Reports |
+| Scanning beim Publish, SBOMs, Severity-Gate und Präsenz-Gates (z.B. „kein Prod-Promote ohne SBOM") | Managed Hosting / Cloud-Angebot |
 
 **Warum diese Grenze funktioniert:**
 Sie ist fair und nachvollziehbar statt willkürlich — Community-Vertrauen bleibt erhalten (siehe Gegenbeispiele: HashiCorp/Elastic-Lizenzwechsel führten zu Forks wie OpenTofu/OpenSearch). Eine echte OSI-Lizenz für den Kern signalisiert Ernsthaftigkeit und beschleunigt Adoption; die kommerzielle Schicht bleibt trotzdem sauber getrennt.

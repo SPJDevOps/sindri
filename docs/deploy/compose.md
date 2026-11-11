@@ -125,8 +125,6 @@ the container is recreated:
 ```
 
 The volume must have room for the largest image you scan, because each scan unpacks it
-there. Trivy downloads its database from the internet on first use. An air-gapped install
-sets `scanning.dbRepository` and `scanning.javaDbRepository` to a mirror. A full scanning
-guide, including mirroring the databases, is coming with the severity gate. Until then, see
-the [`scanning` reference](../configuration.md#scanning) and
-[ADR 29](../adr/0029-what-a-scan-covers.md).
+there. Trivy downloads its database from the internet on first use. For the severity gate,
+what scanning covers, and mirroring the databases for an air-gapped install, see
+[Scanning and the severity gate](../scanning.md).

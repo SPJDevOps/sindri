@@ -30,18 +30,19 @@ func (q *Queries) AddSubjectOwner(ctx context.Context, arg AddSubjectOwnerParams
 }
 
 const appendLifecycleEvent = `-- name: AppendLifecycleEvent :one
-INSERT INTO lifecycle_events (subject_digest, repo_id, stage_id, action, actor, reason)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, subject_digest, repo_id, stage_id, action, actor, reason, at
+INSERT INTO lifecycle_events (subject_digest, repo_id, stage_id, action, actor, reason, evidence_ids)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, subject_digest, repo_id, stage_id, action, actor, reason, at, evidence_ids
 `
 
 type AppendLifecycleEventParams struct {
-	SubjectDigest string    `json:"subject_digest"`
-	RepoID        uuid.UUID `json:"repo_id"`
-	StageID       uuid.UUID `json:"stage_id"`
-	Action        string    `json:"action"`
-	Actor         string    `json:"actor"`
-	Reason        string    `json:"reason"`
+	SubjectDigest string      `json:"subject_digest"`
+	RepoID        uuid.UUID   `json:"repo_id"`
+	StageID       uuid.UUID   `json:"stage_id"`
+	Action        string      `json:"action"`
+	Actor         string      `json:"actor"`
+	Reason        string      `json:"reason"`
+	EvidenceIds   []uuid.UUID `json:"evidence_ids"`
 }
 
 // The only write to the ledger. There is no UPDATE or DELETE query for this
@@ -54,6 +55,7 @@ func (q *Queries) AppendLifecycleEvent(ctx context.Context, arg AppendLifecycleE
 		arg.Action,
 		arg.Actor,
 		arg.Reason,
+		arg.EvidenceIds,
 	)
 	var i LifecycleEvent
 	err := row.Scan(
@@ -65,6 +67,7 @@ func (q *Queries) AppendLifecycleEvent(ctx context.Context, arg AppendLifecycleE
 		&i.Actor,
 		&i.Reason,
 		&i.At,
+		&i.EvidenceIds,
 	)
 	return i, err
 }
@@ -230,7 +233,7 @@ func (q *Queries) InsertGate(ctx context.Context, arg InsertGateParams) error {
 }
 
 const listAuditEvents = `-- name: ListAuditEvents :many
-SELECT e.id, e.subject_digest, e.action, e.actor, e.reason, e.at,
+SELECT e.id, e.subject_digest, e.action, e.actor, e.reason, e.at, e.evidence_ids,
        r.name AS repo_name, s.name AS stage_name
 FROM lifecycle_events e
 JOIN repositories r ON r.id = e.repo_id
@@ -260,14 +263,15 @@ type ListAuditEventsParams struct {
 }
 
 type ListAuditEventsRow struct {
-	ID            int64     `json:"id"`
-	SubjectDigest string    `json:"subject_digest"`
-	Action        string    `json:"action"`
-	Actor         string    `json:"actor"`
-	Reason        string    `json:"reason"`
-	At            time.Time `json:"at"`
-	RepoName      string    `json:"repo_name"`
-	StageName     string    `json:"stage_name"`
+	ID            int64       `json:"id"`
+	SubjectDigest string      `json:"subject_digest"`
+	Action        string      `json:"action"`
+	Actor         string      `json:"actor"`
+	Reason        string      `json:"reason"`
+	At            time.Time   `json:"at"`
+	EvidenceIds   []uuid.UUID `json:"evidence_ids"`
+	RepoName      string      `json:"repo_name"`
+	StageName     string      `json:"stage_name"`
 }
 
 // The audit trail (GET /api/v1/audit), newest first by id, which is stable
@@ -299,6 +303,7 @@ func (q *Queries) ListAuditEvents(ctx context.Context, arg ListAuditEventsParams
 			&i.Actor,
 			&i.Reason,
 			&i.At,
+			&i.EvidenceIds,
 			&i.RepoName,
 			&i.StageName,
 		); err != nil {
@@ -443,32 +448,6 @@ func (q *Queries) ListEvidence(ctx context.Context, subjectDigest string) ([]Evi
 	return items, nil
 }
 
-const listEvidenceTypes = `-- name: ListEvidenceTypes :many
-SELECT DISTINCT type FROM evidence
-WHERE subject_digest = $1
-ORDER BY type
-`
-
-func (q *Queries) ListEvidenceTypes(ctx context.Context, subjectDigest string) ([]string, error) {
-	rows, err := q.db.Query(ctx, listEvidenceTypes, subjectDigest)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []string{}
-	for rows.Next() {
-		var type_ string
-		if err := rows.Scan(&type_); err != nil {
-			return nil, err
-		}
-		items = append(items, type_)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listGates = `-- name: ListGates :many
 SELECT g.id, g.stage_id, g.rule, s.name AS stage_name
 FROM promotion_gates g
@@ -540,7 +519,7 @@ func (q *Queries) ListGatesForStage(ctx context.Context, stageID uuid.UUID) ([]P
 }
 
 const listLifecycleEvents = `-- name: ListLifecycleEvents :many
-SELECT e.id, e.action, e.actor, e.reason, e.at, r.name AS repo_name, s.name AS stage_name
+SELECT e.id, e.action, e.actor, e.reason, e.at, e.evidence_ids, r.name AS repo_name, s.name AS stage_name
 FROM lifecycle_events e
 JOIN repositories r ON r.id = e.repo_id
 JOIN lifecycle_stages s ON s.id = e.stage_id
@@ -549,13 +528,14 @@ ORDER BY e.at, e.id
 `
 
 type ListLifecycleEventsRow struct {
-	ID        int64     `json:"id"`
-	Action    string    `json:"action"`
-	Actor     string    `json:"actor"`
-	Reason    string    `json:"reason"`
-	At        time.Time `json:"at"`
-	RepoName  string    `json:"repo_name"`
-	StageName string    `json:"stage_name"`
+	ID          int64       `json:"id"`
+	Action      string      `json:"action"`
+	Actor       string      `json:"actor"`
+	Reason      string      `json:"reason"`
+	At          time.Time   `json:"at"`
+	EvidenceIds []uuid.UUID `json:"evidence_ids"`
+	RepoName    string      `json:"repo_name"`
+	StageName   string      `json:"stage_name"`
 }
 
 func (q *Queries) ListLifecycleEvents(ctx context.Context, subjectDigest string) ([]ListLifecycleEventsRow, error) {
@@ -573,8 +553,86 @@ func (q *Queries) ListLifecycleEvents(ctx context.Context, subjectDigest string)
 			&i.Actor,
 			&i.Reason,
 			&i.At,
+			&i.EvidenceIds,
 			&i.RepoName,
 			&i.StageName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNewestEvidenceByType = `-- name: ListNewestEvidenceByType :many
+SELECT DISTINCT ON (type) id, type FROM evidence
+WHERE subject_digest = $1
+ORDER BY type, created_at DESC, id DESC
+`
+
+type ListNewestEvidenceByTypeRow struct {
+	ID   uuid.UUID `json:"id"`
+	Type string    `json:"type"`
+}
+
+// The evidence a presence gate reads: the newest row of each type.
+func (q *Queries) ListNewestEvidenceByType(ctx context.Context, subjectDigest string) ([]ListNewestEvidenceByTypeRow, error) {
+	rows, err := q.db.Query(ctx, listNewestEvidenceByType, subjectDigest)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNewestEvidenceByTypeRow{}
+	for rows.Next() {
+		var i ListNewestEvidenceByTypeRow
+		if err := rows.Scan(&i.ID, &i.Type); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNewestSindriScans = `-- name: ListNewestSindriScans :many
+SELECT DISTINCT ON (coalesce(metadata->>'platform', ''))
+       id, coalesce(metadata->>'platform', '')::text AS platform, metadata, created_at
+FROM evidence
+WHERE subject_digest = $1
+  AND type = 'scan'
+  AND metadata->>'producer' = 'sindri'
+ORDER BY coalesce(metadata->>'platform', ''), created_at DESC, id DESC
+`
+
+type ListNewestSindriScansRow struct {
+	ID        uuid.UUID `json:"id"`
+	Platform  string    `json:"platform"`
+	Metadata  []byte    `json:"metadata"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// The scans a severity gate reads: the newest Sindri-produced scan per
+// platform (ADR 29, ADR 30). Evidence a client attached carries {} metadata
+// and never matches; only the worker writes producer.
+func (q *Queries) ListNewestSindriScans(ctx context.Context, subjectDigest string) ([]ListNewestSindriScansRow, error) {
+	rows, err := q.db.Query(ctx, listNewestSindriScans, subjectDigest)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNewestSindriScansRow{}
+	for rows.Next() {
+		var i ListNewestSindriScansRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Platform,
+			&i.Metadata,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

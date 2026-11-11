@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"log/slog"
@@ -392,6 +393,38 @@ func TestStage_FileKindIsUnsupported(t *testing.T) {
 	}
 }
 
+func TestReport_ListsVulnerabilitiesDeduplicatedAndSorted(t *testing.T) {
+	cases := []struct {
+		name   string
+		report string
+		want   []vulnerability
+	}{
+		{"none gives an empty list, not nil", `{"SchemaVersion":2}`, []vulnerability{}},
+		{"worst first, then by id, repeats collapsed",
+			`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[
+				{"VulnerabilityID":"CVE-2","Severity":"LOW"},
+				{"VulnerabilityID":"CVE-9","Severity":"HIGH"},
+				{"VulnerabilityID":"CVE-1","Severity":"HIGH"},
+				{"VulnerabilityID":"CVE-5","Severity":"CRITICAL"}]},
+				{"Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"HIGH"},{"VulnerabilityID":"CVE-3","Severity":"weird"}]}]}`,
+			[]vulnerability{{"CVE-5", "CRITICAL"}, {"CVE-1", "HIGH"}, {"CVE-9", "HIGH"}, {"CVE-2", "LOW"}, {"CVE-3", "UNKNOWN"}}},
+		{"same id at two severities is kept twice",
+			`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"LOW"},{"VulnerabilityID":"CVE-1","Severity":"HIGH"}]}]}`,
+			[]vulnerability{{"CVE-1", "HIGH"}, {"CVE-1", "LOW"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, got, err := countSeverities(strings.NewReader(tc.report))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got == nil || !slices.Equal(got, tc.want) {
+				t.Errorf("vulnerabilities = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestReport_CountsSeverities(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -405,7 +438,7 @@ func TestReport_CountsSeverities(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := countSeverities(strings.NewReader(tc.report))
+			got, _, err := countSeverities(strings.NewReader(tc.report))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -419,7 +452,7 @@ func TestReport_CountsSeverities(t *testing.T) {
 			}
 		})
 	}
-	if _, err := countSeverities(strings.NewReader("not json")); err == nil {
+	if _, _, err := countSeverities(strings.NewReader("not json")); err == nil {
 		t.Error("countSeverities accepted invalid JSON")
 	}
 }
@@ -485,6 +518,19 @@ func TestRun_ImageAttachesSbomAndScanWithProducerMetadata(t *testing.T) {
 		if counts["CRITICAL"] != float64(1) || counts["HIGH"] != float64(1) || counts["LOW"] != float64(0) {
 			t.Errorf("severity_counts = %v", counts)
 		}
+		if a.params.Type == model.EvidenceSBOM {
+			if _, ok := meta["vulnerabilities"]; ok {
+				t.Errorf("sbom metadata carries vulnerabilities: %v", meta)
+			}
+			continue
+		}
+		vulns, ok := meta["vulnerabilities"].([]any)
+		if !ok || len(vulns) != 2 {
+			t.Fatalf("vulnerabilities = %v, want the two findings of the fixture", meta["vulnerabilities"])
+		}
+		if first, _ := vulns[0].(map[string]any); first["id"] != "CVE-2026-0001" || first["severity"] != "CRITICAL" {
+			t.Errorf("vulnerabilities[0] = %v, want the CRITICAL finding first", vulns[0])
+		}
 	}
 	if !bytes.Contains(sbom.body, []byte("CycloneDX")) || !bytes.Contains(scan.body, []byte("CVE-2026-0001")) {
 		t.Error("evidence bodies are not the sbom and report")
@@ -507,6 +553,70 @@ func TestRun_PackageUsesRootfsAndPackageCoverage(t *testing.T) {
 	_ = json.Unmarshal(f.ev.attached[1].params.Metadata, &meta)
 	if meta["coverage"] != "package" || meta["severity_counts"].(map[string]any)["MEDIUM"] != float64(1) {
 		t.Errorf("metadata = %v", meta)
+	}
+	if _, ok := meta["platforms"]; ok {
+		t.Errorf("platforms set for a single-manifest subject: %v", meta)
+	}
+	if vulns, _ := meta["vulnerabilities"].([]any); len(vulns) != 1 {
+		t.Errorf("vulnerabilities = %v, want the one finding of the fixture", meta["vulnerabilities"])
+	}
+}
+
+func TestRun_IndexMetadataCarriesFullPlatformListOnScansOnly(t *testing.T) {
+	f := newFixture(t)
+	amd := f.image(ocispec.MediaTypeImageManifest)
+	arm := f.image(mediaTypeDockerManifest)
+	raw, _ := json.Marshal(ocispec.Index{Manifests: []ocispec.Descriptor{
+		{MediaType: mediaTypeDockerManifest, Digest: godigest.Digest(arm.String()), Platform: &ocispec.Platform{OS: "linux", Architecture: "arm64"}},
+		{MediaType: ocispec.MediaTypeImageManifest, Digest: godigest.Digest(amd.String()), Platform: &ocispec.Platform{OS: "linux", Architecture: "amd64"}},
+	}})
+	digest := f.put(raw)
+	if _, err := f.scanner(Options{Trivy: stubPath(t)}).Handle(t.Context(), f.job(digest, "oci-index")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(f.ev.attached) != 4 {
+		t.Fatalf("attached %d documents, want 4", len(f.ev.attached))
+	}
+	for _, a := range f.ev.attached {
+		var meta map[string]any
+		if err := json.Unmarshal(a.params.Metadata, &meta); err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprint(meta["platforms"]); got != "[linux/amd64 linux/arm64]" {
+			t.Errorf("%s platforms = %v, want the sorted full list", a.params.Type, meta["platforms"])
+		}
+		_, hasVulns := meta["vulnerabilities"]
+		if hasVulns != (a.params.Type == model.EvidenceScan) {
+			t.Errorf("%s has vulnerabilities = %v, want only scan rows to carry it", a.params.Type, hasVulns)
+		}
+	}
+}
+
+func TestRun_IndexPlatformListIncludesPlatformlessChild(t *testing.T) {
+	f := newFixture(t)
+	arm := f.image(mediaTypeDockerManifest)
+	bare := f.imageN(ocispec.MediaTypeImageManifest, 1)
+	raw, _ := json.Marshal(ocispec.Index{Manifests: []ocispec.Descriptor{
+		{MediaType: mediaTypeDockerManifest, Digest: godigest.Digest(arm.String()), Platform: &ocispec.Platform{OS: "linux", Architecture: "arm64"}},
+		{MediaType: ocispec.MediaTypeImageManifest, Digest: godigest.Digest(bare.String())},
+	}})
+	digest := f.put(raw)
+	if _, err := f.scanner(Options{Trivy: stubPath(t)}).Handle(t.Context(), f.job(digest, "oci-index")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(f.ev.attached) != 4 {
+		t.Fatalf("attached %d documents, want 4", len(f.ev.attached))
+	}
+	for _, a := range f.ev.attached {
+		var meta struct {
+			Platforms []string `json:"platforms"`
+		}
+		if err := json.Unmarshal(a.params.Metadata, &meta); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(meta.Platforms, ","); got != ",linux/arm64" {
+			t.Errorf("%s platforms = %q, want the platform-less key and linux/arm64", a.params.Type, got)
+		}
 	}
 }
 
@@ -596,12 +706,12 @@ func TestReport_NonReportsAreErrorsNotZeroCounts(t *testing.T) {
 		"empty input":     ``,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got, err := countSeverities(strings.NewReader(doc)); err == nil {
+			if got, _, err := countSeverities(strings.NewReader(doc)); err == nil {
 				t.Fatalf("countSeverities = %v, want an error", got)
 			}
 		})
 	}
-	if _, err := countSeverities(strings.NewReader(`{"SchemaVersion":2}`)); err != nil {
+	if _, _, err := countSeverities(strings.NewReader(`{"SchemaVersion":2}`)); err != nil {
 		t.Errorf("a schema 2 report without Results was refused: %v", err)
 	}
 }

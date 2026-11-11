@@ -166,8 +166,29 @@ type Lifecycle struct {
 
 // Stage is one lifecycle stage and its gates.
 type Stage struct {
-	Name  string               `json:"name"`
-	Gates []model.EvidenceType `json:"gates,omitempty"`
+	Name  string `json:"name"`
+	Gates []Gate `json:"gates,omitempty"`
+}
+
+// Gate is one promotion precondition, written as an evidence type (a bare
+// string) or as a `scan` mapping. Exactly one field is set. ADR 30 defines the
+// scan rule.
+type Gate struct {
+	Evidence model.EvidenceType `json:"evidence,omitempty"`
+	Scan     *ScanGate          `json:"scan,omitempty"`
+}
+
+// ScanGate refuses a subject whose scans hold a finding above MaxSeverity.
+type ScanGate struct {
+	MaxSeverity string `json:"maxSeverity"`
+}
+
+// String names a gate the way the file writes it.
+func (g Gate) String() string {
+	if g.Scan != nil {
+		return "scan.maxSeverity=" + g.Scan.MaxSeverity
+	}
+	return string(g.Evidence)
 }
 
 // Source records where a document came from, for error messages only.
@@ -625,10 +646,7 @@ func parseLifecycleDoc(c *errs, out *Manifests, env mapping) {
 					st.Name, _ = readString(c, m.value["name"], f+".name")
 				}
 				if m.has("gates") {
-					gates, _ := readStrings(c, m.value["gates"], f+".gates")
-					for _, g := range gates {
-						st.Gates = append(st.Gates, model.EvidenceType(g))
-					}
+					st.Gates = readGates(c, m.value["gates"], f+".gates")
 				}
 				lc.Source.set(fmt.Sprintf("stages[%d]", i), item.Line, f)
 				lc.Stages = append(lc.Stages, st)

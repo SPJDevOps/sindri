@@ -51,6 +51,10 @@ publishes an npm package.
   never serve a name you publish, which is the defence against dependency confusion.
 - **Lifecycle:** stages and promotion that change an artifact's trust status without
   copying its bytes, with gates on evidence and an append-only audit ledger.
+- **Scanning:** with the `-trivy` image and scanning enabled, every hosted publish is
+  scanned, and promotion is refused above a severity you set. Works air-gapped with a
+  mirror of Trivy's databases. See
+  [Scanning and the severity gate](https://spjdevops.github.io/sindri/scanning.html).
 - **Configuration as code:** one YAML file for one team, reconciled on startup, and
   manifests applied from CI when you have many teams.
 - **Access:** OpenID Connect sign-in, machine tokens for CI, and role-based access. There
@@ -94,8 +98,6 @@ The full documentation is at **<https://spjdevops.github.io/sindri/>**.
 So that nothing is silently missing:
 
 - **Several replicas.** Sindri runs as one replica, because upload sessions live in memory.
-- **Running scanners.** Sindri attaches and gates on evidence produced elsewhere. Scanning
-  on publish is next on the [roadmap](roadmap.md).
 - **Other formats.** Maven, and Helm's own repository format. Helm charts as OCI artifacts
   work today.
 - **OCI:** the referrers API and cross-repository blob mounts.

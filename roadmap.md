@@ -830,11 +830,11 @@ publish is scanned, and promotion is refused above a severity.
 | 7, Nov 6–22 | M10 migration | SIN-24, 25, 26, 53 | |
 | 8, Nov 9–15 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
 | 9, Nov 10–22 | M11a scan | SIN-30, 31, 32, 36 | |
-| 10, Nov 23–29 | M11a gate | SIN-34, 38, 39, 72, 80 | v1.3.0, then announce |
+| 10, Nov 11–29 | M11a gate | SIN-34, 38, 39, 72, 80 | v1.3.0, then announce |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
 week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9 and 10
-moved up two weeks. Sprint 9 started early on Nov 10.
+moved up two weeks. Sprint 9 started early on Nov 10, and Sprint 10 on Nov 11.
 
 Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic, and the follow-ups
 from the Sprint 9 reviews: SIN-81, 82, 83, 84, and 85. SIN-80, the other follow-up, is in
@@ -1113,16 +1113,19 @@ severity. This is what the announcement claims. M11 was split in two by
   Trivy and attaches a CycloneDX `sbom` and a `scan` result as evidence on the subject.
   Nothing new bypasses `cas`: evidence documents are written through the existing path
   (SIN-32)
-- [ ] A second gate rule kind, `{"scan": {"max_severity": "high"}}`, with short-form sugar
+- [x] A second gate rule kind, `{"scan": {"max_severity": "high"}}`, with short-form sugar
   and both golden tests covering it. The decoder still rejects unknown rules
+  ([ADR 30](docs/adr/0030-severity-gate.md), SIN-34)
 - [x] A release image variant that includes Trivy, tagged `-trivy`; the default image and
   the binary stay dependency-free (SIN-36)
-- [ ] A docs page on enabling scanning that states its limits: off by default, hosted
+- [x] A docs page on enabling scanning that states its limits: off by default, hosted
   publishes only, and what each protocol's scan covers. It also covers air-gapped installs:
   mirroring the Trivy and Java databases, pointing `dbRepository` and `javaDbRepository` at the
   mirror, keeping it fresh, and pre-seeding the cache instead. The gate script runs the mirror
   example (SIN-72)
-- [ ] `pitch.md`'s open-core table updated to the line ADR 23 draws
+- [x] `pitch.md`'s open-core table updated to the line ADR 23 draws (SIN-38)
+- [x] `PutManifest` requires a manifest's children to be placed in the publishing
+  repository, so one tenant cannot claim another's scanned subject (SIN-80)
 
 **Out of scope.** Everything in M11b. Per-CVE waivers, licence policy, org-wide rules, and
 compliance reports: the paid policy layer. Signature verification. Scanners other than
@@ -1145,6 +1148,23 @@ make up && make build && ./scripts/m11-scan-gate.sh
 # with the Trivy and Java databases mirrored to a local registry and no route to the public
 # ones, a scan still succeeds (the scanning page's air-gapped example)
 ```
+
+**Gate slice, Sprint 10, 2026-11-11.** `make lint` (under Go 1.27.1), `make test`,
+`make test-integration`, `./scripts/oci-conformance.sh` (60 passed, 20 referrers specs
+skipped), and `./scripts/m10-docs-gate.sh` passed on `m11a-gate`, with Go 1.27.4, Docker
+29.8.0, Trivy 0.76.2, oras v1.3.0, and registry 3.0.0. The docs gate now runs 12 checks,
+among them `scripts/m11-scan-gate.sh`, which runs `docs/scanning.md`'s own blocks: an image,
+a wheel, and an npm tarball are each refused promotion with the CVE named, and a promotion
+whose findings sit at the ceiling passes. Air-gapped, Sindri runs on a Docker network with
+no route out, scans from a mirror of both databases, and names Log4Shell in a jar-only
+image. [ADR 30](docs/adr/0030-severity-gate.md) records the rule: `max_severity` is a
+ceiling, so `high` refuses only CRITICAL, and UNKNOWN is always refused. The gate reads the
+newest Sindri scan per platform from the worker's metadata, every platform of an index must
+have one, and the ledger records the evidence ids each approval read (migration 00012).
+SIN-80 closes the way one tenant could push another's index and read its evidence. **A
+scan-gated npm version that was never scanned cannot pass until M11b's re-scan,** because
+npm refuses a re-publish; the page says so. **Rollback to 1.2.x** needs scan gates removed
+first; the upgrade notes say so.
 
 ---
 

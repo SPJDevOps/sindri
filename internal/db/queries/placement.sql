@@ -219,6 +219,14 @@ INSERT INTO repository_blobs (repo_id, digest)
 VALUES ($1, $2)
 ON CONFLICT (repo_id, digest) DO NOTHING;
 
+-- name: IsBlobLinkedToRepository :one
+-- Placement of one digest in one repository by id: the check a manifest put
+-- makes for each child, inside its transaction.
+SELECT EXISTS (
+  SELECT 1 FROM repository_blobs
+  WHERE repo_id = $1 AND digest = $2
+) AS linked;
+
 -- name: UnlinkRepositoryBlob :execrows
 DELETE FROM repository_blobs
 WHERE repo_id = $1 AND digest = $2;
