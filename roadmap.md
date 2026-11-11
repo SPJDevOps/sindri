@@ -1126,6 +1126,9 @@ severity. This is what the announcement claims. M11 was split in two by
 - [x] `pitch.md`'s open-core table updated to the line ADR 23 draws (SIN-38)
 - [x] `PutManifest` requires a manifest's children to be placed in the publishing
   repository, so one tenant cannot claim another's scanned subject (SIN-80)
+- [x] The artifact page shows each Sindri scan's findings per severity and its platform,
+  added after v1.3.0 so that the announcement's claim is visible in the UI. The full
+  vulnerability view stays in M11b (SIN-35)
 
 **Out of scope.** Everything in M11b. Per-CVE waivers, licence policy, org-wide rules, and
 compliance reports: the paid policy layer. Signature verification. Scanners other than

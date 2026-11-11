@@ -40,7 +40,7 @@
   <h2 class="section-title">Evidence</h2>
   <div class="rows">
   {{range .Evidence}}
-    <div class="row"><span class="primary"><span class="pill">{{.Type}}</span> <span class="mono">{{.MediaType}}</span></span><span class="secondary" title="{{when .CreatedAt}}">{{bytes .Size}} · {{.CreatedBy}} · {{ago .CreatedAt}}</span></div>
+    <div class="row"><span class="primary"><span class="pill">{{.Type}}</span> <span class="mono">{{.MediaType}}</span>{{with .Scan}}<span class="findings">{{if .Clean}}<span class="pill sev-none">no findings</span>{{else}}{{range .Counts}}<span class="pill {{.Class}}">{{.N}} {{.Severity}}</span>{{end}}{{end}}{{with .Platform}}<span class="mono hint">{{.}}</span>{{end}}</span>{{end}}</span><span class="secondary" title="{{when .CreatedAt}}">{{bytes .Size}} · {{.CreatedBy}} · {{ago .CreatedAt}}</span></div>
   {{else}}
     <div class="row empty">No evidence attached.</div>
   {{end}}

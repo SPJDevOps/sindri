@@ -314,6 +314,60 @@ type childRow struct {
 	Href   string
 }
 
+// evidenceRow is one evidence document. Scan is set only on a scan Sindri's
+// own worker produced: a client-attached scan says nothing the page should
+// repeat as if Sindri had found it (ADR 29).
+type evidenceRow struct {
+	evidence.Evidence
+	Scan *scanSummary
+}
+
+// scanSummary is what a Sindri scan found, read from the metadata the worker
+// wrote. Counts lists only severities with findings, worst first; Clean is a
+// scan that found nothing.
+type scanSummary struct {
+	Platform string
+	Counts   []severityCount
+	Clean    bool
+}
+
+type severityCount struct {
+	Severity string
+	Class    string
+	N        int
+}
+
+// summarySeverities is the order the page shows severities in, worst first,
+// with Trivy's UNKNOWN last.
+var summarySeverities = []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"}
+
+// newEvidenceRow summarises a Sindri scan's findings. Metadata it cannot
+// read leaves the row without a summary rather than failing the page: the
+// gate, not the page, decides what a scan means.
+func newEvidenceRow(ev evidence.Evidence) evidenceRow {
+	row := evidenceRow{Evidence: ev}
+	if ev.Type != model.EvidenceScan || len(ev.Metadata) == 0 {
+		return row
+	}
+	var meta struct {
+		Producer       string         `json:"producer"`
+		Platform       string         `json:"platform"`
+		SeverityCounts map[string]int `json:"severity_counts"`
+	}
+	if err := json.Unmarshal(ev.Metadata, &meta); err != nil || meta.Producer != "sindri" || meta.SeverityCounts == nil {
+		return row
+	}
+	s := &scanSummary{Platform: meta.Platform}
+	for _, sev := range summarySeverities {
+		if n := meta.SeverityCounts[sev]; n > 0 {
+			s.Counts = append(s.Counts, severityCount{Severity: strings.ToLower(sev), Class: "sev-" + strings.ToLower(sev), N: n})
+		}
+	}
+	s.Clean = len(s.Counts) == 0
+	row.Scan = s
+	return row
+}
+
 type artifactPage struct {
 	chrome
 	Repo        string
@@ -329,7 +383,7 @@ type artifactPage struct {
 	Provenance  []lifecycle.Provenance
 	StateRepos  []string
 	Stages      []stageRow
-	Evidence    []evidence.Evidence
+	Evidence    []evidenceRow
 	IsIndex     bool
 	Children    []childRow
 	Document    string
@@ -450,7 +504,9 @@ func (h *handler) identity(r *http.Request, data *artifactPage, s lifecycle.Subj
 	if err != nil {
 		return err
 	}
-	data.Evidence = ev
+	for _, e := range ev {
+		data.Evidence = append(data.Evidence, newEvidenceRow(e))
+	}
 	return nil
 }
 
