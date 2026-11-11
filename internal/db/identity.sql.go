@@ -601,7 +601,7 @@ func (q *Queries) ListNewestEvidenceByType(ctx context.Context, subjectDigest st
 
 const listNewestSindriScans = `-- name: ListNewestSindriScans :many
 SELECT DISTINCT ON (coalesce(metadata->>'platform', ''))
-       id, coalesce(metadata->>'platform', '')::text AS platform, metadata
+       id, coalesce(metadata->>'platform', '')::text AS platform, metadata, created_at
 FROM evidence
 WHERE subject_digest = $1
   AND type = 'scan'
@@ -610,9 +610,10 @@ ORDER BY coalesce(metadata->>'platform', ''), created_at DESC, id DESC
 `
 
 type ListNewestSindriScansRow struct {
-	ID       uuid.UUID `json:"id"`
-	Platform string    `json:"platform"`
-	Metadata []byte    `json:"metadata"`
+	ID        uuid.UUID `json:"id"`
+	Platform  string    `json:"platform"`
+	Metadata  []byte    `json:"metadata"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // The scans a severity gate reads: the newest Sindri-produced scan per
@@ -627,7 +628,12 @@ func (q *Queries) ListNewestSindriScans(ctx context.Context, subjectDigest strin
 	items := []ListNewestSindriScansRow{}
 	for rows.Next() {
 		var i ListNewestSindriScansRow
-		if err := rows.Scan(&i.ID, &i.Platform, &i.Metadata); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Platform,
+			&i.Metadata,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

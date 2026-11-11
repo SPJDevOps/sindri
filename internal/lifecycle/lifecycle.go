@@ -423,18 +423,38 @@ func evaluateScanRule(rule GateRule, digest model.Digest, scans []db.ListNewestS
 		return []GateViolation{{Rule: name, Reason: "no Sindri scan for " + digest.String()}}, nil
 	}
 	var out []GateViolation
-	for _, scan := range scans {
+	have := make(map[string]struct{}, len(scans))
+	newest := 0 // the newest scan overall; its platforms list is the required set
+	for i, scan := range scans {
+		if scan.CreatedAt.After(scans[newest].CreatedAt) {
+			newest = i
+		}
+	}
+	var required []string
+	for i, scan := range scans {
 		read(scan.ID)
+		have[scan.Platform] = struct{}{}
 		var meta struct {
 			Vulnerabilities *[]Finding `json:"vulnerabilities"`
+			Platforms       []string   `json:"platforms"`
 		}
 		if err := json.Unmarshal(scan.Metadata, &meta); err != nil {
 			return nil, fmt.Errorf("reading metadata of scan %s: %w", scan.ID, err)
 		}
-		if meta.Vulnerabilities == nil {
+		if i == newest {
+			required = meta.Platforms
+		}
+		switch {
+		case meta.Vulnerabilities == nil:
 			out = append(out, GateViolation{
 				Rule: name, Platform: scan.Platform,
 				Reason: "the Sindri scan " + scan.ID.String() + " lists no vulnerabilities; scan again",
+			})
+			continue
+		case scan.Platform != "" && len(meta.Platforms) == 0:
+			out = append(out, GateViolation{
+				Rule: name, Platform: scan.Platform,
+				Reason: "the Sindri scan " + scan.ID.String() + " does not list the platforms of its index; scan again",
 			})
 			continue
 		}
@@ -446,6 +466,14 @@ func evaluateScanRule(rule GateRule, digest model.Digest, scans []db.ListNewestS
 		}
 		if len(above) > 0 {
 			out = append(out, GateViolation{Rule: name, Platform: scan.Platform, Findings: above})
+		}
+	}
+	// An index is complete only when every platform its newest scan job
+	// listed has a scan: a job that attached some platforms and then failed
+	// must not pass on the part it finished.
+	for _, p := range required {
+		if _, ok := have[p]; !ok {
+			out = append(out, GateViolation{Rule: name, Platform: p, Reason: "scan incomplete: no Sindri scan for platform " + p})
 		}
 	}
 	return out, nil

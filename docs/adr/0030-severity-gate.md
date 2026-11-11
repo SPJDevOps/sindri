@@ -37,6 +37,15 @@ the 409 can name the CVE ids.
 platform, and every platform must pass). A newer clean scan supersedes an older failing
 one. A scan without `producer: sindri` never counts, whatever it says.
 
+**Every platform of an index.** The worker attaches an index's platforms one after
+another, so a failed job or a promotion mid-job can leave scans for only some. The worker
+therefore writes `platforms` (the job's full platform list, sorted) into the metadata of
+each scan of an index child; a single-manifest subject has no `platform` and no
+`platforms`. The gate takes the `platforms` list of the newest Sindri scan as the required
+set and refuses, with "scan incomplete: no Sindri scan for platform X", when any of them
+lacks a scan. An index-child scan without `platforms` refuses like one without
+`vulnerabilities`: scan again.
+
 **Refusals.** No Sindri scan for the subject refuses. A Sindri scan whose metadata has no
 `vulnerabilities` key refuses and asks for a re-scan; no released build has scans,
 because scanning landed after v1.2.0, so this only guards against a partial upgrade.

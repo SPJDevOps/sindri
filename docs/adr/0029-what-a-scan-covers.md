@@ -51,7 +51,8 @@ CycloneDX (`sbom`, `application/vnd.cyclonedx+json`). Both are written through
 `evidence.Attach` and so through `cas`, with its write intent recorded first (ADR 19).
 Metadata keys: `producer`, `scanner`, `scanner_version`, `db_updated_at`,
 `severity_counts` (CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN), `coverage` (`image` or
-`package`), and `platform` for an index child.
+`package`), and `platform` for an index child. (Amended by [ADR 30](0030-severity-gate.md):
+scan rows also carry `vulnerabilities`, and index-child rows `platforms`.)
 
 **Trust.** Severity rules read only evidence whose metadata says `producer: sindri`. Only
 the worker writes that key. The API always stores `{}` as metadata and cannot be made to

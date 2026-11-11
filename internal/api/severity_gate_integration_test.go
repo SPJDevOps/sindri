@@ -38,7 +38,18 @@ func newGateEnv(t *testing.T, ceiling string) *gateEnv {
 // evidence id.
 func (e *gateEnv) sindriScan(t *testing.T, platform string, findings ...lifecycle.Finding) string {
 	t.Helper()
+	return e.sindriScanOf(t, platform, nil, findings...)
+}
+
+// sindriScanOf is sindriScan for an index child: platforms is the job's full
+// platform list, as the worker writes it. A nil list on a child leaves the key
+// out, like a scan from before the key existed.
+func (e *gateEnv) sindriScanOf(t *testing.T, platform string, platforms []string, findings ...lifecycle.Finding) string {
+	t.Helper()
 	meta := map[string]any{"producer": "sindri", "vulnerabilities": findings}
+	if platforms != nil {
+		meta["platforms"] = platforms
+	}
 	if findings == nil {
 		meta["vulnerabilities"] = []lifecycle.Finding{}
 	}
@@ -221,8 +232,9 @@ func TestPromote_ScanGateRefusesScanWithoutVulnerabilityList(t *testing.T) {
 
 func TestPromote_ScanGateChecksEveryPlatformOfIndex(t *testing.T) {
 	env := newGateEnv(t, "high")
-	env.sindriScan(t, "linux/amd64")
-	env.sindriScan(t, "linux/arm64", lifecycle.Finding{ID: "CVE-2026-1111", Severity: "CRITICAL"})
+	both := []string{"linux/amd64", "linux/arm64"}
+	env.sindriScanOf(t, "linux/amd64", both)
+	env.sindriScanOf(t, "linux/arm64", both, lifecycle.Finding{ID: "CVE-2026-1111", Severity: "CRITICAL"})
 
 	body := env.refusal(t)
 	if len(body.Violations) != 1 || body.Violations[0].Platform != "linux/arm64" || body.Violations[0].Findings[0].ID != "CVE-2026-1111" {
@@ -230,8 +242,32 @@ func TestPromote_ScanGateChecksEveryPlatformOfIndex(t *testing.T) {
 	}
 
 	// A newer clean scan for that platform supersedes the failing one.
-	env.sindriScan(t, "linux/arm64")
+	env.sindriScanOf(t, "linux/arm64", both)
 	env.mustPromote(t)
+}
+
+func TestPromote_ScanGateRefusesIndexWithAPlatformUnscanned(t *testing.T) {
+	env := newGateEnv(t, "critical")
+	// The job listed two platforms and attached only the first.
+	env.sindriScanOf(t, "linux/amd64", []string{"linux/amd64", "linux/arm64"})
+	body := env.refusal(t)
+	if len(body.Violations) != 1 || body.Violations[0].Platform != "linux/arm64" ||
+		!strings.Contains(body.Violations[0].Reason, "scan incomplete: no Sindri scan for platform linux/arm64") {
+		t.Fatalf("violations = %+v, want an incomplete scan naming linux/arm64", body.Violations)
+	}
+
+	// Attaching the missing platform completes it.
+	env.sindriScanOf(t, "linux/arm64", []string{"linux/amd64", "linux/arm64"})
+	env.mustPromote(t)
+}
+
+func TestPromote_ScanGateRefusesIndexChildScanWithoutPlatformList(t *testing.T) {
+	env := newGateEnv(t, "critical")
+	env.sindriScanOf(t, "linux/amd64", nil)
+	body := env.refusal(t)
+	if len(body.Violations) != 1 || !strings.Contains(body.Violations[0].Reason, "scan again") {
+		t.Fatalf("violations = %+v, want a re-scan request", body.Violations)
+	}
 }
 
 func TestPromote_ScanGateReadsNewestScanPerPlatform(t *testing.T) {

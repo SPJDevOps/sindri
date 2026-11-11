@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/model"
@@ -24,9 +25,15 @@ type evidenceMetadata struct {
 	SeverityCounts map[string]int `json:"severity_counts"`
 	// Vulnerabilities is what the severity gate reads, so it opens no blob
 	// inside the promotion transaction (ADR 30). Always present.
-	Vulnerabilities []vulnerability `json:"vulnerabilities"`
-	Coverage        string          `json:"coverage"`
-	Platform        string          `json:"platform,omitempty"`
+	// Scan rows only: the sbom row omits it. A pointer, so an empty list on a
+	// scan is written as [] and not dropped.
+	Vulnerabilities *[]vulnerability `json:"vulnerabilities,omitempty"`
+	Coverage        string           `json:"coverage"`
+	Platform        string           `json:"platform,omitempty"`
+	// Platforms is every platform this job scans, sorted; set on index
+	// children only. The gate requires a newest scan for each (ADR 30), so
+	// a job that attached only some platforms cannot pass.
+	Platforms []string `json:"platforms,omitempty"`
 }
 
 type targetResult struct {
@@ -142,17 +149,31 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 	}
 
 	version := s.versionInfo(ctx, root)
+	var platforms []string
+	for _, d := range done {
+		if d.t.platform != "" {
+			platforms = append(platforms, d.t.platform)
+		}
+	}
+	sort.Strings(platforms)
 	results := make([]targetResult, 0, len(done))
 	for _, d := range done {
-		meta, err := json.Marshal(evidenceMetadata{
+		base := evidenceMetadata{
 			Producer: "sindri", Scanner: "trivy",
 			ScannerVersion: version.Version, DBUpdatedAt: version.DB.UpdatedAt,
-			SeverityCounts: d.counts, Vulnerabilities: d.vulns, Coverage: d.t.coverage, Platform: d.t.platform,
-		})
+			SeverityCounts: d.counts, Coverage: d.t.coverage, Platform: d.t.platform,
+			Platforms: platforms,
+		}
+		sbomMeta, err := json.Marshal(base)
 		if err != nil {
 			return nil, fmt.Errorf("encoding evidence metadata: %w", err)
 		}
-		sbom, err := s.attachFile(ctx, digest, model.EvidenceSBOM, MediaTypeSBOM, d.sbom, meta)
+		base.Vulnerabilities = &d.vulns
+		meta, err := json.Marshal(base)
+		if err != nil {
+			return nil, fmt.Errorf("encoding evidence metadata: %w", err)
+		}
+		sbom, err := s.attachFile(ctx, digest, model.EvidenceSBOM, MediaTypeSBOM, d.sbom, sbomMeta)
 		if err != nil {
 			return nil, err
 		}

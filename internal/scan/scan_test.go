@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"log/slog"
@@ -517,6 +518,12 @@ func TestRun_ImageAttachesSbomAndScanWithProducerMetadata(t *testing.T) {
 		if counts["CRITICAL"] != float64(1) || counts["HIGH"] != float64(1) || counts["LOW"] != float64(0) {
 			t.Errorf("severity_counts = %v", counts)
 		}
+		if a.params.Type == model.EvidenceSBOM {
+			if _, ok := meta["vulnerabilities"]; ok {
+				t.Errorf("sbom metadata carries vulnerabilities: %v", meta)
+			}
+			continue
+		}
 		vulns, ok := meta["vulnerabilities"].([]any)
 		if !ok || len(vulns) != 2 {
 			t.Fatalf("vulnerabilities = %v, want the two findings of the fixture", meta["vulnerabilities"])
@@ -547,8 +554,41 @@ func TestRun_PackageUsesRootfsAndPackageCoverage(t *testing.T) {
 	if meta["coverage"] != "package" || meta["severity_counts"].(map[string]any)["MEDIUM"] != float64(1) {
 		t.Errorf("metadata = %v", meta)
 	}
+	if _, ok := meta["platforms"]; ok {
+		t.Errorf("platforms set for a single-manifest subject: %v", meta)
+	}
 	if vulns, _ := meta["vulnerabilities"].([]any); len(vulns) != 1 {
 		t.Errorf("vulnerabilities = %v, want the one finding of the fixture", meta["vulnerabilities"])
+	}
+}
+
+func TestRun_IndexMetadataCarriesFullPlatformListOnScansOnly(t *testing.T) {
+	f := newFixture(t)
+	amd := f.image(ocispec.MediaTypeImageManifest)
+	arm := f.image(mediaTypeDockerManifest)
+	raw, _ := json.Marshal(ocispec.Index{Manifests: []ocispec.Descriptor{
+		{MediaType: mediaTypeDockerManifest, Digest: godigest.Digest(arm.String()), Platform: &ocispec.Platform{OS: "linux", Architecture: "arm64"}},
+		{MediaType: ocispec.MediaTypeImageManifest, Digest: godigest.Digest(amd.String()), Platform: &ocispec.Platform{OS: "linux", Architecture: "amd64"}},
+	}})
+	digest := f.put(raw)
+	if _, err := f.scanner(Options{Trivy: stubPath(t)}).Handle(t.Context(), f.job(digest, "oci-index")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(f.ev.attached) != 4 {
+		t.Fatalf("attached %d documents, want 4", len(f.ev.attached))
+	}
+	for _, a := range f.ev.attached {
+		var meta map[string]any
+		if err := json.Unmarshal(a.params.Metadata, &meta); err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprint(meta["platforms"]); got != "[linux/amd64 linux/arm64]" {
+			t.Errorf("%s platforms = %v, want the sorted full list", a.params.Type, meta["platforms"])
+		}
+		_, hasVulns := meta["vulnerabilities"]
+		if hasVulns != (a.params.Type == model.EvidenceScan) {
+			t.Errorf("%s has vulnerabilities = %v, want only scan rows to carry it", a.params.Type, hasVulns)
+		}
 	}
 }
 

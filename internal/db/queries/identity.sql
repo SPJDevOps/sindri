@@ -55,7 +55,7 @@ ORDER BY type, created_at DESC, id DESC;
 -- platform (ADR 29, ADR 30). Evidence a client attached carries {} metadata
 -- and never matches; only the worker writes producer.
 SELECT DISTINCT ON (coalesce(metadata->>'platform', ''))
-       id, coalesce(metadata->>'platform', '')::text AS platform, metadata
+       id, coalesce(metadata->>'platform', '')::text AS platform, metadata, created_at
 FROM evidence
 WHERE subject_digest = $1
   AND type = 'scan'
