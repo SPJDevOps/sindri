@@ -22,8 +22,11 @@ type evidenceMetadata struct {
 	ScannerVersion string         `json:"scanner_version"`
 	DBUpdatedAt    string         `json:"db_updated_at"`
 	SeverityCounts map[string]int `json:"severity_counts"`
-	Coverage       string         `json:"coverage"`
-	Platform       string         `json:"platform,omitempty"`
+	// Vulnerabilities is what the severity gate reads, so it opens no blob
+	// inside the promotion transaction (ADR 30). Always present.
+	Vulnerabilities []vulnerability `json:"vulnerabilities"`
+	Coverage        string          `json:"coverage"`
+	Platform        string          `json:"platform,omitempty"`
 }
 
 type targetResult struct {
@@ -38,6 +41,7 @@ type scanned struct {
 	report string
 	sbom   string
 	counts map[string]int
+	vulns  []vulnerability
 }
 
 // Handle runs one scan job; it matches worker.Handler. Args are
@@ -130,11 +134,11 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		if err != nil {
 			return nil, fmt.Errorf("scanning %s: %w", digest, err)
 		}
-		counts, err := readCounts(report)
+		counts, vulns, err := readCounts(report)
 		if err != nil {
 			return nil, fmt.Errorf("scanning %s: %w", digest, err)
 		}
-		done = append(done, scanned{t: t, report: report, sbom: sbom, counts: counts})
+		done = append(done, scanned{t: t, report: report, sbom: sbom, counts: counts, vulns: vulns})
 	}
 
 	version := s.versionInfo(ctx, root)
@@ -143,7 +147,7 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		meta, err := json.Marshal(evidenceMetadata{
 			Producer: "sindri", Scanner: "trivy",
 			ScannerVersion: version.Version, DBUpdatedAt: version.DB.UpdatedAt,
-			SeverityCounts: d.counts, Coverage: d.t.coverage, Platform: d.t.platform,
+			SeverityCounts: d.counts, Vulnerabilities: d.vulns, Coverage: d.t.coverage, Platform: d.t.platform,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("encoding evidence metadata: %w", err)
@@ -187,11 +191,11 @@ func skipResult[T any](v T) (json.RawMessage, error) {
 	return out, nil
 }
 
-func readCounts(path string) (map[string]int, error) {
+func readCounts(path string) (map[string]int, []vulnerability, error) {
 	// #nosec G304 -- path is a file this process created inside its own staging directory.
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("opening report: %w", err)
+		return nil, nil, fmt.Errorf("opening report: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 	return countSeverities(f)

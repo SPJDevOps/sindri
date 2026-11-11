@@ -392,6 +392,38 @@ func TestStage_FileKindIsUnsupported(t *testing.T) {
 	}
 }
 
+func TestReport_ListsVulnerabilitiesDeduplicatedAndSorted(t *testing.T) {
+	cases := []struct {
+		name   string
+		report string
+		want   []vulnerability
+	}{
+		{"none gives an empty list, not nil", `{"SchemaVersion":2}`, []vulnerability{}},
+		{"worst first, then by id, repeats collapsed",
+			`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[
+				{"VulnerabilityID":"CVE-2","Severity":"LOW"},
+				{"VulnerabilityID":"CVE-9","Severity":"HIGH"},
+				{"VulnerabilityID":"CVE-1","Severity":"HIGH"},
+				{"VulnerabilityID":"CVE-5","Severity":"CRITICAL"}]},
+				{"Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"HIGH"},{"VulnerabilityID":"CVE-3","Severity":"weird"}]}]}`,
+			[]vulnerability{{"CVE-5", "CRITICAL"}, {"CVE-1", "HIGH"}, {"CVE-9", "HIGH"}, {"CVE-2", "LOW"}, {"CVE-3", "UNKNOWN"}}},
+		{"same id at two severities is kept twice",
+			`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"LOW"},{"VulnerabilityID":"CVE-1","Severity":"HIGH"}]}]}`,
+			[]vulnerability{{"CVE-1", "HIGH"}, {"CVE-1", "LOW"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, got, err := countSeverities(strings.NewReader(tc.report))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got == nil || !slices.Equal(got, tc.want) {
+				t.Errorf("vulnerabilities = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestReport_CountsSeverities(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -405,7 +437,7 @@ func TestReport_CountsSeverities(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := countSeverities(strings.NewReader(tc.report))
+			got, _, err := countSeverities(strings.NewReader(tc.report))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -419,7 +451,7 @@ func TestReport_CountsSeverities(t *testing.T) {
 			}
 		})
 	}
-	if _, err := countSeverities(strings.NewReader("not json")); err == nil {
+	if _, _, err := countSeverities(strings.NewReader("not json")); err == nil {
 		t.Error("countSeverities accepted invalid JSON")
 	}
 }
@@ -485,6 +517,13 @@ func TestRun_ImageAttachesSbomAndScanWithProducerMetadata(t *testing.T) {
 		if counts["CRITICAL"] != float64(1) || counts["HIGH"] != float64(1) || counts["LOW"] != float64(0) {
 			t.Errorf("severity_counts = %v", counts)
 		}
+		vulns, ok := meta["vulnerabilities"].([]any)
+		if !ok || len(vulns) != 2 {
+			t.Fatalf("vulnerabilities = %v, want the two findings of the fixture", meta["vulnerabilities"])
+		}
+		if first, _ := vulns[0].(map[string]any); first["id"] != "CVE-2026-0001" || first["severity"] != "CRITICAL" {
+			t.Errorf("vulnerabilities[0] = %v, want the CRITICAL finding first", vulns[0])
+		}
 	}
 	if !bytes.Contains(sbom.body, []byte("CycloneDX")) || !bytes.Contains(scan.body, []byte("CVE-2026-0001")) {
 		t.Error("evidence bodies are not the sbom and report")
@@ -507,6 +546,9 @@ func TestRun_PackageUsesRootfsAndPackageCoverage(t *testing.T) {
 	_ = json.Unmarshal(f.ev.attached[1].params.Metadata, &meta)
 	if meta["coverage"] != "package" || meta["severity_counts"].(map[string]any)["MEDIUM"] != float64(1) {
 		t.Errorf("metadata = %v", meta)
+	}
+	if vulns, _ := meta["vulnerabilities"].([]any); len(vulns) != 1 {
+		t.Errorf("vulnerabilities = %v, want the one finding of the fixture", meta["vulnerabilities"])
 	}
 }
 
@@ -596,12 +638,12 @@ func TestReport_NonReportsAreErrorsNotZeroCounts(t *testing.T) {
 		"empty input":     ``,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got, err := countSeverities(strings.NewReader(doc)); err == nil {
+			if got, _, err := countSeverities(strings.NewReader(doc)); err == nil {
 				t.Fatalf("countSeverities = %v, want an error", got)
 			}
 		})
 	}
-	if _, err := countSeverities(strings.NewReader(`{"SchemaVersion":2}`)); err != nil {
+	if _, _, err := countSeverities(strings.NewReader(`{"SchemaVersion":2}`)); err != nil {
 		t.Errorf("a schema 2 report without Results was refused: %v", err)
 	}
 }

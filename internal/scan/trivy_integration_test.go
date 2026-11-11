@@ -93,12 +93,16 @@ func TestRealTrivy_ScansAnImageWithAKnownVulnerablePackage(t *testing.T) {
 	sbom, scan := realScan(t, f, trivy, cacheDir, digest, model.SubjectKindOCIManifest)
 
 	var meta struct {
-		Producer       string         `json:"producer"`
-		Scanner        string         `json:"scanner"`
-		ScannerVersion string         `json:"scanner_version"`
-		DBUpdatedAt    string         `json:"db_updated_at"`
-		Coverage       string         `json:"coverage"`
-		Counts         map[string]int `json:"severity_counts"`
+		Producer        string         `json:"producer"`
+		Scanner         string         `json:"scanner"`
+		ScannerVersion  string         `json:"scanner_version"`
+		DBUpdatedAt     string         `json:"db_updated_at"`
+		Coverage        string         `json:"coverage"`
+		Counts          map[string]int `json:"severity_counts"`
+		Vulnerabilities []struct {
+			ID       string `json:"id"`
+			Severity string `json:"severity"`
+		} `json:"vulnerabilities"`
 	}
 	if err := json.Unmarshal(scan.params.Metadata, &meta); err != nil {
 		t.Fatal(err)
@@ -112,6 +116,15 @@ func TestRealTrivy_ScansAnImageWithAKnownVulnerablePackage(t *testing.T) {
 	}
 	if total == 0 {
 		t.Errorf("severity_counts = %v, want findings for openssl 1.1.1a", meta.Counts)
+	}
+	listed := false
+	for _, v := range meta.Vulnerabilities {
+		if v.ID == "CVE-2019-1543" && v.Severity != "" {
+			listed = true
+		}
+	}
+	if !listed {
+		t.Errorf("metadata vulnerabilities = %v, want CVE-2019-1543 with a severity", meta.Vulnerabilities)
 	}
 
 	var report struct {
@@ -195,12 +208,18 @@ func TestRealTrivy_ScansAnNPMTarballWithABundledVulnerablePackage(t *testing.T) 
 	sbom, scan := realScan(t, f, trivy, cacheDir, digest, model.SubjectKindNPMTarball)
 
 	var meta struct {
-		Producer string         `json:"producer"`
-		Coverage string         `json:"coverage"`
-		Counts   map[string]int `json:"severity_counts"`
+		Producer        string         `json:"producer"`
+		Coverage        string         `json:"coverage"`
+		Counts          map[string]int `json:"severity_counts"`
+		Vulnerabilities []struct {
+			ID string `json:"id"`
+		} `json:"vulnerabilities"`
 	}
 	if err := json.Unmarshal(scan.params.Metadata, &meta); err != nil {
 		t.Fatal(err)
+	}
+	if len(meta.Vulnerabilities) == 0 {
+		t.Errorf("metadata vulnerabilities is empty, want the minimist 0.0.8 findings")
 	}
 	if meta.Producer != "sindri" || meta.Coverage != "package" {
 		t.Errorf("metadata = %+v", meta)
