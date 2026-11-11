@@ -837,9 +837,9 @@ week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9
 moved up two weeks. Sprint 9 started early on Nov 10, and Sprint 10 on Nov 11.
 
 Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic, and the follow-ups
-from the Sprint 9 reviews: SIN-81, 82, 83, 84, and 85. SIN-80, the other follow-up, is in
-Sprint 10: `PutManifest` must require children in the publishing repository before the
-announcement.
+from the Sprint 9 reviews: SIN-81, 82, 83, 84, and 85. SIN-80, the other follow-up, shipped
+in Sprint 10. Also not scheduled: SIN-86, from Sprint 10: the gate scripts leak anonymous
+Docker volumes, about 7 per docs-gate run, until the Docker disk fills.
 
 ---
 
