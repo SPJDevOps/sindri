@@ -345,7 +345,11 @@ expect_refused "${TGZ_DIGEST}" js-strict staging
 
 # --- 2. the page's mirror and pre-seed blocks -----------------------------------
 step "the page: a throwaway mirror, and both databases copied into it"
-block mirror-registry | sed "s#registry:3\$#${REGISTRY_IMAGE}#" > "${WORK}/block-mirror-registry.sh"
+# The mirror keeps its data (about 1 GiB) and the server its download scratch space on
+# the host, not in the Docker VM, whose disk is the scarce one.
+mkdir -p "${WORK}/mirror-data" "${WORK}/sindri-tmp"
+chmod 777 "${WORK}/sindri-tmp"
+block mirror-registry | sed -e "s#registry:3\$#${REGISTRY_IMAGE}#" -e "s#docker run -d #docker run -d -v ${WORK}/mirror-data:/var/lib/registry #" > "${WORK}/block-mirror-registry.sh"
 grep -q "${REGISTRY_IMAGE}" "${WORK}/block-mirror-registry.sh" || fail "the mirror-registry block does not use registry:3; update the pin in this script"
 bash -uo pipefail "${WORK}/block-mirror-registry.sh"
 for _ in $(seq 1 30); do curl -fsS http://localhost:5001/v2/ >/dev/null 2>&1 && break; sleep 1; done
@@ -414,7 +418,8 @@ start_data "${AIR_NET}"
 # The server publishes no port and has no route out. A forwarder on both
 # networks hands the host's port 8080 to it, which an --internal network cannot do itself.
 start_sindri "${AIR_NET}" "${WORK}/air.yaml" --network-alias "${SERVER}" \
-  -v "${WORK}/mirror.crt:/etc/mirror-ca.crt:ro" -e SSL_CERT_FILE=/etc/mirror-ca.crt
+  -v "${WORK}/mirror.crt:/etc/mirror-ca.crt:ro" -e SSL_CERT_FILE=/etc/mirror-ca.crt \
+  -v "${WORK}/sindri-tmp:/tmp" -e TMPDIR=/tmp
 start_proxy
 wait_ready
 echo "the air-gapped server is ready; scanning.dbRepository and javaDbRepository point at mirror:5000"
@@ -432,6 +437,12 @@ api "${SITE}/api/v1/subjects/${JAR_DIGEST}/evidence" |
   jq -e '[.items[] | select(.type == "scan")][0].metadata | .producer == "sindri"' >/dev/null ||
   fail "no Sindri scan of the jar image"
 echo "scan of the jar image succeeded with no route to ghcr.io"
+# Only the jar's pom.properties names log4j-core, and the Java database is what
+# Trivy loads when it finds a jar, so the finding shows the mirrored copy was used.
+api "${SITE}/api/v1/subjects/${JAR_DIGEST}/evidence" |
+  jq -e '[.items[] | select(.type == "scan")][0].metadata.vulnerabilities | map(.id) | index("CVE-2021-44228") != null' >/dev/null ||
+  fail "the jar image's scan does not name CVE-2021-44228 (log4j-core 2.14.1)"
+echo "  the scan names CVE-2021-44228, found in the jar"
 api "${SITE}/api/v1/subjects/${JAR_DIGEST}/evidence" | jq -c '[.items[] | select(.type == "scan")][0].metadata | {severity_counts, vulnerabilities}'
 # The only registry this server can reach is the mirror, so a database in its cache
 # came from there.
