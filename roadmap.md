@@ -1215,21 +1215,22 @@ queue table); an import tool only if the proxy-in-front migration turns out not 
 enough. Gate: every issue opened by an outside adopter in the window is answered, and the
 ones that block adoption are fixed.
 
-**M13, trust enforced end to end.** Signature verification for cosign and Sigstore, then
+**M13, high availability.** Shared upload sessions, several replicas (SIN-71), and the split
+`--api-only` and `--worker-only` modes the pitch promises; the queue table was built for
+this (ADR 20), so the work is moving upload sessions out of process memory and adding the
+two flags. This comes first because "grows with you" is the claim no competitor makes, and
+it is unkept until a second replica runs. It also makes M14 credible: a cluster whose
+deployments are gated on a single-replica registry is the scaling story a platform team
+fears. Gate: a chunked `docker push` through a load balancer across three replicas, and a
+worker-only pod draining the queue.
+
+**M14, trust enforced end to end.** Signature verification for cosign and Sigstore, then
 the Kubernetes admission webhook calling the decision endpoint. Today the `signature` gate
 checks presence, not validity, which a careful reader will find. The webhook is the clearest
 demonstration of the thesis: a deployment refused because exactly that digest is not
-approved for that environment. It works with one replica if the chart documents the
-webhook's failure policy. Gate: a `kind` cluster refuses an unapproved image and admits it
-after promotion, and a promotion gated on `signature` refuses an artifact whose signature
+approved for that environment. Gate: a `kind` cluster refuses an unapproved image and admits
+it after promotion, and a promotion gated on `signature` refuses an artifact whose signature
 does not verify.
-
-**M14, high availability.** Shared upload sessions, several replicas (SIN-71), and the split
-`--api-only` and `--worker-only` modes the pitch promises; the queue table was built for
-this (ADR 20). After M13 because a platform team asks for the webhook before it asks for
-HA, and because the "one binary, several modes" claim is currently unkept. Gate: a chunked
-`docker push` through a load balancer across three replicas, and a worker-only pod draining
-the queue.
 
 **M15, a fourth protocol, chosen by demand.** Each is a new adapter on the shared core plus a
 small additive migration for its protocol and subject kind, as npm needed (ADR 24). If the
