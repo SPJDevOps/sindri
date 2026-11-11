@@ -170,6 +170,14 @@ main { flex: 1; padding: 40px 0 64px; }
 .pill.none { color: var(--text-faint); border-style: dashed; }
 .pill.upstream { color: var(--accent-warm); border-color: color-mix(in srgb, var(--accent-warm) 55%, transparent); }
 
+/* A Sindri scan's findings on its evidence row, worst first. */
+.findings { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: 8px; }
+.pill.sev-critical { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, transparent); font-weight: 600; }
+.pill.sev-high { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, transparent); }
+.pill.sev-medium { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+.pill.sev-unknown { border-style: dashed; }
+.pill.sev-none { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); }
+
 /* Repository tiles: the hairline-gap grid ------------------------------ */
 
 /* Each tile draws its own hairline as an outline; with a 1px gap the

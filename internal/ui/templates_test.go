@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"io/fs"
 	"os"
@@ -116,7 +117,14 @@ func TestTemplates_Golden(t *testing.T) {
 				{Name: "dev", Cells: []stateCell{{Action: "approve", Actor: "user:alice", At: long}}},
 				{Name: "prod", Cells: []stateCell{{}}},
 			},
-			Evidence: []evidence.Evidence{{Type: model.EvidenceSBOM, MediaType: "application/spdx+json", Size: 512, CreatedBy: "token:ci", CreatedAt: long}},
+			Evidence: []evidenceRow{
+				newEvidenceRow(evidence.Evidence{Type: model.EvidenceSBOM, MediaType: "application/spdx+json", Size: 512, CreatedBy: "token:ci", CreatedAt: long}),
+				newEvidenceRow(evidence.Evidence{Type: model.EvidenceScan, MediaType: "application/vnd.aquasec.trivy.report+json", Size: 2048, CreatedBy: "system:scanner", CreatedAt: long,
+					Metadata: json.RawMessage(`{"producer":"sindri","platform":"linux/amd64","severity_counts":{"CRITICAL":1,"HIGH":3,"MEDIUM":0,"LOW":7,"UNKNOWN":0}}`)}),
+				newEvidenceRow(evidence.Evidence{Type: model.EvidenceScan, MediaType: "application/vnd.aquasec.trivy.report+json", Size: 1024, CreatedBy: "system:scanner", CreatedAt: long,
+					Metadata: json.RawMessage(`{"producer":"sindri","severity_counts":{"CRITICAL":0,"HIGH":0,"MEDIUM":0,"LOW":0,"UNKNOWN":0}}`)}),
+				newEvidenceRow(evidence.Evidence{Type: model.EvidenceScan, MediaType: "application/json", Size: 64, CreatedBy: "token:ci", CreatedAt: long, Metadata: json.RawMessage(`{}`)}),
+			},
 			Children: []childRow{{Digest: digest, Size: 99, Href: "/y"}},
 			Document: "{\n  \"schemaVersion\": 2\n}"}},
 		"artifact-upstream": {"artifact", artifactPage{chrome: base, Repo: "hub", RepoHref: "/ui/r/hub",
