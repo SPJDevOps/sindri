@@ -3,10 +3,13 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/spj/sindri/internal/model"
 )
 
 // FieldError is one configuration error located in a file. Errors name the
@@ -236,6 +239,63 @@ func readStrings(c *errs, n *yaml.Node, field string) ([]string, bool) {
 		out = append(out, s)
 	}
 	return out, ok
+}
+
+// scanSeverities are the ceilings a scan gate may name (ADR 30).
+var scanSeverities = []string{"critical", "high", "medium", "low"}
+
+// readGates decodes a stage's gate list. An entry is an evidence type, written
+// as a string, or a `scan: {maxSeverity: ...}` mapping. Both spellings of the
+// lifecycle section read gates through here, so they cannot disagree.
+func readGates(c *errs, n *yaml.Node, field string) []Gate {
+	n = resolveAlias(n)
+	if n.Kind != yaml.SequenceNode {
+		c.add(n.Line, field, "expected a list, got %s", kindName(n.Kind))
+		return nil
+	}
+	out := make([]Gate, 0, len(n.Content))
+	scans := 0
+	for i, item := range n.Content {
+		f := fmt.Sprintf("%s[%d]", field, i)
+		item = resolveAlias(item)
+		if item.Kind != yaml.MappingNode {
+			if s, ok := readString(c, item, f); ok {
+				out = append(out, Gate{Evidence: model.EvidenceType(s)})
+			}
+			continue
+		}
+		m, ok := readMapping(c, item, f, "scan")
+		if !ok {
+			continue
+		}
+		if !m.has("scan") {
+			c.add(item.Line, f, "a gate mapping must set scan")
+			continue
+		}
+		sm, ok := readMapping(c, m.value["scan"], f+".scan", "maxSeverity")
+		if !ok {
+			continue
+		}
+		if !sm.has("maxSeverity") {
+			c.add(m.lineOf("scan"), f+".scan", "must set maxSeverity")
+			continue
+		}
+		sev, ok := readString(c, sm.value["maxSeverity"], f+".scan.maxSeverity")
+		if !ok {
+			continue
+		}
+		if !slices.Contains(scanSeverities, sev) {
+			c.add(sm.lineOf("maxSeverity"), f+".scan.maxSeverity", "unknown severity %q, expected one of: %s", sev, strings.Join(scanSeverities, ", "))
+			continue
+		}
+		scans++
+		if scans > 1 {
+			c.add(m.lineOf("scan"), f+".scan", "a stage takes one scan rule")
+			continue
+		}
+		out = append(out, Gate{Scan: &ScanGate{MaxSeverity: sev}})
+	}
+	return out
 }
 
 // readBool decodes a scalar boolean.

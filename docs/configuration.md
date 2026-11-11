@@ -340,8 +340,32 @@ The ordered stages and the evidence each requires.
 |---|---|---|---|
 | `stages` | list | An ordered list. Each entry is a stage name, or a mapping with `name` and `gates`. | no stages |
 | `stages[].name` | string | The stage name, in the mapping spelling. | |
-| `stages[].gates` | list of strings | Evidence types required to promote into the stage, in the mapping spelling. | no gates |
-| `gates` | map of stage to list of strings | A map from a stage name to the evidence types required to promote into it, for example `prod: [sbom, signature]`. The stage must be declared in `stages`, and a stage's gates are written in one place, not both. | no gates |
+| `stages[].gates` | list of gates | Rules to promote into the stage, in the mapping spelling. Each entry is an evidence type (a string) or a `scan` mapping. | no gates |
+| `gates` | map of stage to list of gates | A map from a stage name to the rules to promote into it, for example `prod: [sbom, signature, {scan: {maxSeverity: high}}]`. The stage must be declared in `stages`, and a stage's gates are written in one place, not both. | no gates |
+
+A gate is an evidence type, or a `scan` mapping that refuses a subject whose newest
+Sindri scan of any platform holds a finding above a severity ceiling. A stage takes at
+most one `scan` rule.
+
+<!-- keys checked against the loader: lifecycle.gates -->
+
+| Key | Type | Meaning | Default |
+|---|---|---|---|
+| `scan` | mapping | A scan rule, written in place of an evidence type. | |
+| `scan.maxSeverity` | string | The ceiling: `critical`, `high`, `medium`, or `low`. `high` refuses only critical findings; an unrated (`UNKNOWN`) finding is refused at every ceiling. | |
+
+```yaml
+lifecycle:
+  stages: [dev, integration, prod]
+  gates:
+    prod:
+      - sbom
+      - signature
+      - scan: {maxSeverity: high}
+```
+
+The rule is a ceiling read from the scan evidence the worker records; [ADR 30](adr/0030-severity-gate.md)
+gives the reasoning.
 
 Lifecycle applies to hosted repositories only. Stages are organisation-wide.
 
@@ -400,7 +424,7 @@ on. `sindri config show --expanded` prints a short-form file in this spelling.
 | `kind` | string | `Lifecycle`. | |
 | `metadata.name` | string | A name for the document. Optional. | unset |
 | `spec.stages[].name` | string | The stage name. | |
-| `spec.stages[].gates` | list of strings | Evidence types required to promote into the stage. | no gates |
+| `spec.stages[].gates` | list of gates | Rules to promote into the stage: evidence types (strings) or `scan` mappings, as in the short form. | no gates |
 
 ### `kind: OrgPolicy`
 

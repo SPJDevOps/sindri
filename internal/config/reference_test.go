@@ -587,6 +587,10 @@ var handTables = map[string][]keyProbe{
 		{prefix: "", doc: "lifecycle: {zzz: 1}\n"},
 		{prefix: "stages[].", doc: "lifecycle: {stages: [{zzz: 1}]}\n"},
 	},
+	"lifecycle.gates": {
+		{prefix: "", doc: "lifecycle: {stages: [{name: p, gates: [{zzz: 1}]}]}\n"},
+		{prefix: "scan.", doc: "lifecycle: {stages: [{name: p, gates: [{scan: {zzz: 1}}]}]}\n"},
+	},
 	"defaults": {
 		{prefix: "", doc: "defaults: {zzz: 1}\n"},
 		{prefix: "hosted.", doc: "defaults: {hosted: {zzz: 1}}\n"},

@@ -175,10 +175,7 @@ func desugarLifecycle(c *errs, n *yaml.Node, line int) *Lifecycle {
 						st.Name, _ = readString(c, sm.value["name"], field+".name")
 					}
 					if sm.has("gates") {
-						gates, _ := readStrings(c, sm.value["gates"], field+".gates")
-						for _, g := range gates {
-							st.Gates = append(st.Gates, model.EvidenceType(g))
-						}
+						st.Gates = readGates(c, sm.value["gates"], field+".gates")
 						explicitGates[st.Name] = true
 					}
 				} else {
@@ -204,10 +201,7 @@ func desugarLifecycle(c *errs, n *yaml.Node, line int) *Lifecycle {
 					c.add(gm.lineOf(stage), field, "stage %q already lists its gates in lifecycle.stages; write them in one place", stage)
 					continue
 				}
-				gates, _ := readStrings(c, gm.value[stage], field)
-				for _, g := range gates {
-					lc.Stages[i].Gates = append(lc.Stages[i].Gates, model.EvidenceType(g))
-				}
+				lc.Stages[i].Gates = append(lc.Stages[i].Gates, readGates(c, gm.value[stage], field)...)
 				lc.Source.set(fmt.Sprintf("stages[%d]", i), gm.lineOf(stage), field)
 			}
 		}

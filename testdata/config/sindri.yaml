@@ -71,4 +71,7 @@ repos:
 lifecycle:
   stages: [dev, integration, prod]
   gates:
-    prod: [sbom, signature]
+    prod:
+      - sbom
+      - signature
+      - scan: {maxSeverity: high}

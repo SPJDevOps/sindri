@@ -108,8 +108,28 @@ type stagesOut struct {
 }
 
 type stageOut struct {
-	Name  string   `yaml:"name"`
-	Gates []string `yaml:"gates,omitempty"`
+	Name  string    `yaml:"name"`
+	Gates []gateOut `yaml:"gates,omitempty"`
+}
+
+// gateOut writes an evidence gate as a bare string and a scan gate as a
+// `scan` mapping, the spelling the loader reads.
+type gateOut struct {
+	evidence string
+	scan     *scanOut
+}
+
+type scanOut struct {
+	MaxSeverity string `yaml:"maxSeverity"`
+}
+
+func (g gateOut) MarshalYAML() (any, error) {
+	if g.scan != nil {
+		return struct {
+			Scan scanOut `yaml:"scan"`
+		}{*g.scan}, nil
+	}
+	return g.evidence, nil
 }
 
 // MarshalManifests renders the long form as a multi-document YAML stream,
@@ -132,7 +152,11 @@ func MarshalManifests(m *Manifests) ([]byte, error) {
 		for _, st := range m.Lifecycle.Stages {
 			o := stageOut{Name: st.Name}
 			for _, g := range st.Gates {
-				o.Gates = append(o.Gates, string(g))
+				if g.Scan != nil {
+					o.Gates = append(o.Gates, gateOut{scan: &scanOut{MaxSeverity: g.Scan.MaxSeverity}})
+					continue
+				}
+				o.Gates = append(o.Gates, gateOut{evidence: string(g.Evidence)})
 			}
 			s.Stages = append(s.Stages, o)
 		}
