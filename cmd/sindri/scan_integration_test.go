@@ -24,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/spj/sindri/internal/storage/memstore"
 	"github.com/spj/sindri/internal/testsupport"
 )
 
@@ -382,4 +383,165 @@ func TestScan_FailingTrivyIsRetried(t *testing.T) {
 	if _, items := s.evidence(digest); len(items) != 0 {
 		t.Fatalf("evidence = %+v after failing scans; a failed scan must leave none", items)
 	}
+}
+
+// rescanStub is the Trivy stub with a switch. The scanner gives Trivy a
+// filtered environment, so the switch lives in the wrapper: while the returned
+// file holds a fixture name, image scans emit that fixture, which simulates a
+// vulnerability database that learned a new CVE after the first scan.
+func rescanStub(t *testing.T) (stub string, newerDatabase func()) {
+	t.Helper()
+	dir := t.TempDir()
+	report := filepath.Join(dir, "report")
+	stub = filepath.Join(dir, "trivy")
+	script := "#!/bin/sh\nTRIVY_STUB_REPORT_FILE=" + report + " exec " + trivyStub(t) + " \"$@\"\n"
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil { //nolint:gosec // an executable test double
+		t.Fatal(err)
+	}
+	return stub, func() {
+		t.Helper()
+		if err := os.WriteFile(report, []byte("report-image-newer.json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// rescanStack runs serve with scanning on, the given rescanInterval, one hosted
+// OCI repository, and a dev stage that has no scan gate.
+func rescanStack(t *testing.T, dbURL, stub, interval string, blobs *memstore.Store) *stack {
+	t.Helper()
+	body := fmt.Sprintf("scanning:\n  enabled: true\n  trivy: %q\n  cacheDir: %q\n  rescanInterval: %s\n"+
+		"repos:\n  docker: { protocol: oci }\nlifecycle:\n  stages: [dev]\n", stub, t.TempDir(), interval)
+	return startServeOn(t, "127.0.0.1:0", dbURL, "", body, func(h *serveHooks) {
+		scanHooks(h)
+		h.build.Blobs = blobs
+	})
+}
+
+const rescanNewCVE = "CVE-2026-0099"
+
+// scans returns the Sindri scan evidence rows of a subject.
+func (s *stack) scans(subject string) []evidenceItem {
+	s.t.Helper()
+	var out []evidenceItem
+	_, items := s.evidence(subject)
+	for _, it := range items {
+		if it.Type == "scan" {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// promoteTo approves a subject at a stage.
+func (s *stack) promoteTo(subject, stage string) {
+	s.t.Helper()
+	r := s.request(http.MethodPost, "/api/v1/subjects/"+subject+"/promote",
+		strings.NewReader(fmt.Sprintf(`{"repository":"docker","stage":%q,"reason":"rescan test"}`, stage)), bearer(bootstrapToken))
+	if r.status != http.StatusCreated {
+		s.t.Fatalf("promote: %d %s", r.status, r.body)
+	}
+}
+
+// ledger is everything the lifecycle ledger shows an operator.
+func (s *stack) ledger(subject string) string {
+	s.t.Helper()
+	events := s.request(http.MethodGet, "/api/v1/subjects/"+subject+"/events", nil, bearer(bootstrapToken))
+	audit := s.request(http.MethodGet, "/api/v1/audit", nil, bearer(bootstrapToken))
+	if events.status != http.StatusOK || audit.status != http.StatusOK {
+		s.t.Fatalf("ledger: events %d, audit %d", events.status, audit.status)
+	}
+	return string(events.body) + "\n" + string(audit.body)
+}
+
+// awaitNewFindings waits for a second scan and returns the ids it lists as new.
+func (s *stack) awaitNewFindings(subject string) []string {
+	s.t.Helper()
+	var scans []evidenceItem
+	eventually(s.t, "the second scan to be attached", func() bool {
+		scans = s.scans(subject)
+		return len(scans) >= 2
+	})
+	var withField []evidenceItem
+	for _, sc := range scans {
+		if _, ok := sc.Metadata["new_vulnerabilities"]; ok {
+			withField = append(withField, sc)
+		}
+	}
+	if len(scans) != 2 || len(withField) != 1 {
+		s.t.Fatalf("scans = %d, with new_vulnerabilities = %d; want 2 and 1 (the first scan has no previous one)", len(scans), len(withField))
+	}
+	var ids []string
+	if err := json.Unmarshal(withField[0].Metadata["new_vulnerabilities"], &ids); err != nil {
+		s.t.Fatalf("new_vulnerabilities: %v", err)
+	}
+	return ids
+}
+
+func (s *stack) assertRescanShown(subject string, before string) {
+	s.t.Helper()
+	if after := s.ledger(subject); after != before {
+		s.t.Errorf("the ledger changed during a re-scan:\nbefore: %s\nafter:  %s", before, after)
+	}
+	eventually(s.t, "the gauge to count the approved subject with a CRITICAL finding", func() bool {
+		return strings.Contains(string(s.request(http.MethodGet, "/metrics", nil, nil).body), `sindri_approved_findings{severity="CRITICAL"} 1`)
+	})
+	status, page, _ := visit(s.t, browser(s.t, true), http.MethodGet,
+		s.base+"/ui/r/docker/-/artifact?image=demo%2Fapp&digest="+subject, bearer(bootstrapToken))
+	if status != http.StatusOK {
+		s.t.Fatalf("artifact page: %d %s", status, page)
+	}
+	if !strings.Contains(page, rescanNewCVE+` <span class="pill new">new</span>`) {
+		s.t.Errorf("the artifact page does not mark %s as new:\n%s", rescanNewCVE, page)
+	}
+	if strings.Contains(page, "CVE-2026-0001 <span class=\"pill new\">") {
+		s.t.Error("the artifact page marks a finding of the first scan as new")
+	}
+}
+
+// The M11b gate through the real wiring: a database that learns a CVE flags an
+// approved image on the next scan, and the ledger is left exactly as it was.
+func TestScan_RescanFlagsAnApprovedSubjectWithoutChangingTheLedger(t *testing.T) {
+	db := testsupport.DatabaseURL(t)
+	stub, newerDatabase := rescanStub(t)
+	s := rescanStack(t, db, stub, "0s", memstore.New())
+
+	digest := s.push("docker/demo/app", "1.0", "rescan-on-demand")
+	eventually(t, "the first scan", func() bool { return len(s.scans(digest)) == 1 })
+	s.promoteTo(digest, "dev")
+	before := s.ledger(digest)
+
+	newerDatabase()
+	r := s.request(http.MethodPost, "/api/v1/subjects/"+digest+"/scan", nil, bearer(bootstrapToken))
+	if r.status != http.StatusAccepted {
+		t.Fatalf("POST scan: %d %s, want 202", r.status, r.body)
+	}
+	if got := s.awaitNewFindings(digest); len(got) != 1 || got[0] != rescanNewCVE {
+		t.Fatalf("new_vulnerabilities = %v, want [%s]", got, rescanNewCVE)
+	}
+	s.assertRescanShown(digest, before)
+}
+
+// The schedule alone does the same. The first run of the schedule is due at the
+// worker's first tick because nothing has succeeded yet, so the test lets one
+// serve scan and approve the image with the schedule off, then restarts serve
+// on the same database and blobs with the schedule on.
+func TestScan_ScheduledRescanFlagsAnApprovedSubjectWithoutChangingTheLedger(t *testing.T) {
+	db := testsupport.DatabaseURL(t)
+	stub, newerDatabase := rescanStub(t)
+	blobs := memstore.New()
+	first := rescanStack(t, db, stub, "0s", blobs)
+
+	digest := first.push("docker/demo/app", "1.0", "rescan-scheduled")
+	eventually(t, "the first scan", func() bool { return len(first.scans(digest)) == 1 })
+	first.promoteTo(digest, "dev")
+	first.stop()
+
+	newerDatabase()
+	s := rescanStack(t, db, stub, "1m", blobs)
+	before := s.ledger(digest)
+	if got := s.awaitNewFindings(digest); len(got) != 1 || got[0] != rescanNewCVE {
+		t.Fatalf("new_vulnerabilities = %v, want [%s]", got, rescanNewCVE)
+	}
+	s.assertRescanShown(digest, before)
 }

@@ -716,6 +716,11 @@ type Scanning struct {
 	// The most bytes unpacked from one wheel or tarball while scanning it, so
 	// that an archive bomb cannot fill the disk. At least 1048576 (1 MiB).
 	MaxUnpackedBytes int64 `yaml:"maxUnpackedBytes"`
+	// How often every approved subject is scanned again, so a vulnerability
+	// published after approval is noticed (ADR 31). Default `24h`; `0s`
+	// disables the schedule, and the on-demand re-scan route still works.
+	// Otherwise at least `1m`.
+	RescanInterval Duration `yaml:"rescanInterval"`
 }
 
 const minScanUnpackedBytes = 1 << 20
@@ -725,6 +730,7 @@ func defaultScanning() Scanning {
 		Trivy:            "trivy",
 		Timeout:          Duration(10 * time.Minute),
 		MaxUnpackedBytes: 1 << 30,
+		RescanInterval:   Duration(24 * time.Hour),
 	}
 }
 
@@ -736,7 +742,7 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		if err := node.Decode(&enabled); err != nil {
 			return fmt.Errorf("line %d: scanning must be true, false, or a mapping", node.Line)
 		}
-		*s = Scanning{Enabled: enabled}
+		*s = Scanning{Enabled: enabled, RescanInterval: defaultScanning().RescanInterval}
 		return nil
 	}
 
@@ -749,9 +755,16 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		Timeout          Duration `yaml:"timeout"`
 		SkipDBUpdate     bool     `yaml:"skipDBUpdate"`
 		MaxUnpackedBytes int64    `yaml:"maxUnpackedBytes"`
+		// A pointer, because an explicit 0 disables the schedule while an
+		// absent value takes the default.
+		RescanInterval *Duration `yaml:"rescanInterval"`
 	}
 	if err := strictDecode(node, &raw); err != nil {
 		return err
+	}
+	rescan := defaultScanning().RescanInterval
+	if raw.RescanInterval != nil {
+		rescan = *raw.RescanInterval
 	}
 	*s = Scanning{
 		Enabled:          raw.Enabled == nil || *raw.Enabled,
@@ -762,6 +775,7 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		Timeout:          raw.Timeout,
 		SkipDBUpdate:     raw.SkipDBUpdate,
 		MaxUnpackedBytes: raw.MaxUnpackedBytes,
+		RescanInterval:   rescan,
 	}
 	return nil
 }
@@ -798,6 +812,12 @@ func (s Scanning) ResolvedCacheDir() (string, error) {
 func (s *Scanning) validate() error {
 	if s.Timeout.Duration() < time.Minute {
 		return fmt.Errorf("scanning.timeout: %s would cancel scans that are still working; use at least 1m", s.Timeout)
+	}
+	if s.RescanInterval < 0 {
+		return fmt.Errorf("scanning.rescanInterval: %s is negative; use 0s to disable the schedule", s.RescanInterval)
+	}
+	if s.RescanInterval > 0 && s.RescanInterval.Duration() < time.Minute {
+		return fmt.Errorf("scanning.rescanInterval: %s would queue a scan of every approved subject continuously; use at least 1m, or 0s to disable", s.RescanInterval)
 	}
 	if s.MaxUnpackedBytes < minScanUnpackedBytes {
 		return fmt.Errorf("scanning.maxUnpackedBytes: %d is below the 1048576 (1 MiB) minimum", s.MaxUnpackedBytes)

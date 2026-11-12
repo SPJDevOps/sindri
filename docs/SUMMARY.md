@@ -57,3 +57,4 @@
   - [28. The Helm chart lives in this repository and is published to ghcr as an OCI artifact](adr/0028-helm-chart-location-and-publishing.md)
   - [29. What a scan covers, and which scans a severity gate trusts](adr/0029-what-a-scan-covers.md)
   - [30. The severity gate: a ceiling, read from worker metadata](adr/0030-severity-gate.md)
+  - [31. Re-scanning approved subjects, and what a new finding does](adr/0031-rescan-approved-subjects.md)

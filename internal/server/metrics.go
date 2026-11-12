@@ -19,6 +19,10 @@ import (
 // sees 0 rather than a missing series when a state has no jobs.
 var queueStates = []string{"queued", "running", "failed"}
 
+// findingSeverities are the sindri_approved_findings label values, fixed so
+// that an alert sees 0 rather than a missing series (ADR 31).
+var findingSeverities = []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"}
+
 // metrics holds the instruments the HTTP layer reports.
 type metrics struct {
 	registry    *prometheus.Registry
@@ -26,6 +30,9 @@ type metrics struct {
 	duration    *prometheus.HistogramVec
 	queueJobs   *prometheus.GaugeVec
 	queueCounts func(ctx context.Context) (map[string]int64, error)
+
+	approvedFindings      *prometheus.GaugeVec
+	approvedFindingCounts func(ctx context.Context) (map[string]int64, error)
 }
 
 // newMetrics registers Sindri's instruments on registry.
@@ -33,10 +40,15 @@ type metrics struct {
 // An explicit registry rather than the global default: a global registry makes
 // two servers in one process collide, which is exactly what an integration test
 // does.
-func newMetrics(registry *prometheus.Registry, queueCounts func(ctx context.Context) (map[string]int64, error)) (*metrics, error) {
+func newMetrics(registry *prometheus.Registry, queueCounts, approvedFindingCounts func(ctx context.Context) (map[string]int64, error)) (*metrics, error) {
 	m := &metrics{
-		registry:    registry,
-		queueCounts: queueCounts,
+		registry:              registry,
+		queueCounts:           queueCounts,
+		approvedFindingCounts: approvedFindingCounts,
+		approvedFindings: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "sindri_approved_findings",
+			Help: "Currently approved subjects whose newest Sindri scan has a finding of this severity, read at scrape time.",
+		}, []string{"severity"}),
 		queueJobs: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "sindri_queue_jobs",
 			Help: "Background jobs by state, read from the queue table at scrape time.",
@@ -64,6 +76,7 @@ func newMetrics(registry *prometheus.Registry, queueCounts func(ctx context.Cont
 		m.requests,
 		m.duration,
 		m.queueJobs,
+		m.approvedFindings,
 		buildInfo,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -85,6 +98,7 @@ func (m *metrics) handler() http.Handler {
 	serve := promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.refreshQueue(r.Context())
+		m.refreshApprovedFindings(r.Context())
 		serve.ServeHTTP(w, r)
 	})
 }
@@ -107,5 +121,24 @@ func (m *metrics) refreshQueue(ctx context.Context) {
 	}
 	for _, state := range queueStates {
 		m.queueJobs.WithLabelValues(state).Set(float64(counts[state]))
+	}
+}
+
+// refreshApprovedFindings reads the approved-findings counts at scrape time,
+// like refreshQueue. Without a source (scanning is off) the gauge has no
+// series; a failed read drops them rather than serve a stale number.
+func (m *metrics) refreshApprovedFindings(ctx context.Context) {
+	if m.approvedFindingCounts == nil {
+		return
+	}
+	counts, err := m.approvedFindingCounts(ctx)
+	if err != nil {
+		m.approvedFindings.Reset()
+		LoggerFromContext(ctx).WarnContext(ctx, "metrics: reading approved findings failed",
+			slog.String("error", err.Error()))
+		return
+	}
+	for _, sev := range findingSeverities {
+		m.approvedFindings.WithLabelValues(sev).Set(float64(counts[sev]))
 	}
 }

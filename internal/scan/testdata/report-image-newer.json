@@ -1,0 +1,72 @@
+{
+  "SchemaVersion": 2,
+  "CreatedAt": "2026-11-10T13:05:00.000000000Z",
+  "ArtifactName": "layout",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "debian",
+      "Name": "12.8"
+    },
+    "ImageConfig": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "Results": [
+    {
+      "Target": "layout (debian 12.8)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Packages": [
+        {
+          "ID": "openssl@3.0.15-1~deb12u1",
+          "Name": "openssl",
+          "Version": "3.0.15-1~deb12u1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/openssl@3.0.15-1~deb12u1?distro=debian-12.8"
+          }
+        },
+        {
+          "ID": "zlib1g@1:1.2.13.dfsg-1",
+          "Name": "zlib1g",
+          "Version": "1:1.2.13.dfsg-1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/zlib1g@1:1.2.13.dfsg-1?distro=debian-12.8"
+          }
+        }
+      ],
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-0001",
+          "PkgID": "openssl@3.0.15-1~deb12u1",
+          "PkgName": "openssl",
+          "InstalledVersion": "3.0.15-1~deb12u1",
+          "FixedVersion": "3.0.16-1~deb12u1",
+          "Status": "fixed",
+          "Title": "openssl: example critical flaw",
+          "Severity": "CRITICAL"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-0002",
+          "PkgID": "zlib1g@1:1.2.13.dfsg-1",
+          "PkgName": "zlib1g",
+          "InstalledVersion": "1:1.2.13.dfsg-1",
+          "Status": "affected",
+          "Title": "zlib: example high flaw",
+          "Severity": "HIGH"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-0099",
+          "PkgID": "openssl@3.0.15-1~deb12u1",
+          "PkgName": "openssl",
+          "InstalledVersion": "3.0.15-1~deb12u1",
+          "FixedVersion": "3.0.17-1~deb12u1",
+          "Status": "fixed",
+          "Title": "openssl: example flaw published after the first scan",
+          "Severity": "CRITICAL"
+        }
+      ]
+    }
+  ]
+}

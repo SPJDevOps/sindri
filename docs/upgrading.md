@@ -171,6 +171,16 @@ differently:
   the `scan` key and refuses it. Delete the `scan:` gates from the configuration, apply
   it, and only then start the older binary.
 
+## Behaviour changes in 1.4
+
+- **The first worker tick re-scans every approved artifact at once.** With scanning on,
+  `scanning.rescanInterval` defaults to `24h` and the schedule fires on the first tick
+  after the upgrade, enqueuing one scan per approved artifact. Expect a burst in the
+  queue; it can trip the queue-backlog alert. If that matters, set
+  `scanning.rescanInterval: 0s` before upgrading and set it to the interval you want once
+  the upgrade is done, so the burst starts when you choose. See
+  [Re-scanning](scanning.md#re-scanning).
+
 ## Rolling back
 
 Every migration stays backward compatible for one release, so the previous

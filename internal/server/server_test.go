@@ -184,6 +184,71 @@ func TestMetrics_QueueJobs(t *testing.T) {
 	}
 }
 
+func TestMetrics_ApprovedFindings(t *testing.T) {
+	tests := []struct {
+		name    string
+		counts  map[string]int64
+		err     error
+		off     bool
+		want    []string
+		wantNot []string
+	}{
+		{
+			// Every severity is present, so an alert on CRITICAL sees 0.
+			name:   "EverySeverityIsPresentAndAbsentOnesAreZero",
+			counts: map[string]int64{"CRITICAL": 2, "LOW": 1},
+			want: []string{
+				`sindri_approved_findings{severity="CRITICAL"} 2`,
+				`sindri_approved_findings{severity="HIGH"} 0`,
+				`sindri_approved_findings{severity="MEDIUM"} 0`,
+				`sindri_approved_findings{severity="LOW"} 1`,
+				`sindri_approved_findings{severity="UNKNOWN"} 0`,
+			},
+		},
+		{
+			name:    "AFailedReadDropsTheSeriesAndKeepsTheScrape",
+			err:     errors.New("database is down"),
+			want:    []string{"sindri_build_info"},
+			wantNot: []string{"sindri_approved_findings{"},
+		},
+		{
+			name:    "WithoutASourceThereAreNoSeries",
+			off:     true,
+			want:    []string{"sindri_build_info"},
+			wantNot: []string{"sindri_approved_findings{"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := server.Options{
+				Address:  "127.0.0.1:0",
+				Database: &stubPinger{},
+				Logger:   slog.New(slog.DiscardHandler),
+			}
+			if !tt.off {
+				opts.ApprovedFindings = func(context.Context) (map[string]int64, error) {
+					return tt.counts, tt.err
+				}
+			}
+			srv, err := server.New(opts)
+			if err != nil {
+				t.Fatalf("server.New: %v", err)
+			}
+			body := get(t, srv, "/metrics").Body.String()
+			for _, want := range tt.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("/metrics lacks %q:\n%s", want, body)
+				}
+			}
+			for _, not := range tt.wantNot {
+				if strings.Contains(body, not) {
+					t.Errorf("/metrics contains %q:\n%s", not, body)
+				}
+			}
+		})
+	}
+}
+
 func TestRequestID(t *testing.T) {
 	tests := []struct {
 		name    string

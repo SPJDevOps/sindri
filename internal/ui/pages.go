@@ -349,20 +349,11 @@ func newEvidenceRow(ev evidence.Evidence) evidenceRow {
 	if ev.Type != model.EvidenceScan || len(ev.Metadata) == 0 {
 		return row
 	}
-	var meta struct {
-		Producer       string         `json:"producer"`
-		Platform       string         `json:"platform"`
-		SeverityCounts map[string]int `json:"severity_counts"`
-	}
-	if err := json.Unmarshal(ev.Metadata, &meta); err != nil || meta.Producer != "sindri" || meta.SeverityCounts == nil {
+	meta, ok := parseSindriScan(ev)
+	if !ok {
 		return row
 	}
-	s := &scanSummary{Platform: meta.Platform}
-	for _, sev := range summarySeverities {
-		if n := meta.SeverityCounts[sev]; n > 0 {
-			s.Counts = append(s.Counts, severityCount{Severity: strings.ToLower(sev), Class: "sev-" + strings.ToLower(sev), N: n})
-		}
-	}
+	s := &scanSummary{Platform: meta.Platform, Counts: severityCounts(meta.SeverityCounts)}
 	s.Clean = len(s.Counts) == 0
 	row.Scan = s
 	return row
@@ -384,6 +375,7 @@ type artifactPage struct {
 	StateRepos  []string
 	Stages      []stageRow
 	Evidence    []evidenceRow
+	Vulns       []vulnPanel
 	IsIndex     bool
 	Children    []childRow
 	Document    string
@@ -507,6 +499,7 @@ func (h *handler) identity(r *http.Request, data *artifactPage, s lifecycle.Subj
 	for _, e := range ev {
 		data.Evidence = append(data.Evidence, newEvidenceRow(e))
 	}
+	data.Vulns = newVulnPanels(ev)
 	return nil
 }
 

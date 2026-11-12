@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# M11a scan gate: scanning attaches an sbom and a scan to what is published, a
-# severity gate refuses promotion above its ceiling and names the CVEs, and
+# M11a/M11b scan gate: scanning attaches an sbom and a scan to what is published, a
+# severity gate refuses promotion above its ceiling and names the CVEs, a re-scan
+# of an approved image leaves the ledger alone, and
 # scanning still works on a server with no route to the public databases.
 #
 #   make up && make build && ./scripts/m11-scan-gate.sh
@@ -12,6 +13,9 @@
 #   2. Starts Sindri with Postgres and MinIO on a Docker network and runs the
 #      docs/scanning.md blocks (push, wait, promote, evidence, staleness) against
 #      it: an old alpine image is refused with CVE-2021-36159 named.
+#      Then it approves that image at dev (no scan gate), re-scans it with the
+#      page's rescan block, and shows the ledger unchanged and the approved-findings
+#      gauge at 1 or more.
 #   3. Publishes a wheel and an npm tarball that pin a vulnerable package
 #      (ADR 29 depth): both are refused at a medium ceiling with CVEs named, and
 #      the wheel, whose findings sit at or below `high`, passes a high ceiling.
@@ -277,6 +281,31 @@ jq -es 'length == 1 and .[0].metadata.producer == "sindri" and .[0].metadata.cov
   fail "the evidence block does not show a Sindri image scan listing CVE-2021-36159"
 run_block staleness | tee "${WORK}/staleness.out"
 grep -Eq '^database is [0-9]+ days old$' "${WORK}/staleness.out" || fail "the staleness block printed no age"
+
+step "the page: approve the image where no scan gate applies, then re-scan it"
+# dev has no gate, so the image the prod ceiling refused can be approved there. A
+# re-scan must leave the ledger exactly as it is and the gauge must count the
+# approved image (alpine:3.10 carries a CRITICAL finding).
+code="$(promote "${DIGEST}" scan dev)"
+[ "${code}" = 201 ] || { cat "${WORK}/promote.json" >&2; fail "promote of the image to dev answered ${code}, want 201"; }
+api "${SITE}/api/v1/audit" > "${WORK}/audit-before.json"
+run_block rescan | tee "${WORK}/rescan.out"
+grep -q '^scans: [2-9]' "${WORK}/rescan.out" || fail "the rescan block saw no second scan"
+# Real Trivy with the same database finds nothing new, so the list is empty. That a
+# newer database flags a new CVE is proven by TestScan_RescanFlagsAnApprovedSubject
+# WithoutChangingTheLedger, whose Trivy stub changes its report between two scans;
+# this gate cannot make Aquasec publish a CVE.
+[ "$(tail -1 "${WORK}/rescan.out")" = "[]" ] || fail "the rescan block's new_vulnerabilities is not []: $(tail -1 "${WORK}/rescan.out")"
+api "${SITE}/api/v1/audit" > "${WORK}/audit-after.json"
+cmp -s "${WORK}/audit-before.json" "${WORK}/audit-after.json" || fail "/api/v1/audit changed during a re-scan"
+echo "the ledger (/api/v1/audit) is unchanged by the re-scan"
+for _ in $(seq 1 30); do
+  gauge="$(curl -fsS "${SITE}/metrics" | awk '$1=="sindri_approved_findings{severity=\"CRITICAL\"}" {print $2}')"
+  [ -n "${gauge}" ] && [ "${gauge%.*}" -ge 1 ] && break
+  sleep 1
+done
+[ -n "${gauge:-}" ] && [ "${gauge%.*}" -ge 1 ] || fail "sindri_approved_findings{severity=\"CRITICAL\"} is '${gauge:-}', want at least 1"
+echo "sindri_approved_findings{severity=\"CRITICAL\"} = ${gauge}"
 
 step "a wheel: a vendored Jinja2 2.10 inside the archive"
 python3 -I - "${WORK}" <<'PY'

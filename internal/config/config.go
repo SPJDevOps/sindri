@@ -148,7 +148,11 @@ func Parse(raw []byte, name string) (*Config, error) {
 	// Decode into a zero value and default afterwards, so that a section
 	// written in the file replaces its defaults outright rather than merging
 	// with them: `storage: s3://bucket` must not keep the default path.
-	var cfg Config
+	//
+	// The one exception is scanning.rescanInterval, where an explicit 0 means
+	// disabled and so cannot be told from absent afterwards: it is seeded here,
+	// and Scanning.UnmarshalYAML sets it itself when the section is written.
+	cfg := Config{Scanning: Scanning{RescanInterval: defaultScanning().RescanInterval}}
 	if err := doc.Content[0].Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, cleanYAMLError(err))
 	}

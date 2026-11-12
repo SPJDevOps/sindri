@@ -7,6 +7,11 @@ package scanjob
 // JobKind is the queue job kind of a scan.
 const JobKind = "scan"
 
+// RescanJobKind is the queue job kind of the schedule that fans out one scan
+// job per approved subject (ADR 31). Its dedupe key is its kind, like the
+// other schedules.
+const RescanJobKind = "rescan_approved"
+
 // Actor is the identity recorded as the creator of scan jobs and of the
 // evidence the scanner attaches.
 const Actor = "system:scanner"

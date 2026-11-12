@@ -38,6 +38,12 @@ import (
 type fakeAttacher struct {
 	mu       sync.Mutex
 	attached []attachment
+	// previous is what NewestSindriScans returns, by platform.
+	previous map[string]json.RawMessage
+}
+
+func (f *fakeAttacher) NewestSindriScans(context.Context, model.Digest) (map[string]json.RawMessage, error) {
+	return f.previous, nil
 }
 
 type attachment struct {
@@ -407,10 +413,25 @@ func TestReport_ListsVulnerabilitiesDeduplicatedAndSorted(t *testing.T) {
 				{"VulnerabilityID":"CVE-1","Severity":"HIGH"},
 				{"VulnerabilityID":"CVE-5","Severity":"CRITICAL"}]},
 				{"Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"HIGH"},{"VulnerabilityID":"CVE-3","Severity":"weird"}]}]}`,
-			[]vulnerability{{"CVE-5", "CRITICAL"}, {"CVE-1", "HIGH"}, {"CVE-9", "HIGH"}, {"CVE-2", "LOW"}, {"CVE-3", "UNKNOWN"}}},
+			[]vulnerability{{ID: "CVE-5", Severity: "CRITICAL"}, {ID: "CVE-1", Severity: "HIGH"}, {ID: "CVE-9", Severity: "HIGH"}, {ID: "CVE-2", Severity: "LOW"}, {ID: "CVE-3", Severity: "UNKNOWN"}}},
 		{"same id at two severities is kept twice",
 			`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"LOW"},{"VulnerabilityID":"CVE-1","Severity":"HIGH"}]}]}`,
-			[]vulnerability{{"CVE-1", "HIGH"}, {"CVE-1", "LOW"}}},
+			[]vulnerability{{ID: "CVE-1", Severity: "HIGH"}, {ID: "CVE-1", Severity: "LOW"}}},
+		{"one CVE in two packages is two entries, sorted by package",
+			`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[
+				{"VulnerabilityID":"CVE-1","Severity":"HIGH","PkgName":"zlib","InstalledVersion":"1.0","FixedVersion":"1.1"},
+				{"VulnerabilityID":"CVE-1","Severity":"HIGH","PkgName":"openssl","InstalledVersion":"3.0"}]}]}`,
+			[]vulnerability{{ID: "CVE-1", Severity: "HIGH", Package: "openssl", Installed: "3.0"}, {ID: "CVE-1", Severity: "HIGH", Package: "zlib", Installed: "1.0", Fixed: "1.1"}}},
+		{"the same id, package and installed version twice is one entry",
+			`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[
+				{"VulnerabilityID":"CVE-1","Severity":"HIGH","PkgName":"zlib","InstalledVersion":"1.0"}]},
+				{"Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"HIGH","PkgName":"zlib","InstalledVersion":"1.0"}]}]}`,
+			[]vulnerability{{ID: "CVE-1", Severity: "HIGH", Package: "zlib", Installed: "1.0"}}},
+		{"the same package at two installed versions is two entries",
+			`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[
+				{"VulnerabilityID":"CVE-1","Severity":"HIGH","PkgName":"zlib","InstalledVersion":"1.1"},
+				{"VulnerabilityID":"CVE-1","Severity":"HIGH","PkgName":"zlib","InstalledVersion":"1.0"}]}]}`,
+			[]vulnerability{{ID: "CVE-1", Severity: "HIGH", Package: "zlib", Installed: "1.0"}, {ID: "CVE-1", Severity: "HIGH", Package: "zlib", Installed: "1.1"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -422,6 +443,23 @@ func TestReport_ListsVulnerabilitiesDeduplicatedAndSorted(t *testing.T) {
 				t.Errorf("vulnerabilities = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestReport_FindingJSONOmitsEmptyFixedVersion(t *testing.T) {
+	_, vulns, err := countSeverities(strings.NewReader(`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[
+		{"VulnerabilityID":"CVE-1","Severity":"HIGH","PkgName":"zlib","InstalledVersion":"1.0"},
+		{"VulnerabilityID":"CVE-2","Severity":"LOW","PkgName":"zlib","InstalledVersion":"1.0","FixedVersion":"1.1"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(vulns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"id":"CVE-1","severity":"HIGH","package":"zlib","installed":"1.0"},{"id":"CVE-2","severity":"LOW","package":"zlib","installed":"1.0","fixed":"1.1"}]`
+	if string(got) != want {
+		t.Errorf("json = %s, want %s", got, want)
 	}
 }
 
@@ -454,6 +492,89 @@ func TestReport_CountsSeverities(t *testing.T) {
 	}
 	if _, _, err := countSeverities(strings.NewReader("not json")); err == nil {
 		t.Error("countSeverities accepted invalid JSON")
+	}
+}
+
+func TestNewVulnerabilities(t *testing.T) {
+	cur := func(ids ...string) []vulnerability {
+		out := []vulnerability{}
+		for _, id := range ids {
+			out = append(out, vulnerability{ID: id, Severity: "HIGH"})
+		}
+		return out
+	}
+	cases := []struct {
+		name     string
+		current  []vulnerability
+		previous string
+		want     *[]string
+	}{
+		{"FirstScanIsAbsent", cur("CVE-1"), "", nil},
+		{"SameSetIsEmptyList", cur("CVE-1", "CVE-2"), `{"vulnerabilities":[{"id":"CVE-2"},{"id":"CVE-1"}]}`, &[]string{}},
+		{"OneAddedIsListed", cur("CVE-1", "CVE-2"), `{"vulnerabilities":[{"id":"CVE-1"}]}`, &[]string{"CVE-2"}},
+		{"RemovedAreNotListed", cur("CVE-1"), `{"vulnerabilities":[{"id":"CVE-1"},{"id":"CVE-0"}]}`, &[]string{}},
+		{"DuplicatesAcrossPackagesListedOnceAndSorted", []vulnerability{
+			{ID: "CVE-9", Package: "a"}, {ID: "CVE-9", Package: "b"}, {ID: "CVE-3", Package: "a"}},
+			`{"vulnerabilities":[]}`, &[]string{"CVE-3", "CVE-9"}},
+		{"PreviousWithoutListIsAbsent", cur("CVE-1"), `{"producer":"sindri"}`, nil},
+		{"PreviousWithNullListIsAbsent", cur("CVE-1"), `{"vulnerabilities":null}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := newVulnerabilities(tc.current, json.RawMessage(tc.previous))
+			if (got == nil) != (tc.want == nil) || (got != nil && !slices.Equal(*got, *tc.want)) {
+				t.Errorf("newVulnerabilities = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRun_NewVulnerabilitiesIsWrittenOnTheScanRowOnly(t *testing.T) {
+	f := newFixture(t)
+	digest := f.image(ocispec.MediaTypeImageManifest)
+	f.ev.previous = map[string]json.RawMessage{"": json.RawMessage(`{"vulnerabilities":[{"id":"CVE-2026-0001"}]}`)}
+	if _, err := f.scanner(Options{Trivy: stubPath(t), TempDir: t.TempDir()}).Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(f.ev.attached) != 2 {
+		t.Fatalf("attached %d rows, want sbom and scan", len(f.ev.attached))
+	}
+	for _, a := range f.ev.attached {
+		var meta map[string]any
+		if err := json.Unmarshal(a.params.Metadata, &meta); err != nil {
+			t.Fatal(err)
+		}
+		got, present := meta["new_vulnerabilities"]
+		if a.params.Type == model.EvidenceSBOM {
+			if present {
+				t.Errorf("sbom metadata carries new_vulnerabilities: %v", meta)
+			}
+			continue
+		}
+		list, _ := got.([]any)
+		if !present || len(list) != 1 || list[0] != "CVE-2026-0002" {
+			t.Errorf("new_vulnerabilities = %v, want [CVE-2026-0002], the fixture's finding the previous scan lacked", got)
+		}
+	}
+}
+
+func TestRun_FirstScanWritesNoNewVulnerabilities(t *testing.T) {
+	f := newFixture(t)
+	digest := f.image(ocispec.MediaTypeImageManifest)
+	if _, err := f.scanner(Options{Trivy: stubPath(t), TempDir: t.TempDir()}).Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(f.ev.attached) != 2 {
+		t.Fatalf("attached %d rows, want sbom and scan", len(f.ev.attached))
+	}
+	for _, a := range f.ev.attached {
+		var meta map[string]any
+		if err := json.Unmarshal(a.params.Metadata, &meta); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := meta["new_vulnerabilities"]; ok {
+			t.Errorf("%s metadata carries new_vulnerabilities on a first scan: %v", a.params.Type, meta)
+		}
 	}
 }
 

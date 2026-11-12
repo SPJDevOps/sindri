@@ -458,11 +458,19 @@ func evaluateScanRule(rule GateRule, digest model.Digest, scans []db.ListNewestS
 			})
 			continue
 		}
+		// The list has one entry per affected package, so a CVE can repeat;
+		// a refusal names each (id, severity) once.
 		var above []Finding
+		seen := make(map[Finding]struct{})
 		for _, f := range *meta.Vulnerabilities {
-			if rule.Scan.MaxSeverity.Refuses(f.Severity) {
-				above = append(above, f)
+			if !rule.Scan.MaxSeverity.Refuses(f.Severity) {
+				continue
 			}
+			if _, dup := seen[f]; dup {
+				continue
+			}
+			seen[f] = struct{}{}
+			above = append(above, f)
 		}
 		if len(above) > 0 {
 			out = append(out, GateViolation{Rule: name, Platform: scan.Platform, Findings: above})

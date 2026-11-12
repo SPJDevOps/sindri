@@ -547,6 +547,22 @@ func TestParse_Scanning(t *testing.T) {
 			s.Enabled, s.DBRepository, s.JavaDBRepository, s.CacheDir, s.MaxUnpackedBytes = true, "registry.example.com/trivy-db", "registry.example.com/trivy-java-db", "/var/cache/trivy", 2097152
 			return s
 		}},
+		{name: "RescanIntervalDefaultsTo24h", input: "scanning:\n  timeout: 5m\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.Timeout = true, config.Duration(5*time.Minute)
+			return s
+		}},
+		{name: "RescanIntervalZeroDisablesTheSchedule", input: "scanning:\n  rescanInterval: 0s\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.RescanInterval = true, 0
+			return s
+		}},
+		{name: "ScalarTrueGetsRescanInterval24h", input: "scanning: true\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.RescanInterval = true, config.Duration(24*time.Hour)
+			return s
+		}},
+		{name: "RescanIntervalIsKept", input: "scanning:\n  rescanInterval: 12h\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.RescanInterval = true, config.Duration(12*time.Hour)
+			return s
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -559,8 +575,40 @@ func TestParse_Scanning(t *testing.T) {
 			}
 		})
 	}
+	if defaults.RescanInterval != config.Duration(24*time.Hour) {
+		t.Fatalf("default rescanInterval = %s, want 24h", defaults.RescanInterval)
+	}
 	if defaults.Trivy != "trivy" || defaults.Timeout.Duration() != 10*time.Minute || defaults.MaxUnpackedBytes != 1<<30 || defaults.CacheDir != "" {
 		t.Fatalf("unexpected scanning defaults: %+v", defaults)
+	}
+}
+
+func TestValidate_RescanInterval(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval config.Duration
+		want     string // empty means valid
+	}{
+		{name: "NegativeIsRefused", interval: config.Duration(-time.Hour), want: "use 0s to disable"},
+		{name: "BelowOneMinuteIsRefused", interval: config.Duration(30 * time.Second), want: "use at least 1m"},
+		{name: "ZeroIsAccepted", interval: 0},
+		{name: "OneMinuteIsAccepted", interval: config.Duration(time.Minute)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Scanning.RescanInterval = tc.interval
+			err := cfg.Validate()
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate error = %v, want it to mention %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -576,6 +624,9 @@ func TestParse_RejectsScanning(t *testing.T) {
 		{name: "TooSmallUnpackLimit", input: "scanning:\n  maxUnpackedBytes: 1024\n", want: "scanning.maxUnpackedBytes"},
 		{name: "SkipDBUpdateWithJavaMirror", input: "scanning:\n  skipDBUpdate: true\n  javaDbRepository: mirror.example.com/java-db\n", want: "scanning.javaDbRepository"},
 		{name: "SkipDBUpdateWithMirror", input: "scanning:\n  skipDBUpdate: true\n  dbRepository: mirror.example.com/db\n", want: "scanning.dbRepository"},
+		{name: "RescanIntervalTooShort", input: "scanning:\n  rescanInterval: 30s\n", want: "scanning.rescanInterval"},
+		{name: "RescanIntervalNegative", input: "scanning:\n  rescanInterval: -1h\n", want: "must not be negative"},
+		{name: "RescanIntervalZeroNeedsAUnit", input: "scanning:\n  rescanInterval: 0\n", want: "needs a unit"},
 		{name: "BadValueWhileDisabled", input: "scanning:\n  enabled: false\n  timeout: 1s\n", want: "scanning.timeout"},
 	}
 	for _, tc := range tests {

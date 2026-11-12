@@ -42,7 +42,7 @@ scan until something queues one, and what does depends on the protocol:
 - **npm:** nothing. Publishing a version again is refused, so an existing version cannot
   be scanned later. A new version is a new artifact and gets its own scan.
 
-A command to scan what is already published arrives with M11b (SIN-33).
+To scan what is already published, use [the re-scan route](#re-scanning).
 
 ## Refuse promotion above a severity
 
@@ -142,7 +142,7 @@ evidence instead, the violation has a `reason` and no `findings`:
 | `no Sindri scan for sha256:...` | The scan is queued, failed after its retries, or the artifact predates scanning. |
 | `scan incomplete: no Sindri scan for platform linux/arm64` | One platform of an index has no scan: the job is still running, or it failed part way. |
 | `scan incomplete: no Sindri scan for the index child without a platform` | The same, for an index child that declares no platform. |
-| `the Sindri scan <id> lists no vulnerabilities; it needs a new scan, ...` | A scan written before the gate existed. Pushing it again (OCI) or uploading it again (PyPI) queues a new scan; npm has no way to until M11b. |
+| `the Sindri scan <id> lists no vulnerabilities; it needs a new scan, ...` | A scan written before the gate existed. Pushing it again (OCI) or uploading it again (PyPI) queues a new scan, and [the re-scan route](#re-scanning) does it for any artifact, npm included. |
 | `the Sindri scan <id> does not list the platforms of its index; it needs a new scan, ...` | A scan of an index child written before the gate existed. The same applies. |
 
 A refusal writes no event to the ledger. A promotion that passes records the ids of the
@@ -174,7 +174,8 @@ curl -fsS -H "Authorization: Bearer $SINDRI_TOKEN" \
     "scanner_version": "0.76.2",
     "db_updated_at": "2026-11-10T18:34:12.5Z",
     "severity_counts": {"CRITICAL": 1, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0},
-    "vulnerabilities": [{"id": "CVE-2021-36159", "severity": "CRITICAL"}],
+    "vulnerabilities": [{"id": "CVE-2021-36159", "severity": "CRITICAL", "package": "apk-tools", "installed": "2.10.6-r0", "fixed": "2.10.7-r0"}],
+    "new_vulnerabilities": ["CVE-2021-36159"],
     "coverage": "image"
   }
 }
@@ -186,7 +187,8 @@ curl -fsS -H "Authorization: Bearer $SINDRI_TOKEN" \
 | `scanner`, `scanner_version` | The scanner and its version. |
 | `db_updated_at` | When the vulnerability database the scan used was built. See [Keep the database fresh](#keep-the-database-fresh). |
 | `severity_counts` | Findings per severity. |
-| `vulnerabilities` | Each finding as `id` and `severity`, worst first. On `scan` rows only; the `sbom` row omits it. |
+| `vulnerabilities` | Each finding as `id`, `severity`, and the `package` with its `installed` and `fixed` versions (`fixed` is empty when no fix exists), worst first. On `scan` rows only; the `sbom` row omits it. Scans written before re-scanning exist have only `id` and `severity`. |
+| `new_vulnerabilities` | The ids in this scan that the previous Sindri scan of the same subject and platform did not list. Absent on a first scan, and when the previous scan predates the `vulnerabilities` list (an older scan has no list to compare with). See [Re-scanning](#re-scanning). |
 | `coverage` | `image` for an OCI image, `package` for a wheel, sdist, or npm tarball. |
 | `platform` | The platform of an index child, such as `linux/arm64`. Absent on a single image. |
 | `platforms` | On an index child's scan, every platform the job scanned. The gate requires a scan for each. |
@@ -195,15 +197,97 @@ The full report and the SBOM are the evidence documents themselves.
 `GET /api/v1/subjects/{digest}/evidence/{id}` returns the bytes. The web UI shows the
 same evidence on the artifact's page. Each Sindri `scan` row there also shows its findings
 per severity, worst first, and its platform, or "no findings". A scan a client attached
-shows no summary, because the page only repeats what Sindri itself found. The list of
-individual CVEs is in the API for now; a vulnerability view in the UI comes with M11b
-(SIN-35).
+shows no summary, because the page only repeats what Sindri itself found. Below the
+evidence, a **Vulnerabilities** panel lists the findings of the newest Sindri scan of each
+platform: id, severity, package, installed version, and fixed version. A finding the
+previous scan did not list carries a `new` marker. The panel shows the first 500 findings
+of a scan and says how many it left out; the full report is the evidence document.
 
-Two Prometheus series describe the worker (see [Operating Sindri](operations.md#metrics-and-alerts)):
+Prometheus series describe the worker (see [Operating Sindri](operations.md#metrics-and-alerts)):
 `sindri_scans_total{result}` counts scan job attempts as `succeeded`, `failed`, or
 `skipped`, and `sindri_scan_duration_seconds` times them. Both exist only while scanning
 is on. `sindri_queue_jobs{state="failed"}` rises when a scan has used up its retries.
 That artifact then has no Sindri scan and a severity gate refuses it.
+
+## Re-scanning
+
+A scan describes the vulnerabilities known on the day it ran. An approved artifact keeps
+running long after that, so Sindri scans it again. [ADR 31](adr/0031-rescan-approved-subjects.md)
+has the reasoning. In short:
+
+- **Only approved artifacts.** Every subject with a current `approve` decision, in any
+  stage, is scanned again. Artifacts nobody approved are not.
+- **Daily by default.** `scanning.rescanInterval` is `24h`. Set `0s` to turn the schedule
+  off; the on-demand route below still works. Values under `1m` are refused.
+- **The ledger does not change.** A re-scan adds evidence and nothing else. It never
+  revokes and never rewrites a decision already made.
+- **A new finding blocks the next promotion only.** The severity gate reads the newest
+  Sindri scan, so an artifact with a new CRITICAL finding cannot be promoted further, but
+  where it already runs is untouched.
+- **Revoking is a person's call.** Sindri shows the finding, in the evidence, the
+  Vulnerabilities panel, and a metric, and a person decides. It does not take production
+  down over a CVE that may have no fix.
+
+A scan reads the artifact from the lowest-named hosted repository that owns it and still
+holds it, so an artifact copied to another repository and deleted from the first is scanned
+from the other. An approved artifact no hosted repository holds is left out. Each re-scan is one Trivy run per approved artifact,
+so cost follows what is approved, not everything ever published.
+
+### Re-scan one artifact now
+
+`POST /api/v1/subjects/{digest}/scan` queues a scan of one artifact. It needs write
+access to a hosted repository that holds it. It answers `202 Accepted`, and the same job
+if a scan of that artifact is already queued or running. An administrator gets the full
+job (attempts, `last_error`) and a `Location` header for `GET /api/v1/jobs/{id}`, which
+only administrators may read. Anyone else gets only `{"id", "kind", "state"}` and no
+`Location`. Errors:
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `SUBJECT_NOT_FOUND` | The caller cannot read the artifact. |
+| 403 | `FORBIDDEN` | The caller can read it but not write it. |
+| 409 | `SCANNING_DISABLED` | Scanning is off on this server. |
+| 409 | `NO_HOSTED_REPOSITORY` | No hosted repository the caller may write holds the artifact. |
+
+This block scans the image from the section above again, waits for the new scan, and
+prints the ids that scan found and the previous one did not. It prints `[]` while the
+database has not changed. After the vulnerability database is updated, a published CVE
+shows up here:
+
+<!-- scan:rescan -->
+```bash
+BEFORE=$(curl -fsS -H "Authorization: Bearer $SINDRI_TOKEN" \
+  "localhost:8080/api/v1/subjects/$DIGEST/evidence" \
+  | jq '[.items[] | select(.type == "scan")] | length')
+curl -fsS -X POST -H "Authorization: Bearer $SINDRI_TOKEN" \
+  "localhost:8080/api/v1/subjects/$DIGEST/scan" | jq -c '{id, kind, state}'
+for _ in $(seq 1 60); do
+  EVIDENCE=$(curl -fsS -H "Authorization: Bearer $SINDRI_TOKEN" \
+    "localhost:8080/api/v1/subjects/$DIGEST/evidence")
+  n=$(echo "$EVIDENCE" | jq '[.items[] | select(.type == "scan")] | length')
+  [ "$n" -gt "$BEFORE" ] && break
+  sleep 2
+done
+echo "scans: $n"
+echo "$EVIDENCE" | jq -c '[.items[] | select(.type == "scan" and .metadata.new_vulnerabilities != null)] | last | .metadata.new_vulnerabilities'
+```
+<!-- /scan:rescan -->
+
+### Watch for findings in approved artifacts
+
+`sindri_approved_findings{severity}` is a gauge read at scrape time: the number of approved
+artifacts whose newest Sindri scan lists at least one finding of that severity. All five
+labels (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `UNKNOWN`) are always present. It exists only
+while scanning is on. An alert for the one that matters:
+
+```yaml
+- alert: SindriApprovedCriticalFinding
+  expr: sindri_approved_findings{severity="CRITICAL"} > 0
+  for: 1h
+  labels: {severity: warning}
+```
+
+The [operations guide](operations.md#metrics-and-alerts) carries it in its starting set.
 
 ## Size the cache
 
@@ -239,9 +323,11 @@ each time. Compose and Helm both give the cache a place; their guides show it.
 - **A missing scan refuses.** A queued job, a failed job, or an artifact published before
   scanning was on has no Sindri scan, and the gate refuses it.
 - **A scan is a point in time.** A vulnerability published tomorrow does not change
-  today's scan or a decision made on it. Pushing an OCI image or uploading a PyPI file
-  again scans it with a newer database. npm cannot do this until the re-scan command
-  arrives with M11b (SIN-33).
+  today's scan or a decision made on it. [Re-scanning](#re-scanning) scans approved
+  artifacts again on a schedule, and `POST /api/v1/subjects/{digest}/scan` scans any one
+  on demand, which is how to scan an npm version: npm will not accept the same version
+  twice, so there is no other way to give it a newer database. Neither changes a
+  decision already made.
 
 ## Scan without internet access
 
