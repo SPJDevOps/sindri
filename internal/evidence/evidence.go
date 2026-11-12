@@ -193,6 +193,21 @@ func (s *Service) List(ctx context.Context, subject model.Digest) ([]Evidence, e
 	return out, nil
 }
 
+// NewestSindriScans returns the metadata of the newest Sindri-produced scan of
+// subject, keyed by platform ("" for a single-platform subject). It reads no
+// bytes, so it needs no placement check.
+func (s *Service) NewestSindriScans(ctx context.Context, subject model.Digest) (map[string]json.RawMessage, error) {
+	rows, err := s.q.ListNewestSindriScans(ctx, subject.String())
+	if err != nil {
+		return nil, fmt.Errorf("listing newest scans of %s: %w", subject, err)
+	}
+	out := make(map[string]json.RawMessage, len(rows))
+	for _, r := range rows {
+		out[r.Platform] = json.RawMessage(r.Metadata)
+	}
+	return out, nil
+}
+
 // Open returns one evidence document and its bytes. The lookup is scoped by
 // subject, so an evidence id never reaches bytes on its own.
 func (s *Service) Open(ctx context.Context, subject model.Digest, id string) (Evidence, io.ReadCloser, error) {

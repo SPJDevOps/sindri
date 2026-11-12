@@ -28,8 +28,14 @@ type evidenceMetadata struct {
 	// Scan rows only: the sbom row omits it. A pointer, so an empty list on a
 	// scan is written as [] and not dropped.
 	Vulnerabilities *[]vulnerability `json:"vulnerabilities,omitempty"`
-	Coverage        string           `json:"coverage"`
-	Platform        string           `json:"platform,omitempty"`
+	// NewVulnerabilities lists the vulnerability ids in this scan that the
+	// previous Sindri scan of the same subject and platform did not have,
+	// sorted (ADR 31). Absent on a first scan, and when the previous scan
+	// listed no vulnerabilities; [] when there was one and nothing is new.
+	// Scan rows only.
+	NewVulnerabilities *[]string `json:"new_vulnerabilities,omitempty"`
+	Coverage           string    `json:"coverage"`
+	Platform           string    `json:"platform,omitempty"`
 	// Platforms is every platform this job scans, sorted; set on index
 	// children only. The gate requires a newest scan for each (ADR 30), so
 	// a job that attached only some platforms cannot pass.
@@ -148,6 +154,13 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		done = append(done, scanned{t: t, report: report, sbom: sbom, counts: counts, vulns: vulns})
 	}
 
+	// Read the previous scans once, before anything is attached, so this
+	// job's own attachments never count as "previous".
+	previous, err := s.ev.NewestSindriScans(ctx, digest)
+	if err != nil {
+		return nil, fmt.Errorf("reading previous scans of %s: %w", digest, err)
+	}
+
 	version := s.versionInfo(ctx, root)
 	// An index lists every target, including a child with no platform, which
 	// is keyed "" exactly as the gate's newest-scan-per-platform query keys
@@ -172,6 +185,7 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 			return nil, fmt.Errorf("encoding evidence metadata: %w", err)
 		}
 		base.Vulnerabilities = &d.vulns
+		base.NewVulnerabilities = newVulnerabilities(d.vulns, previous[d.t.platform])
 		meta, err := json.Marshal(base)
 		if err != nil {
 			return nil, fmt.Errorf("encoding evidence metadata: %w", err)
@@ -194,6 +208,40 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		return nil, fmt.Errorf("encoding scan result: %w", err)
 	}
 	return out, nil
+}
+
+// newVulnerabilities returns the ids in current that the previous scan's
+// metadata does not list, unique and sorted ascending. It compares ids only,
+// not packages (ADR 31). A nil result means there is nothing to compare with:
+// no previous scan, or one written before findings were listed (ADR 30).
+func newVulnerabilities(current []vulnerability, previous json.RawMessage) *[]string {
+	if len(previous) == 0 {
+		return nil
+	}
+	var meta struct {
+		Vulnerabilities *[]struct {
+			ID string `json:"id"`
+		} `json:"vulnerabilities"`
+	}
+	if err := json.Unmarshal(previous, &meta); err != nil || meta.Vulnerabilities == nil {
+		return nil
+	}
+	had := make(map[string]struct{}, len(*meta.Vulnerabilities))
+	for _, v := range *meta.Vulnerabilities {
+		had[v.ID] = struct{}{}
+	}
+	added := make(map[string]struct{})
+	for _, v := range current {
+		if _, ok := had[v.ID]; !ok {
+			added[v.ID] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(added))
+	for id := range added {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return &out
 }
 
 // skippedNotInRepository ends a job that would read a blob the publishing

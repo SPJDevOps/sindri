@@ -11,6 +11,7 @@ package scan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/spj/sindri/internal/cas"
 	"github.com/spj/sindri/internal/evidence"
+	"github.com/spj/sindri/internal/model"
 )
 
 // Media types of the two documents one Trivy run produces.
@@ -65,9 +67,12 @@ type Options struct {
 }
 
 // attacher is the part of *evidence.Service the scanner uses, so unit tests
-// can capture attachments.
+// can capture attachments and supply previous scans.
 type attacher interface {
 	Attach(ctx context.Context, p evidence.AttachParams) (evidence.Evidence, error)
+	// NewestSindriScans returns the metadata of the newest Sindri scan of
+	// subject for each platform ("" for none), for new_vulnerabilities.
+	NewestSindriScans(ctx context.Context, subject model.Digest) (map[string]json.RawMessage, error)
 }
 
 // Scanner runs scan jobs.
