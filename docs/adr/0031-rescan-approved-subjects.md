@@ -43,9 +43,13 @@ scans it again. M11b closes that gap without changing what approval means.
    at least one finding of that severity. The labels CRITICAL, HIGH, MEDIUM, LOW, and
    UNKNOWN are always present.
 7. **On-demand re-scan.** `POST /api/v1/subjects/{digest}/scan` enqueues a scan of one
-   subject. It needs write on a hosted owner repository of the subject (otherwise 404,
-   like every subject route), answers 202 with the job, and answers 409 when scanning is
-   disabled. It is the way to re-scan an npm version, which npm will not re-publish
+   subject. It needs write on a hosted owner repository of the subject. A caller who
+   cannot read the subject gets 404; one who can read it but not write it gets 403, the
+   same as promote, revoke, and attach (all go through `requireSubject`). It answers 202
+   with the job (a scan already queued or running is returned instead of a second one),
+   and 409 when it cannot run: `SCANNING_DISABLED` when scanning is off, and
+   `NO_HOSTED_REPOSITORY` when no hosted repository the caller may write holds the
+   subject. It is the way to re-scan an npm version, which npm will not re-publish
    (`docs/scanning.md` promises this).
 8. **Config.** `scanning.rescanInterval`, a duration, default `24h`. `0s` disables the
    schedule; the on-demand route still works. Values below `1m` and negative values are
