@@ -816,7 +816,9 @@ scanning works and where the open-core line sits.
 
 The order is v1.0.1, M9 npm, v1.1.1 hardening, M10 adoptable, M11a scan and gate, the public
 announcement, then M11b. npm comes before the docs site because without npm this audience
-cannot drop Verdaccio, and docs would sell something they cannot fully use yet.
+cannot drop Verdaccio, and docs would sell something they cannot fully use yet. On
+2026-11-12 M11b was started without waiting for the announcement. The announcement still
+waits only for the person-run M10 migration walkthrough, and it does not wait for M11b.
 
 **The announcement** follows v1.3.0 (M11a), and [ADR 25](docs/adr/0025-what-the-announcement-requires.md)
 records why. It requires OCI, PyPI, and npm, with other formats promised for later; the docs;
@@ -830,7 +832,9 @@ publish is scanned, and promotion is refused above a severity.
 | 7, Nov 6–22 | M10 migration | SIN-24, 25, 26, 53 | |
 | 8, Nov 9–15 | M10 deploy | SIN-27, 28, 70 | v1.2.0 |
 | 9, Nov 10–22 | M11a scan | SIN-30, 31, 32, 36 | |
-| 10, Nov 11–29 | M11a gate | SIN-34, 38, 39, 72, 80 | v1.3.0, then announce |
+| 10, Nov 11–29 | M11a gate | SIN-34, 38, 39, 72, 80 | v1.3.0 ✅ |
+| 11, Nov 12–22 | M11b re-scan | SIN-33, 35 | |
+| 12, Nov 23–29 | M11b referrers | SIN-37 | v1.4.0 |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
 week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9 and 10
@@ -1175,7 +1179,9 @@ first; the upgrade notes say so.
 
 **Goal.** A new CVE in something already approved for prod is flagged, each artifact's
 vulnerabilities show in the UI, and evidence attached through standard OCI tooling is
-discoverable. Released as v1.4.0, after the announcement.
+discoverable. Released as v1.4.0. It was planned for after the announcement and started
+before it, on 2026-11-12. Sprint 11 is the re-scan and the vulnerability UI, and Sprint 12 is
+the referrers API and the release.
 
 **Scope.**
 - [ ] A daily re-scan of every subject currently approved for any stage. A newly found
