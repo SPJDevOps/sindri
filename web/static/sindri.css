@@ -176,7 +176,13 @@ main { flex: 1; padding: 40px 0 64px; }
 .pill.sev-high { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, transparent); }
 .pill.sev-medium { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
 .pill.sev-unknown { border-style: dashed; }
+.pill.new { color: var(--accent-warm); border-color: color-mix(in srgb, var(--accent-warm) 55%, transparent); }
 .pill.sev-none { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); }
+
+/* The Vulnerabilities panels: one per platform. */
+.vuln-panel { margin-bottom: 20px; }
+.vuln-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+.vuln-panel .pills { margin: 8px 0; }
 
 /* Repository tiles: the hairline-gap grid ------------------------------ */
 

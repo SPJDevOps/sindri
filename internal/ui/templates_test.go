@@ -125,6 +125,10 @@ func TestTemplates_Golden(t *testing.T) {
 					Metadata: json.RawMessage(`{"producer":"sindri","severity_counts":{"CRITICAL":0,"HIGH":0,"MEDIUM":0,"LOW":0,"UNKNOWN":0}}`)}),
 				newEvidenceRow(evidence.Evidence{Type: model.EvidenceScan, MediaType: "application/json", Size: 64, CreatedBy: "token:ci", CreatedAt: long, Metadata: json.RawMessage(`{}`)}),
 			},
+			Vulns: newVulnPanels([]evidence.Evidence{
+				{ID: "ev-1", Type: model.EvidenceScan, CreatedAt: long, Metadata: json.RawMessage(`{"producer":"sindri","platform":"linux/amd64","db_updated_at":"2020-03-14T06:00:00Z","severity_counts":{"CRITICAL":1,"HIGH":0,"MEDIUM":0,"LOW":1,"UNKNOWN":0},"vulnerabilities":[{"id":"CVE-2020-0002","severity":"LOW","package":"zlib","installed":"1.2.8"},{"id":"CVE-2020-0001","severity":"CRITICAL","package":"openssl","installed":"1.1.1","fixed":"1.1.1k"}],"new_vulnerabilities":["CVE-2020-0001"]}`)},
+				{ID: "ev-2", Type: model.EvidenceScan, CreatedAt: long, Metadata: json.RawMessage(`{"producer":"sindri","platform":"linux/arm64","severity_counts":{"CRITICAL":0,"HIGH":0,"MEDIUM":0,"LOW":0,"UNKNOWN":0},"vulnerabilities":[]}`)},
+			}),
 			Children: []childRow{{Digest: digest, Size: 99, Href: "/y"}},
 			Document: "{\n  \"schemaVersion\": 2\n}"}},
 		"artifact-upstream": {"artifact", artifactPage{chrome: base, Repo: "hub", RepoHref: "/ui/r/hub",

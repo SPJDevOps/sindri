@@ -47,6 +47,33 @@
   </div>
 </section>
 
+{{if .Vulns}}
+<section class="section">
+  <h2 class="section-title">Vulnerabilities</h2>
+  {{range .Vulns}}
+  <div class="vuln-panel">
+    <div class="vuln-head">{{if .Platform}}<span class="mono">{{.Platform}}</span>{{else}}<span class="hint">no platform</span>{{end}}<span class="hint" title="{{when .ScannedAt}}">Scanned {{ago .ScannedAt}}</span>{{with .DBUpdatedAt}}<span class="hint">database {{.}}</span>{{end}}</div>
+    <div class="pills">{{if .Clean}}<span class="pill sev-none">no findings</span>{{else}}{{range .Counts}}<span class="pill {{.Class}}">{{.N}} {{.Severity}}</span>{{end}}{{end}}</div>
+    {{if .Clean}}
+    <p class="hint">No findings</p>
+    {{else}}
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th scope="col">ID</th><th scope="col">Severity</th><th scope="col">Package</th><th scope="col">Installed</th><th scope="col">Fixed</th></tr></thead>
+      <tbody>
+      {{range .Rows}}
+        <tr><td class="mono">{{.ID}}{{if .New}} <span class="pill new">new</span>{{end}}</td><td><span class="pill {{.Class}}">{{.Severity}}</span></td><td class="mono">{{.Package}}</td><td class="mono">{{.Installed}}</td><td class="mono">{{.Fixed}}</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+    {{if .Hidden}}<p class="hint">{{.Hidden}} more not shown; the full report is evidence {{.EvidenceID}} in the API</p>{{end}}
+    {{end}}
+  </div>
+  {{end}}
+</section>
+{{end}}
+
 <section class="section">
   <h2 class="section-title">Provenance</h2>
   <div class="rows">
