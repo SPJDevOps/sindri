@@ -3,7 +3,9 @@
 # --output path. TRIVY_STUB_FAIL=1 makes it fail; TRIVY_STUB_ARGS names a file
 # that receives one line per invocation with the argv. TRIVY_STUB_ENV names a
 # file that receives the working directory and the environment of each
-# invocation.
+# invocation. TRIVY_STUB_REPORT_FILE names a file holding the name of a fixture
+# in this directory; while it exists, image scans emit that fixture, which lets a
+# test simulate a newer vulnerability database between two scans.
 dir=$(cd "$(dirname "$0")" && pwd)
 
 if [ -n "$TRIVY_STUB_ARGS" ]; then
@@ -45,6 +47,10 @@ convert) fixture=sbom.cdx.json ;;
 	exit 2
 	;;
 esac
+
+if [ "$1" = "image" ] && [ -n "$TRIVY_STUB_REPORT_FILE" ] && [ -s "$TRIVY_STUB_REPORT_FILE" ]; then
+	fixture=$(cat "$TRIVY_STUB_REPORT_FILE")
+fi
 
 if [ -z "$out" ]; then
 	echo "stub: missing --output" >&2
