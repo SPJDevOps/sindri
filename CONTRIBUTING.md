@@ -27,9 +27,9 @@ make build              # ./bin/sindri
 make help               # everything else
 ```
 
-golangci-lint v2.13.2 cannot read the standard library of Go 1.27.2 and later.
-CI pins Go 1.27.1. If your Go is newer, run lint as
-`GOTOOLCHAIN=go1.27.1 make lint`.
+CI and the release build pin Go 1.27.4, and `make tools` builds golangci-lint with
+the same Go. A linter built with an older Go cannot read a newer standard library,
+so after a Go bump, run `make tools` again.
 
 ## Tests
 

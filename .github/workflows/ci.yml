@@ -42,7 +42,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13.2
+          version: v2.15.0
           # .golangci.yml sets the integration build tag, so the suites that
           # touch real Postgres and real S3 are linted too.
           args: --timeout=5m
