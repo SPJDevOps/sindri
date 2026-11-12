@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,6 +18,9 @@ import (
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/queue"
+	"github.com/spj/sindri/internal/registry"
+	"github.com/spj/sindri/internal/scanjob"
 )
 
 // maxEvidenceBytes bounds one evidence document. SBOMs for large images run to
@@ -34,6 +39,7 @@ func (a *api) mountIdentity(r chi.Router) {
 		r.Get("/evidence/{id}", a.getEvidence)
 		r.Post("/promote", a.promote)
 		r.Post("/revoke", a.revoke)
+		r.Post("/scan", a.scanSubject)
 		r.Get("/events", a.listEvents)
 	})
 
@@ -522,4 +528,82 @@ func (a *api) writeLifecycleError(w http.ResponseWriter, r *http.Request, err er
 
 func timestamp(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// scanSubject enqueues a scan of one subject (ADR 31). The caller needs write
+// on a hosted repository that owns it; the scan job carries that repository,
+// because the scanner reads only blobs the repository places (I2). A scan
+// already queued or running is returned instead of a second one.
+func (a *api) scanSubject(w http.ResponseWriter, r *http.Request) {
+	digest, ok := a.pathDigest(w, r)
+	if !ok {
+		return
+	}
+	if !a.requireSubject(w, r, digest, auth.RoleWrite) {
+		return
+	}
+	if !a.scanEnabled {
+		a.writeError(w, r, http.StatusConflict, "SCANNING_DISABLED", "scanning is not enabled on this server")
+		return
+	}
+	s, err := a.lifecycle.GetSubject(r.Context(), digest)
+	if err != nil {
+		a.writeLifecycleError(w, r, err)
+		return
+	}
+	repo, found, err := a.writableOwner(r, s.Owners)
+	if err != nil {
+		a.writeRegistryError(w, r, err)
+		return
+	}
+	if !found {
+		a.writeError(w, r, http.StatusConflict, "NO_HOSTED_REPOSITORY", "no hosted repository holds this subject")
+		return
+	}
+	args, err := json.Marshal(scanjob.Args{Digest: digest.String(), Kind: string(s.Kind), Repository: repo})
+	if err != nil {
+		a.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	job, _, err := a.queue.Enqueue(r.Context(), queue.EnqueueParams{
+		Kind:      scanjob.JobKind,
+		Args:      args,
+		DedupeKey: scanjob.DedupeKey(digest.String()),
+		CreatedBy: scanjob.Actor,
+	})
+	if err != nil {
+		a.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	w.Header().Set("Location", "/api/v1/jobs/"+strconv.FormatInt(job.ID, 10))
+	a.writeJSON(w, r, http.StatusAccepted, jobJSON(job))
+}
+
+// writableOwner returns the lowest-named hosted owner repository among owners
+// the caller may write (an administrator may write any).
+func (a *api) writableOwner(r *http.Request, owners []string) (string, bool, error) {
+	var names []string
+	for _, o := range owners {
+		if name, ok := strings.CutPrefix(o, registry.OwnerPrefix); ok {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	p := principal(r)
+	for _, name := range names {
+		repo, err := a.reg.GetRepository(r.Context(), name)
+		if errors.Is(err, registry.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return "", false, err
+		}
+		if repo.Type != model.RepoTypeHosted {
+			continue
+		}
+		if auth.Authorize(p, repo, auth.RoleWrite) == nil {
+			return name, true, nil
+		}
+	}
+	return "", false, nil
 }

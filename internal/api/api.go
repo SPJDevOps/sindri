@@ -68,6 +68,9 @@ type Options struct {
 	// GC and Queue serve /gc and /jobs. Both or neither.
 	GC    *gc.Collector
 	Queue *queue.Queue
+	// ScanEnabled reports that scanning is on, which makes
+	// POST /subjects/{digest}/scan enqueue a scan. It needs Queue.
+	ScanEnabled bool
 }
 
 // Handler returns the /api/v1 chi router. Mount it with r.Mount("/api/v1", ...).
@@ -92,6 +95,10 @@ func Handler(opts Options) http.Handler {
 		panic("api.Handler: GC and Queue must be set together")
 	}
 
+	if opts.ScanEnabled && opts.Queue == nil {
+		panic("api.Handler: ScanEnabled needs Queue")
+	}
+
 	a := &api{
 		reg:         opts.Registry,
 		lifecycle:   opts.Lifecycle,
@@ -103,6 +110,7 @@ func Handler(opts Options) http.Handler {
 		tokens:      opts.Tokens,
 		gc:          opts.GC,
 		queue:       opts.Queue,
+		scanEnabled: opts.ScanEnabled,
 	}
 
 	r := chi.NewRouter()
@@ -153,6 +161,7 @@ type api struct {
 	tokens      *auth.TokenService
 	gc          *gc.Collector
 	queue       *queue.Queue
+	scanEnabled bool
 }
 
 func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {

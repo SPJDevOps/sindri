@@ -76,6 +76,7 @@ func TestAPI_EveryRouteHasAnAuthorizationCase(t *testing.T) {
 		"GET /subjects/{digest}/evidence/{id}": {path: "/subjects/" + d + "/evidence/" + e.evidenceID, as: "bob", status: http.StatusNotFound},
 		"POST /subjects/{digest}/promote":      {path: "/subjects/" + d + "/promote", body: change, as: "tok-a", status: http.StatusForbidden},
 		"POST /subjects/{digest}/revoke":       {path: "/subjects/" + d + "/revoke", body: change, as: "tok-a", status: http.StatusForbidden},
+		"POST /subjects/{digest}/scan":         {path: "/subjects/" + d + "/scan", as: "tok-a", status: http.StatusForbidden},
 		"GET /subjects/{digest}/events":        {path: "/subjects/" + d + "/events", as: "bob", status: http.StatusNotFound},
 
 		// Admission controllers ask this question with whatever credential
@@ -156,12 +157,16 @@ type routeEnv struct {
 	routes     chi.Routes   // the /api/v1 router alone, for Walk and Match
 	subject    string       // a manifest digest owned by repo-a
 	evidenceID string       // evidence attached to subject
+	database   *db.DB
 }
 
 // newRouteEnv builds the management API with every optional part set, and
 // gives repo-a (team:a) a manifest, files, evidence, and a dev approval.
 // repo-b belongs to team:b; repo-c is empty and exists to be deleted.
-func newRouteEnv(t *testing.T) *routeEnv {
+func newRouteEnv(t *testing.T) *routeEnv { return newRouteEnvScanning(t, true) }
+
+// newRouteEnvScanning is newRouteEnv with scanning switched on or off.
+func newRouteEnvScanning(t *testing.T, scanEnabled bool) *routeEnv {
 	t.Helper()
 	database := testsupport.MigratedDB(t)
 	blobs := memstore.New()
@@ -184,6 +189,7 @@ func newRouteEnv(t *testing.T) *routeEnv {
 		Tokens:      auth.NewTokenService(database),
 		GC:          collector,
 		Queue:       queue.New(database),
+		ScanEnabled: scanEnabled,
 	})
 	routes, ok := handler.(chi.Routes)
 	if !ok {
@@ -199,7 +205,7 @@ func newRouteEnv(t *testing.T) *routeEnv {
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
-	e := &routeEnv{h: srv.Handler(), routes: routes}
+	e := &routeEnv{h: srv.Handler(), routes: routes, database: database}
 
 	for name, group := range map[string]string{"repo-a": "team:a", "repo-b": "team:b", "repo-c": "team:b"} {
 		if _, err := reg.CreateRepository(t.Context(), registry.CreateRepositoryParams{
