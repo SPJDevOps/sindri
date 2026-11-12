@@ -72,6 +72,57 @@ func (q *Queries) AppendLifecycleEvent(ctx context.Context, arg AppendLifecycleE
 	return i, err
 }
 
+const countApprovedSubjectsBySeverity = `-- name: CountApprovedSubjectsBySeverity :many
+WITH approved AS (
+    SELECT DISTINCT subject_digest AS digest
+    FROM lifecycle_current
+    WHERE action = 'approve'
+), newest AS (
+    SELECT DISTINCT ON (e.subject_digest, coalesce(e.metadata->>'platform', ''))
+           e.subject_digest, e.metadata
+    FROM evidence e
+    JOIN approved a ON a.digest = e.subject_digest
+    WHERE e.type = 'scan'
+      AND e.metadata->>'producer' = 'sindri'
+    ORDER BY e.subject_digest, coalesce(e.metadata->>'platform', ''), e.created_at DESC, e.id DESC
+)
+SELECT sev.severity::text AS severity,
+       count(DISTINCT n.subject_digest)::bigint AS subjects
+FROM newest n
+JOIN (VALUES ('CRITICAL'), ('HIGH'), ('MEDIUM'), ('LOW'), ('UNKNOWN')) AS sev(severity)
+  ON coalesce((n.metadata->'severity_counts'->>sev.severity)::int, 0) > 0
+GROUP BY sev.severity
+ORDER BY sev.severity
+`
+
+type CountApprovedSubjectsBySeverityRow struct {
+	Severity string `json:"severity"`
+	Subjects int64  `json:"subjects"`
+}
+
+// Among currently approved subjects, the number whose newest Sindri scan (per
+// platform) has at least one finding of each severity (ADR 31). The scan
+// predicate is that of ListNewestSindriScans.
+func (q *Queries) CountApprovedSubjectsBySeverity(ctx context.Context) ([]CountApprovedSubjectsBySeverityRow, error) {
+	rows, err := q.db.Query(ctx, countApprovedSubjectsBySeverity)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountApprovedSubjectsBySeverityRow{}
+	for rows.Next() {
+		var i CountApprovedSubjectsBySeverityRow
+		if err := rows.Scan(&i.Severity, &i.Subjects); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteGatesForStage = `-- name: DeleteGatesForStage :exec
 DELETE FROM promotion_gates
 WHERE stage_id = $1
@@ -230,6 +281,49 @@ type InsertGateParams struct {
 func (q *Queries) InsertGate(ctx context.Context, arg InsertGateParams) error {
 	_, err := q.db.Exec(ctx, insertGate, arg.StageID, arg.Position, arg.Rule)
 	return err
+}
+
+const listApprovedSubjectsForRescan = `-- name: ListApprovedSubjectsForRescan :many
+SELECT s.digest, s.kind, min(r.name)::text AS repository
+FROM subjects s
+JOIN subject_owners o ON o.digest = s.digest
+JOIN repositories r ON o.owner_ref = 'repository:' || r.name AND r.type = 'hosted'
+WHERE EXISTS (
+    SELECT 1 FROM lifecycle_current c
+    WHERE c.subject_digest = s.digest AND c.action = 'approve'
+)
+GROUP BY s.digest, s.kind
+ORDER BY s.digest
+`
+
+type ListApprovedSubjectsForRescanRow struct {
+	Digest     string `json:"digest"`
+	Kind       string `json:"kind"`
+	Repository string `json:"repository"`
+}
+
+// Every subject with a current approval, for any stage, with the
+// lowest-named hosted repository that owns it (ADR 31). owner_ref is
+// "repository:<name>" (registry.OwnerRef). A subject with no hosted owner is
+// left out.
+func (q *Queries) ListApprovedSubjectsForRescan(ctx context.Context) ([]ListApprovedSubjectsForRescanRow, error) {
+	rows, err := q.db.Query(ctx, listApprovedSubjectsForRescan)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListApprovedSubjectsForRescanRow{}
+	for rows.Next() {
+		var i ListApprovedSubjectsForRescanRow
+		if err := rows.Scan(&i.Digest, &i.Kind, &i.Repository); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAuditEvents = `-- name: ListAuditEvents :many

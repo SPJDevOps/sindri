@@ -163,3 +163,44 @@ WHERE (sqlc.narg('repo_ids')::uuid[] IS NULL OR e.repo_id = ANY (sqlc.narg('repo
   AND (sqlc.narg('until')::timestamptz IS NULL OR e.at < sqlc.narg('until')::timestamptz)
 ORDER BY e.id DESC
 LIMIT sqlc.arg('page_limit');
+
+-- name: ListApprovedSubjectsForRescan :many
+-- Every subject with a current approval, for any stage, with the
+-- lowest-named hosted repository that owns it (ADR 31). owner_ref is
+-- "repository:<name>" (registry.OwnerRef). A subject with no hosted owner is
+-- left out.
+SELECT s.digest, s.kind, min(r.name)::text AS repository
+FROM subjects s
+JOIN subject_owners o ON o.digest = s.digest
+JOIN repositories r ON o.owner_ref = 'repository:' || r.name AND r.type = 'hosted'
+WHERE EXISTS (
+    SELECT 1 FROM lifecycle_current c
+    WHERE c.subject_digest = s.digest AND c.action = 'approve'
+)
+GROUP BY s.digest, s.kind
+ORDER BY s.digest;
+
+-- name: CountApprovedSubjectsBySeverity :many
+-- Among currently approved subjects, the number whose newest Sindri scan (per
+-- platform) has at least one finding of each severity (ADR 31). The scan
+-- predicate is that of ListNewestSindriScans.
+WITH approved AS (
+    SELECT DISTINCT subject_digest AS digest
+    FROM lifecycle_current
+    WHERE action = 'approve'
+), newest AS (
+    SELECT DISTINCT ON (e.subject_digest, coalesce(e.metadata->>'platform', ''))
+           e.subject_digest, e.metadata
+    FROM evidence e
+    JOIN approved a ON a.digest = e.subject_digest
+    WHERE e.type = 'scan'
+      AND e.metadata->>'producer' = 'sindri'
+    ORDER BY e.subject_digest, coalesce(e.metadata->>'platform', ''), e.created_at DESC, e.id DESC
+)
+SELECT sev.severity::text AS severity,
+       count(DISTINCT n.subject_digest)::bigint AS subjects
+FROM newest n
+JOIN (VALUES ('CRITICAL'), ('HIGH'), ('MEDIUM'), ('LOW'), ('UNKNOWN')) AS sev(severity)
+  ON coalesce((n.metadata->'severity_counts'->>sev.severity)::int, 0) > 0
+GROUP BY sev.severity
+ORDER BY sev.severity;

@@ -13,6 +13,7 @@ import (
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/gc"
 	"github.com/spj/sindri/internal/queue"
+	"github.com/spj/sindri/internal/scan"
 	"github.com/spj/sindri/internal/scanjob"
 	"github.com/spj/sindri/internal/worker"
 )
@@ -60,17 +61,25 @@ func (a *app) handlers(cfg config.Worker) map[string]worker.Handler {
 	// never claims a scan job it cannot run.
 	if a.scanner != nil {
 		h[scanjob.JobKind] = a.scanMetrics.wrap(a.scanner.Handle)
+		h[scanjob.RescanJobKind] = scan.NewRescanner(a.db.Queries(), a.queue, a.logger).Handle
 	}
 	return h
 }
 
-func schedules(cfg config.Worker) []worker.Schedule {
+// schedules are the recurring jobs. The re-scan schedule exists only when
+// scanning is enabled and its interval is positive; handlers registers the
+// matching handler under the same condition on scanning, because a schedule
+// without a handler makes worker.Run fail.
+func schedules(cfg config.Worker, scanning config.Scanning) []worker.Schedule {
 	s := []worker.Schedule{
 		{Kind: jobEvictProxyCache, Interval: cfg.Retention.Interval.Duration()},
 		{Kind: jobPurgeUploads, Interval: cfg.Retention.Interval.Duration()},
 	}
 	if cfg.GC.Interval > 0 {
 		s = append(s, worker.Schedule{Kind: gc.JobKind, Interval: cfg.GC.Interval.Duration()})
+	}
+	if scanning.Enabled && scanning.RescanInterval > 0 {
+		s = append(s, worker.Schedule{Kind: scanjob.RescanJobKind, Interval: scanning.RescanInterval.Duration()})
 	}
 	return s
 }
@@ -102,7 +111,7 @@ func (a *app) startBackground(parent context.Context, cfg *config.Config, bo bui
 			Owner:     workerOwner(),
 			Poll:      bo.WorkerPoll,
 			Backoff:   bo.WorkerBackoff,
-			Schedules: schedules(cfg.Worker),
+			Schedules: schedules(cfg.Worker, cfg.Scanning),
 			Logger:    a.logger,
 		}
 		wg.Go(func() {
