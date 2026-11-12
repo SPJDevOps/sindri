@@ -717,7 +717,7 @@ type Scanning struct {
 	// that an archive bomb cannot fill the disk. At least 1048576 (1 MiB).
 	MaxUnpackedBytes int64 `yaml:"maxUnpackedBytes"`
 	// How often every approved subject is scanned again, so a vulnerability
-	// published after approval is noticed (ADR 31). Default `24h`; `0`
+	// published after approval is noticed (ADR 31). Default `24h`; `0s`
 	// disables the schedule, and the on-demand re-scan route still works.
 	// Otherwise at least `1m`.
 	RescanInterval Duration `yaml:"rescanInterval"`
@@ -814,10 +814,10 @@ func (s *Scanning) validate() error {
 		return fmt.Errorf("scanning.timeout: %s would cancel scans that are still working; use at least 1m", s.Timeout)
 	}
 	if s.RescanInterval < 0 {
-		return fmt.Errorf("scanning.rescanInterval: %s is negative; use 0 to disable the schedule", s.RescanInterval)
+		return fmt.Errorf("scanning.rescanInterval: %s is negative; use 0s to disable the schedule", s.RescanInterval)
 	}
 	if s.RescanInterval > 0 && s.RescanInterval.Duration() < time.Minute {
-		return fmt.Errorf("scanning.rescanInterval: %s would queue a scan of every approved subject continuously; use at least 1m, or 0 to disable", s.RescanInterval)
+		return fmt.Errorf("scanning.rescanInterval: %s would queue a scan of every approved subject continuously; use at least 1m, or 0s to disable", s.RescanInterval)
 	}
 	if s.MaxUnpackedBytes < minScanUnpackedBytes {
 		return fmt.Errorf("scanning.maxUnpackedBytes: %d is below the 1048576 (1 MiB) minimum", s.MaxUnpackedBytes)

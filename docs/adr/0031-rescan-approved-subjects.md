@@ -47,7 +47,7 @@ scans it again. M11b closes that gap without changing what approval means.
    like every subject route), answers 202 with the job, and answers 409 when scanning is
    disabled. It is the way to re-scan an npm version, which npm will not re-publish
    (`docs/scanning.md` promises this).
-8. **Config.** `scanning.rescanInterval`, a duration, default `24h`. `0` disables the
+8. **Config.** `scanning.rescanInterval`, a duration, default `24h`. `0s` disables the
    schedule; the on-demand route still works. Values below `1m` and negative values are
    refused.
 

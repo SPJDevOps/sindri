@@ -257,7 +257,7 @@ Short form: `scanning: true` is the same as `scanning: {enabled: true}`.
 | `timeout` | duration | How long one scan may run before it is cancelled and retried. At least `1m`. | `10m` |
 | `skipDBUpdate` | boolean | Never download the vulnerability database, and scan with the one already in `cacheDir`, including the Java database that Trivy fetches separately when it finds a jar. For an air-gapped server with a pre-seeded cache; a jar-containing subject fails to scan if the Java database is not in it. Cannot be combined with `dbRepository` or `javaDbRepository`. | `false` |
 | `maxUnpackedBytes` | integer | The most bytes unpacked from one wheel or tarball while scanning it, so that an archive bomb cannot fill the disk. At least 1048576 (1 MiB). | `1073741824` |
-| `rescanInterval` | duration | How often every approved subject is scanned again, so a vulnerability published after approval is noticed (ADR 31). Default `24h`; `0` disables the schedule, and the on-demand re-scan route still works. Otherwise at least `1m`. | `24h` |
+| `rescanInterval` | duration | How often every approved subject is scanned again, so a vulnerability published after approval is noticed (ADR 31). Default `24h`; `0s` disables the schedule, and the on-demand re-scan route still works. Otherwise at least `1m`. | `24h` |
 <!-- END GENERATED: scanning -->
 
 ## Repositories, lifecycle, and defaults
