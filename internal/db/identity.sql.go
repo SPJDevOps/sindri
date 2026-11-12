@@ -292,6 +292,25 @@ WHERE EXISTS (
     SELECT 1 FROM lifecycle_current c
     WHERE c.subject_digest = s.digest AND c.action = 'approve'
 )
+  AND (
+    EXISTS (
+        SELECT 1
+        FROM files f
+        JOIN versions v ON v.id = f.version_id
+        JOIN packages p ON p.id = v.package_id
+        WHERE p.repo_id = r.id
+          AND f.blob_digest = s.digest
+          AND f.upstream_gone_at IS NULL
+    )
+    OR EXISTS (
+        SELECT 1 FROM tags t
+        WHERE t.repo_id = r.id AND t.target_digest = s.digest
+    )
+    OR EXISTS (
+        SELECT 1 FROM repository_blobs rb
+        WHERE rb.repo_id = r.id AND rb.digest = s.digest
+    )
+)
 GROUP BY s.digest, s.kind
 ORDER BY s.digest
 `
@@ -303,9 +322,11 @@ type ListApprovedSubjectsForRescanRow struct {
 }
 
 // Every subject with a current approval, for any stage, with the
-// lowest-named hosted repository that owns it (ADR 31). owner_ref is
-// "repository:<name>" (registry.OwnerRef). A subject with no hosted owner is
-// left out.
+// lowest-named hosted repository that owns it and still places it (ADR 31).
+// owner_ref is "repository:<name>" (registry.OwnerRef). Owner rows outlive a
+// placement (only GC removes them), so placement is checked with the
+// predicate of CheckPlacement (invariant I2). A subject no hosted owner
+// places is left out.
 func (q *Queries) ListApprovedSubjectsForRescan(ctx context.Context) ([]ListApprovedSubjectsForRescanRow, error) {
 	rows, err := q.db.Query(ctx, listApprovedSubjectsForRescan)
 	if err != nil {

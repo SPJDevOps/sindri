@@ -20,10 +20,11 @@ scans it again. M11b closes that gap without changing what approval means.
    subject, reusing the scan job's dedupe key `scan:<digest>`, so a scan already queued
    or running is not doubled.
 2. **Which repository the re-scan reads from.** A scan job carries a repository and reads
-   only blobs that repository places (I2). The re-scan uses the subject's hosted owner
-   repository (from `subject_owners`), the lowest-named when there are several. If that
-   repository no longer places the subject, the scan job skips, as it already does, and
-   is never a failure.
+   only blobs that repository places (I2). The re-scan uses the lowest-named hosted
+   owner repository (from `subject_owners`) that still places the subject, checked with
+   the predicate of `CheckPlacement`. Owner rows outlive a placement (only the collector
+   removes them), so an owner that has since deleted the subject is passed over for the
+   next one. A subject no hosted owner places is left out of the schedule.
 3. **The ledger is untouched.** A re-scan only adds evidence rows. It never writes
    `lifecycle_events`, never revokes, and never changes a decision already made. The
    next promotion's severity gate reads the newest Sindri scan, so a new finding blocks
@@ -31,8 +32,9 @@ scans it again. M11b closes that gap without changing what approval means.
 4. **A new finding.** A vulnerability ID present in the newest Sindri scan for a platform
    and absent from the previous Sindri scan of the same subject and platform. The worker
    computes it when it attaches the scan and writes the sorted IDs as
-   `new_vulnerabilities` in the scan evidence metadata. A first scan has no previous one
-   and carries no `new_vulnerabilities` field. IDs are compared, not packages.
+   `new_vulnerabilities` in the scan evidence metadata. A first scan has no previous one,
+   and a scan written before the `vulnerabilities` list existed (an M11a-era scan) has
+   no list to compare with; neither carries a `new_vulnerabilities` field. IDs are compared, not packages.
 5. **Findings carry package detail.** Each entry of the metadata's `vulnerabilities` list
    gains `package`, `installed`, and `fixed` (Trivy's PkgName, InstalledVersion,
    FixedVersion; `fixed` is empty when there is no fix). Entries are one per (id,
@@ -46,7 +48,9 @@ scans it again. M11b closes that gap without changing what approval means.
    subject. It needs write on a hosted owner repository of the subject. A caller who
    cannot read the subject gets 404; one who can read it but not write it gets 403, the
    same as promote, revoke, and attach (all go through `requireSubject`). It answers 202
-   with the job (a scan already queued or running is returned instead of a second one),
+   with the job (a scan already queued or running is returned instead of a second one);
+   an administrator gets the full job and a `Location` for `GET /jobs/{id}`, anyone else
+   only `id`, `kind`, and `state`;
    and 409 when it cannot run: `SCANNING_DISABLED` when scanning is off, and
    `NO_HOSTED_REPOSITORY` when no hosted repository the caller may write holds the
    subject. It is the way to re-scan an npm version, which npm will not re-publish

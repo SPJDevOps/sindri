@@ -27,8 +27,24 @@ func (f *rescanFixture) repo(name, typ string) {
 	f.exec(`INSERT INTO repositories (name, type, protocol, managed_by) VALUES ($1, $2, 'oci', 'api')`, name, typ)
 }
 
+// place links the digest into repo through repository_blobs, one of the three
+// placement forms CheckPlacement accepts.
+func (f *rescanFixture) place(repo, digest string) {
+	f.exec(`INSERT INTO repository_blobs (repo_id, digest) SELECT id, $2 FROM repositories WHERE name = $1`, repo, digest)
+}
+
 // subject creates a subject owned by owners; blobs back the subject itself.
+// Every owner places it; use unplacedSubject to leave placement out.
 func (f *rescanFixture) subject(kind string, owners ...string) string {
+	d := f.unplacedSubject(kind, owners...)
+	for _, o := range owners {
+		f.place(o, d)
+	}
+	return d
+}
+
+// unplacedSubject is subject without any placement, as after DeleteManifest.
+func (f *rescanFixture) unplacedSubject(kind string, owners ...string) string {
 	d := f.digest()
 	f.exec(`INSERT INTO blobs (digest, size, storage_backend) VALUES ($1, 1, 'memory')`, d)
 	f.exec(`INSERT INTO subjects (digest, size, kind) VALUES ($1, 1, $2)`, d, kind)
@@ -92,6 +108,39 @@ func TestListApprovedSubjectsForRescan_PicksLowestHostedOwnerOfApprovedSubjects(
 	}
 	if len(rows) != 1 || rows[0].Digest != multi || rows[0].Repository != "alpha" || rows[0].Kind != "oci-manifest" {
 		t.Fatalf("rows = %+v, want only %s in alpha", rows, multi)
+	}
+}
+
+func TestListApprovedSubjectsForRescan_OwnerMustStillPlaceTheSubject(t *testing.T) {
+	database, f := newRescanFixture(t)
+	f.repo("alpha", "hosted")
+	f.repo("beta", "hosted")
+
+	// alpha owns the subject but lost placement (DeleteManifest); beta places it.
+	moved := f.unplacedSubject("oci-manifest", "alpha", "beta")
+	f.place("beta", moved)
+	f.event(moved, "beta", "approve")
+	// No hosted owner places this one: it is left out.
+	orphan := f.unplacedSubject("oci-manifest", "alpha")
+	f.event(orphan, "alpha", "approve")
+	// A tag is placement too.
+	tagged := f.unplacedSubject("oci-manifest", "alpha")
+	f.exec(`INSERT INTO packages (repo_id, normalized_name, display_name) SELECT id, 'app', 'app' FROM repositories WHERE name = $1`, "alpha")
+	f.exec(`INSERT INTO tags (repo_id, package_id, name, target_digest)
+	        SELECT p.repo_id, p.id, 'v1', $2 FROM packages p JOIN repositories r ON r.id = p.repo_id WHERE r.name = $1`, "alpha", tagged)
+	f.event(tagged, "alpha", "approve")
+
+	rows, err := database.Queries().ListApprovedSubjectsForRescan(t.Context())
+	if err != nil {
+		t.Fatalf("ListApprovedSubjectsForRescan: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r.Digest] = r.Repository
+	}
+	want := map[string]string{moved: "beta", tagged: "alpha"}
+	if len(got) != len(want) || got[moved] != "beta" || got[tagged] != "alpha" {
+		t.Fatalf("rows = %v, want %v (orphan %s left out)", got, want, orphan)
 	}
 }
 

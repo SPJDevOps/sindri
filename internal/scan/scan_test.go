@@ -536,6 +536,9 @@ func TestRun_NewVulnerabilitiesIsWrittenOnTheScanRowOnly(t *testing.T) {
 	if _, err := f.scanner(Options{Trivy: stubPath(t), TempDir: t.TempDir()}).Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
+	if len(f.ev.attached) != 2 {
+		t.Fatalf("attached %d rows, want sbom and scan", len(f.ev.attached))
+	}
 	for _, a := range f.ev.attached {
 		var meta map[string]any
 		if err := json.Unmarshal(a.params.Metadata, &meta); err != nil {
@@ -549,8 +552,8 @@ func TestRun_NewVulnerabilitiesIsWrittenOnTheScanRowOnly(t *testing.T) {
 			continue
 		}
 		list, _ := got.([]any)
-		if !present || len(list) != 1 || list[0] == "CVE-2026-0001" {
-			t.Errorf("new_vulnerabilities = %v, want the fixture's other finding only", got)
+		if !present || len(list) != 1 || list[0] != "CVE-2026-0002" {
+			t.Errorf("new_vulnerabilities = %v, want [CVE-2026-0002], the fixture's finding the previous scan lacked", got)
 		}
 	}
 }
@@ -561,9 +564,14 @@ func TestRun_FirstScanWritesNoNewVulnerabilities(t *testing.T) {
 	if _, err := f.scanner(Options{Trivy: stubPath(t), TempDir: t.TempDir()}).Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
+	if len(f.ev.attached) != 2 {
+		t.Fatalf("attached %d rows, want sbom and scan", len(f.ev.attached))
+	}
 	for _, a := range f.ev.attached {
 		var meta map[string]any
-		_ = json.Unmarshal(a.params.Metadata, &meta)
+		if err := json.Unmarshal(a.params.Metadata, &meta); err != nil {
+			t.Fatal(err)
+		}
 		if _, ok := meta["new_vulnerabilities"]; ok {
 			t.Errorf("%s metadata carries new_vulnerabilities on a first scan: %v", a.params.Type, meta)
 		}

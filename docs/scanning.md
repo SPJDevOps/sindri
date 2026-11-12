@@ -188,7 +188,7 @@ curl -fsS -H "Authorization: Bearer $SINDRI_TOKEN" \
 | `db_updated_at` | When the vulnerability database the scan used was built. See [Keep the database fresh](#keep-the-database-fresh). |
 | `severity_counts` | Findings per severity. |
 | `vulnerabilities` | Each finding as `id`, `severity`, and the `package` with its `installed` and `fixed` versions (`fixed` is empty when no fix exists), worst first. On `scan` rows only; the `sbom` row omits it. Scans written before re-scanning exist have only `id` and `severity`. |
-| `new_vulnerabilities` | The ids in this scan that the previous Sindri scan of the same subject and platform did not list. Absent on a first scan. See [Re-scanning](#re-scanning). |
+| `new_vulnerabilities` | The ids in this scan that the previous Sindri scan of the same subject and platform did not list. Absent on a first scan, and when the previous scan predates the `vulnerabilities` list (an older scan has no list to compare with). See [Re-scanning](#re-scanning). |
 | `coverage` | `image` for an OCI image, `package` for a wheel, sdist, or npm tarball. |
 | `platform` | The platform of an index child, such as `linux/arm64`. Absent on a single image. |
 | `platforms` | On an index child's scan, every platform the job scanned. The gate requires a scan for each. |
@@ -228,20 +228,24 @@ has the reasoning. In short:
   Vulnerabilities panel, and a metric, and a person decides. It does not take production
   down over a CVE that may have no fix.
 
-A scan reads the artifact from the hosted repository that owns it. If that repository no
-longer holds it, the scan is skipped. Each re-scan is one Trivy run per approved artifact,
+A scan reads the artifact from the lowest-named hosted repository that owns it and still
+holds it, so an artifact copied to another repository and deleted from the first is scanned
+from the other. An approved artifact no hosted repository holds is left out. Each re-scan is one Trivy run per approved artifact,
 so cost follows what is approved, not everything ever published.
 
 ### Re-scan one artifact now
 
 `POST /api/v1/subjects/{digest}/scan` queues a scan of one artifact. It needs write
-access to a hosted repository that holds it. It answers `202 Accepted` with the job, and
-the same job if a scan of that artifact is already queued or running. Errors:
+access to a hosted repository that holds it. It answers `202 Accepted`, and the same job
+if a scan of that artifact is already queued or running. An administrator gets the full
+job (attempts, `last_error`) and a `Location` header for `GET /api/v1/jobs/{id}`, which
+only administrators may read. Anyone else gets only `{"id", "kind", "state"}` and no
+`Location`. Errors:
 
 | Status | Code | When |
 |---|---|---|
-| 404 | none | The caller cannot read the artifact. |
-| 403 | none | The caller can read it but not write it. |
+| 404 | `SUBJECT_NOT_FOUND` | The caller cannot read the artifact. |
+| 403 | `FORBIDDEN` | The caller can read it but not write it. |
 | 409 | `SCANNING_DISABLED` | Scanning is off on this server. |
 | 409 | `NO_HOSTED_REPOSITORY` | No hosted repository the caller may write holds the artifact. |
 
@@ -265,7 +269,7 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 echo "scans: $n"
-echo "$EVIDENCE" | jq -c '[.items[] | select(.type == "scan" and .metadata.new_vulnerabilities != null)][0].metadata.new_vulnerabilities'
+echo "$EVIDENCE" | jq -c '[.items[] | select(.type == "scan" and .metadata.new_vulnerabilities != null)] | last | .metadata.new_vulnerabilities'
 ```
 <!-- /scan:rescan -->
 

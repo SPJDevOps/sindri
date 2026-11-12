@@ -551,7 +551,7 @@ func (a *api) scanSubject(w http.ResponseWriter, r *http.Request) {
 		a.writeLifecycleError(w, r, err)
 		return
 	}
-	repo, found, err := a.writableOwner(r, s.Owners)
+	repo, found, err := a.writableOwner(r, digest, s.Owners)
 	if err != nil {
 		a.writeRegistryError(w, r, err)
 		return
@@ -575,13 +575,29 @@ func (a *api) scanSubject(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
+	if !principal(r).Admin {
+		// GET /jobs/{id} is administrator-only, and attempts and last_error
+		// are job internals.
+		a.writeJSON(w, r, http.StatusAccepted, scanAccepted{ID: job.ID, Kind: job.Kind, State: string(job.State)})
+		return
+	}
 	w.Header().Set("Location", "/api/v1/jobs/"+strconv.FormatInt(job.ID, 10))
 	a.writeJSON(w, r, http.StatusAccepted, jobJSON(job))
 }
 
+// scanAccepted is the re-scan response for a caller who is not an
+// administrator.
+type scanAccepted struct {
+	ID    int64  `json:"id"`
+	Kind  string `json:"kind"`
+	State string `json:"state"`
+}
+
 // writableOwner returns the lowest-named hosted owner repository among owners
-// the caller may write (an administrator may write any).
-func (a *api) writableOwner(r *http.Request, owners []string) (string, bool, error) {
+// the caller may write (an administrator may write any) that still places the
+// subject. Owner rows outlive a placement, so placement is checked with
+// Registry.CheckPlacement (invariant I2).
+func (a *api) writableOwner(r *http.Request, digest model.Digest, owners []string) (string, bool, error) {
 	var names []string
 	for _, o := range owners {
 		if name, ok := strings.CutPrefix(o, registry.OwnerPrefix); ok {
@@ -601,9 +617,17 @@ func (a *api) writableOwner(r *http.Request, owners []string) (string, bool, err
 		if repo.Type != model.RepoTypeHosted {
 			continue
 		}
-		if auth.Authorize(p, repo, auth.RoleWrite) == nil {
-			return name, true, nil
+		if auth.Authorize(p, repo, auth.RoleWrite) != nil {
+			continue
 		}
+		err = a.reg.CheckPlacement(r.Context(), name, digest)
+		if errors.Is(err, registry.ErrNotPlaced) {
+			continue
+		}
+		if err != nil {
+			return "", false, err
+		}
+		return name, true, nil
 	}
 	return "", false, nil
 }
