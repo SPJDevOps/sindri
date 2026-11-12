@@ -1200,27 +1200,66 @@ make up && make build && ./scripts/m11-scan-gate.sh
 
 ### Later
 
-Kept here so the work continues rather than restarts. Roughly in order:
+Planned on 2026-11-11, before the announcement, so that the work after M11b continues
+rather than restarts. The phase has one measurable goal: **ten teams running Sindri in
+production.** Milestones are ordered by what moves that number, not by what is interesting
+to build, and each one gets its gate written when it starts. Items without a ticket get
+one when they are scheduled.
 
-- **Kubernetes.** Several replicas (SIN-71), the split `--api-only` and `--worker-only`
-  modes (the queue table is the prerequisite), and the admission webhook calling the
-  decision endpoint. That webhook is the clearest demonstration of the whole thesis. The
-  Helm chart itself moved to M10.
-- **More protocols.** Each is a new adapter on the shared core, plus a small additive
-  migration for its protocol and subject kind, as npm needed (ADR 24). Order by what the
-  first adopters ask for.
-  - **Maven**: hosted, proxy, and virtual, with `maven-metadata.xml` and checksum files.
-  - **Go modules**: the `GOPROXY` protocol (`list`, `.info`, `.mod`, `.zip`, `@latest`),
-    plus a checksum-database story so `GONOSUMDB` is not the only way to use it.
-  - **Hugging Face**: the Hub download protocol for models and datasets behind
-    `HF_ENDPOINT`, proxying huggingface.co with hosted names that proxies cannot shadow.
-  - **Helm's own repository format** (`index.yaml` and chart tarballs), only if OCI charts
-    turn out not to be enough. Helm-over-OCI already works and is tested (v1.0.1).
-- **Signature verification** for cosign and Sigstore.
-- **Storage:** GCS and Azure Blob Storage.
-- **The paid layer:** per-CVE waivers with expiry, licence policy, org-wide rules teams
-  cannot override, compliance reports, SAML and LDAP, audit retention, multi-region
-  replication, and managed hosting.
+**M12, a feedback window and hardening.** Two to four weeks right after the announcement
+where the roadmap is driven by what strangers report, so that the next milestone is chosen
+from evidence rather than from this list. Scope: the unscheduled hardening tickets (SIN-56,
+58, 65, 73, 74, 75, 76, 81, 82, 83, 84, 85, 86); notifications, because M11b's re-scan
+finds a CVE and nothing tells anyone (a webhook on new finding and on promotion, through the
+queue table); an import tool only if the proxy-in-front migration turns out not to be
+enough. Gate: every issue opened by an outside adopter in the window is answered, and the
+ones that block adoption are fixed.
+
+**M13, high availability.** Shared upload sessions, several replicas (SIN-71), and the split
+`--api-only` and `--worker-only` modes the pitch promises; the queue table was built for
+this (ADR 20), so the work is moving upload sessions out of process memory and adding the
+two flags. This comes first because "grows with you" is the claim no competitor makes, and
+it is unkept until a second replica runs. It also makes M14 credible: a cluster whose
+deployments are gated on a single-replica registry is the scaling story a platform team
+fears. Gate: a chunked `docker push` through a load balancer across three replicas, and a
+worker-only pod draining the queue.
+
+**M14, trust enforced end to end.** Signature verification for cosign and Sigstore, then
+the Kubernetes admission webhook calling the decision endpoint. Today the `signature` gate
+checks presence, not validity, which a careful reader will find. The webhook is the clearest
+demonstration of the thesis: a deployment refused because exactly that digest is not
+approved for that environment. Gate: a `kind` cluster refuses an unapproved image and admits
+it after promotion, and a promotion gated on `signature` refuses an artifact whose signature
+does not verify.
+
+**M15, a fourth protocol, chosen by demand.** Each is a new adapter on the shared core plus a
+small additive migration for its protocol and subject kind, as npm needed (ADR 24). If the
+adopters from M12 have not said which, the default is **Maven**: hosted, proxy, and virtual,
+with `maven-metadata.xml` and checksum files, because it is the reason most teams stay on
+Nexus. Two alternatives to weigh against it:
+- **Go modules**: the `GOPROXY` protocol (`list`, `.info`, `.mod`, `.zip`, `@latest`), plus
+  a checksum-database story so `GONOSUMDB` is not the only way to use it. Cheap, and it
+  matches the audience a Go project attracts.
+- **Hugging Face**: the Hub download protocol for models and datasets behind `HF_ENDPOINT`,
+  proxying huggingface.co with hosted names that proxies cannot shadow. The bet: nobody
+  offers lifecycle gates and provenance for models.
+- **Helm's own repository format** (`index.yaml` and chart tarballs), only if OCI charts turn
+  out not to be enough. Helm-over-OCI already works and is tested (v1.0.1).
+
+**Then the paid layer**, and only once there are production users to sell to (ADR 22,
+ADR 23): per-CVE waivers with expiry, licence policy, org-wide rules teams cannot override,
+compliance reports, SAML and LDAP, audit retention, multi-region replication, and managed
+hosting.
+
+**On request, not scheduled.** GCS and Azure Blob Storage, each a small backend behind the
+existing interface and the conformance suite.
+
+**Known gaps we are not closing yet.** Two deferrals from the v1 scope table will come up in
+every comparison with Harbor, and the answer is the same for both: not until an adopter
+needs it. The UI is read-only with no administration in the browser, because configuration
+as code is the product and a second write path would undo it (ADR 5, ADR 21). Access is per
+repository, not per path, because per-path rules move validation onto the request path
+(ADR 18).
 
 ---
 
