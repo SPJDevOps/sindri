@@ -1283,6 +1283,27 @@ hosting.
 **On request, not scheduled.** GCS and Azure Blob Storage, each a small backend behind the
 existing interface and the conformance suite.
 
+**The UI, not scheduled (SIN-89).** Collected on 2026-11-12 as reminder tickets, so that UI
+work is picked from a list rather than invented per milestone. The UI today is four
+read-only pages; the aim is that every question a person brings to a registry has a page
+that answers it, and that a change is a command to copy, not a button. The epic holds the
+shared look, UX, and size targets, and each ticket gets a milestone when it is picked up.
+- **Sharpen what exists**, with no new backend data: design foundation (SIN-90), script
+  file (SIN-91), pull and install commands (SIN-92), artifact verdict header (SIN-93),
+  vulnerabilities panel v2 (SIN-94), lifecycle timeline and next-stage blockers (SIN-95),
+  repository list at scale (SIN-96), repository and package rows (SIN-97), sign-in and
+  error pages (SIN-98), accessibility (SIN-99), test harness (SIN-100). SIN-90, 91, and 100
+  come first; the rest build on them.
+- **New views:** search (SIN-101), home (SIN-102), vulnerability overview and CVE page
+  (SIN-103), environments (SIN-104), activity (SIN-105), "me" (SIN-106), system page
+  (SIN-107), resolution explainer (SIN-108), compare (SIN-109).
+- **With a milestone above:** referrers and signature state with SIN-37 and M14 (SIN-110),
+  protocol presenters before M15 (SIN-111), webhook deliveries with M12 (SIN-112), replicas
+  and admission decisions with M13 and M14 (SIN-113), printable report and waivers with the
+  paid layer (SIN-114).
+- **One decision, after M12:** whether the browser may ever promote, revoke, or re-scan
+  (SIN-115). Until that ADR exists, the gap below stands.
+
 **Known gaps we are not closing yet.** Two deferrals from the v1 scope table will come up in
 every comparison with Harbor, and the answer is the same for both: not until an adopter
 needs it. The UI is read-only with no administration in the browser, because configuration
