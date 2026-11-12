@@ -1178,9 +1178,9 @@ vulnerabilities show in the UI, and evidence attached through standard OCI tooli
 discoverable. Released as v1.4.0, after the announcement.
 
 **Scope.**
-- [ ] A daily re-scan of every subject currently approved for any stage. A newly found
+- [x] A daily re-scan of every subject currently approved for any stage. A newly found
   vulnerability appears in the API, the UI, and a metric (SIN-33)
-- [ ] The UI shows each artifact's vulnerabilities by severity (SIN-35)
+- [x] The UI shows each artifact's vulnerabilities by severity (SIN-35)
 - [ ] The OCI referrers API, so evidence attached by cosign or Trivy through standard OCI
   tooling is discoverable, which also clears the 20 skipped conformance specs (SIN-37)
 
@@ -1195,6 +1195,27 @@ make up && make build && ./scripts/m11-scan-gate.sh
 # a re-scan with a newer database flags an approved artifact without changing the ledger
 ./scripts/oci-conformance.sh   # referrers specs no longer skipped
 ```
+
+**Re-scan slice, Sprint 11, 2026-11-12.** `make test`, `GOTOOLCHAIN=go1.27.1 make lint`,
+`make test-integration`, `make docs`, and `./scripts/m11-scan-gate.sh` passed on
+`m11b-rescan`, with Go 1.27.4, Docker 29.9.3, and Trivy 0.76.2. [ADR 31](docs/adr/0031-rescan-approved-subjects.md)
+records the rules. A schedule (`scanning.rescanInterval`, 24h by default, `0s` off) scans
+every approved subject again, and `POST /api/v1/subjects/{digest}/scan` scans one on
+demand, which is also how an npm version gets a newer scan. A re-scan only adds evidence:
+the ledger is untouched, a new finding blocks the next promotion only, and revoking stays a
+person's call. Scan metadata now lists `package`, `installed`, and `fixed` per finding and
+`new_vulnerabilities` against the previous scan, the gauge `sindri_approved_findings{severity}`
+counts approved subjects with findings (with an alert example in the operations guide), and
+the artifact page has a Vulnerabilities panel with a `new` marker. `TestScan_RescanFlagsAnApprovedSubjectWithoutChangingTheLedger`
+and its scheduled twin run `serve` with a Trivy stub whose report changes between two
+scans and show the extra CVE as new, the ledger, audit log, and events unchanged, the gauge
+at 1, and the page marking it. The gate script approves its image at `dev`, re-scans it
+with the page's own block, and checks `/api/v1/audit` byte for byte and the gauge at 1.
+**The honest limit:** the gate runs real Trivy against the same database, so it finds
+`new_vulnerabilities` empty. That a newer database flags a new CVE is proven only with the
+stub. The real-Trivy integration tests skipped locally (no `trivy` on PATH, the pinned
+image did not start); the gate used the real `-trivy` image. SIN-37 (referrers) is still
+open.
 
 ---
 
