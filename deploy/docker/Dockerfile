@@ -2,7 +2,7 @@
 # no compiler and no RUN step, so the image is the static binary on distroless
 # and nothing else. `docker build .` at the repository root builds the same
 # image from source (see /Dockerfile).
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
 
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/sindri /usr/local/bin/sindri

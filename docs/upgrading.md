@@ -180,6 +180,11 @@ differently:
   `scanning.rescanInterval: 0s` before upgrading and set it to the interval you want once
   the upgrade is done, so the burst starts when you choose. See
   [Re-scanning](scanning.md#re-scanning).
+- **1.4.1 changes the image base to Debian 13.** The image is still distroless and static,
+  running as the same non-root user with the same data directory, so nothing in a
+  deployment changes. 1.4.1 is built with Go 1.27.4 and go-jose 4.1.9 and has no known
+  vulnerabilities at release. A Sindri scan of the 1.4.0 image reports Go standard
+  library, go-jose, `tzdata`, and `ca-certificates` findings, and 1.4.1 fixes them.
 
 ## Rolling back
 
