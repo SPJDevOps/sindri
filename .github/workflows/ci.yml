@@ -14,11 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Pinned to the patch release golangci-lint v2.13.2 can read. Go 1.27.2
-  # changed the export data format and the linter fails to typecheck the
-  # standard library on it. Keep this equal to the toolchain `make tools`
-  # builds golangci-lint with; bump both together with the linter.
-  GO_VERSION: "1.27.1"
+  # The release binary is built with this Go, so it carries this standard
+  # library: keep it on the newest patch release. Keep it equal to the
+  # toolchain `make tools` builds golangci-lint with; a linter built with an
+  # older Go cannot read a newer standard library's export data.
+  GO_VERSION: "1.27.4"
 
 jobs:
   lint:
@@ -42,7 +42,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13.2
+          version: v2.15.0
           # .golangci.yml sets the integration build tag, so the suites that
           # touch real Postgres and real S3 are linted too.
           args: --timeout=5m

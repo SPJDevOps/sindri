@@ -81,6 +81,6 @@ func (w *CacheWriter) Abort(ctx context.Context) {
 	}
 	w.closed = true
 	_ = w.pw.CloseWithError(errCacheWriteAborted)
-	<-w.done
+	<-w.done //nolint:errcheck // the abort above makes staging fail; its error says nothing new
 	w.abort(ctx)
 }

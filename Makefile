@@ -11,7 +11,7 @@ LDFLAGS     := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.Date=$(DATE)
 
-GOLANGCI_VERSION := v2.13.2
+GOLANGCI_VERSION := v2.15.0
 SQLC_VERSION     := v1.30.0
 GORELEASER_VERSION := v2.18.3
 COMPOSE_FILE     := deploy/compose/docker-compose.yml
@@ -91,12 +91,12 @@ generate:
 	$(SQLC) generate
 
 ## tools: Install developer tooling into GOBIN.
-# golangci-lint v2.13.2 cannot read Go 1.27.2's export data, so it is built with
-# and run under Go 1.27.1, the version CI pins (.github/workflows/ci.yml). With
-# a newer local Go, run lint as: GOTOOLCHAIN=go1.27.1 make lint
+# golangci-lint is built with the Go version CI pins (.github/workflows/ci.yml),
+# because a linter built with an older Go cannot read a newer standard library's
+# export data. Bump the two together.
 .PHONY: tools
 tools:
-	GOTOOLCHAIN=go1.27.1 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	GOTOOLCHAIN=go1.27.4 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 	go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 	./scripts/install-docs-tools.sh $(TOOLS_BIN)
