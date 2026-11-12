@@ -206,6 +206,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		Tokens:      tokens,
 		GC:          collector,
 		Queue:       jobs,
+		ScanEnabled: cfg.Scanning.Enabled,
 	})
 	ociHandler := oci.Handler(oci.Options{
 		Resolver: resolver,
@@ -223,6 +224,11 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		PublicURL: cfg.PublicURL,
 	})
 
+	var approvedFindings func(context.Context) (map[string]int64, error)
+	if cfg.Scanning.Enabled {
+		approvedFindings = approvedFindingCounts(database.Queries())
+	}
+
 	srv, err := server.New(server.Options{
 		Address:           cfg.Listen.Address,
 		ReadHeaderTimeout: cfg.Listen.ReadHeaderTimeout.Duration(),
@@ -239,6 +245,8 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		Logger:      logger,
 		Metrics:     metricsReg,
 		QueueCounts: jobs.Counts,
+		// Nil with scanning off, so the gauge has no series then.
+		ApprovedFindings: approvedFindings,
 	})
 	if err != nil {
 		database.Close()
@@ -331,4 +339,20 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 		SkipDBUpdate:     sc.SkipDBUpdate,
 		MaxUnpackedBytes: sc.MaxUnpackedBytes,
 	}, logger), mx, nil
+}
+
+// approvedFindingCounts reads sindri_approved_findings: the approved subjects
+// whose newest Sindri scan has a finding, by severity (ADR 31).
+func approvedFindingCounts(q *db.Queries) func(context.Context) (map[string]int64, error) {
+	return func(ctx context.Context) (map[string]int64, error) {
+		rows, err := q.CountApprovedSubjectsBySeverity(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("counting approved subjects by severity: %w", err)
+		}
+		counts := make(map[string]int64, len(rows))
+		for _, r := range rows {
+			counts[r.Severity] = r.Subjects
+		}
+		return counts, nil
+	}
 }

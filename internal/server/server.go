@@ -77,6 +77,12 @@ type Options struct {
 	// QueueCounts reports background jobs by state name for the
 	// sindri_queue_jobs gauge. Optional: without it the gauge has no series.
 	QueueCounts func(ctx context.Context) (map[string]int64, error)
+
+	// ApprovedFindings reports, by severity name, the currently approved
+	// subjects whose newest Sindri scan has a finding of that severity, for
+	// the sindri_approved_findings gauge (ADR 31). Optional: without it the
+	// gauge has no series, which is how a server with scanning off looks.
+	ApprovedFindings func(ctx context.Context) (map[string]int64, error)
 }
 
 // Server owns an HTTP listener and the handler behind it.
@@ -109,7 +115,7 @@ func New(opts Options) (*Server, error) {
 	if registry == nil {
 		registry = prometheus.NewRegistry()
 	}
-	m, err := newMetrics(registry, opts.QueueCounts)
+	m, err := newMetrics(registry, opts.QueueCounts, opts.ApprovedFindings)
 	if err != nil {
 		return nil, err
 	}
