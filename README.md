@@ -82,7 +82,8 @@ lifecycle:
 The full documentation is at **<https://spjdevops.github.io/sindri/>**.
 
 - **Use it:** [pip and twine](https://spjdevops.github.io/sindri/clients/pip.html),
-  [npm, pnpm, and yarn](https://spjdevops.github.io/sindri/clients/npm.html), and the
+  [npm, pnpm, and yarn](https://spjdevops.github.io/sindri/clients/npm.html),
+  [cosign and oras](https://spjdevops.github.io/sindri/clients/referrers.html), and the
   [configuration reference](https://spjdevops.github.io/sindri/configuration.html)
 - **Deploy it:** [Docker Compose](https://spjdevops.github.io/sindri/deploy/compose.html),
   [Kubernetes with Helm](https://spjdevops.github.io/sindri/deploy/helm.html), and
@@ -100,7 +101,7 @@ So that nothing is silently missing:
 - **Several replicas.** Sindri runs as one replica, because upload sessions live in memory.
 - **Other formats.** Maven, and Helm's own repository format. Helm charts as OCI artifacts
   work today.
-- **OCI:** the referrers API and cross-repository blob mounts.
+- **OCI:** cross-repository blob mounts.
 - **Storage:** native Google Cloud Storage and Azure Blob Storage.
 - **Auth:** SAML, LDAP, and per-path access rules.
 

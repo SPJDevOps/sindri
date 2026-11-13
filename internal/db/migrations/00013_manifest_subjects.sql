@@ -7,10 +7,12 @@
 -- repository lists the row is decided by repository_blobs, never by this table
 -- (invariant I2). subject_digest has no foreign key: the specification lets a
 -- referrer arrive before the manifest it refers to. Additive: a binary one
--- version back never names the table. The garbage collector deletes a row with
--- its blob, because referrer_digest references blobs.
+-- version back never names the table. The row is an attribute of its blob and
+-- goes with it: the cascade is for that older binary, whose collector deletes
+-- the blob row without knowing this table. The current collector deletes the
+-- row itself first.
 CREATE TABLE manifest_subjects (
-    referrer_digest text   PRIMARY KEY REFERENCES blobs (digest),
+    referrer_digest text   PRIMARY KEY REFERENCES blobs (digest) ON DELETE CASCADE,
     subject_digest  text   NOT NULL,
     media_type      text   NOT NULL,
     artifact_type   text   NOT NULL DEFAULT '',

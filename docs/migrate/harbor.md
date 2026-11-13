@@ -334,9 +334,11 @@ Be sure none of these is on your list before you switch Harbor off:
   Scan the images some other way in the meantime; see
   [ADR 23](../adr/0023-scanning-as-a-queue-job-and-the-open-core-line.md).
 - **Replication.** Sindri has no replication between servers.
-- **The OCI referrers API** (`GET /v2/<name>/referrers/<digest>`). Signatures and SBOMs
-  attached to an image as referrers (Cosign's newer storage, Notation) are not
-  discoverable through Sindri (SIN-37).
+- **Referrers from before the move.** Sindri serves the OCI referrers API from 1.5, for
+  what is pushed to a hosted repository. A proxy repository answers with an empty list,
+  so signatures and SBOMs attached to an image in Harbor are not discoverable through
+  the proxy: attach them again after you publish to hosted. See
+  [Signatures and SBOMs](../clients/referrers.md).
 - **Project quotas.** Sindri has no per-project storage limit.
 - **Tag retention and immutability rules.** Nothing is carried over from Harbor's. Sindri has
   its own lifecycle stages and garbage collection, which work differently.

@@ -186,6 +186,20 @@ differently:
   vulnerabilities at release. A Sindri scan of the 1.4.0 image reports Go standard
   library, go-jose, `tzdata`, and `ca-certificates` findings, and 1.4.1 fixes them.
 
+## Behaviour changes in 1.5
+
+- **The OCI referrers API is served.** A client that attached signatures or SBOMs to an
+  older Sindri fell back to tags named `sha256-<digest>`. cosign and oras now ask the
+  API instead and stop reading those tags. **Manifests pushed before the upgrade are not
+  listed**, so attach older signatures and SBOMs again. The old tags stay and can be
+  deleted once that is done. See [Signatures and SBOMs](clients/referrers.md).
+- **`referrers` is a reserved repository name segment.** A new repository cannot have a
+  name segment `referrers`. One that already exists keeps working.
+- **The garbage collector keeps a referrer for as long as its subject.** An untagged
+  signature used to be collected after the grace period.
+- **A signature or SBOM attached as a referrer is not scanned on publish.** An image is,
+  as before, whether or not it names a subject.
+
 ## Rolling back
 
 Every migration stays backward compatible for one release, so the previous
@@ -204,6 +218,12 @@ Rolling back from 1.1.1 to 1.1.0 needs no configuration change. A 1.1.0 server s
 entries refresh, so yarn 4 refuses every version again unless `npmMinimalAgeGate: 0` is
 back in `.yarnrc.yml`. Restore it before you roll back. The `published_at` column stays,
 unused.
+
+Rolling back from 1.5 to 1.4.x needs no configuration change. A 1.4.x server answers 404
+on the referrers route, so clients go back to the `sha256-<digest>` tags, which were not
+written while 1.5 ran: attach signatures again if you stay rolled back. Its garbage
+collector also collects untagged referrers after the grace period again. The
+`manifest_subjects` table stays, unused.
 
 Rolling back further than one release is not supported without restoring the
 backup taken before the upgrade.
