@@ -393,3 +393,331 @@ func TestOCI_TagsList_LargeNIsClampedWithLink(t *testing.T) {
 		})
 	}
 }
+
+// pushImageManifest pushes a one-layer image under tag and returns the
+// manifest's digest, size, and media type as a descriptor.
+func pushImageManifest(t *testing.T, h http.Handler, repo, tag, seed string) ocispec.Descriptor {
+	t.Helper()
+	config := []byte(`{"architecture":"amd64","os":"linux","seed":"` + seed + `"}`)
+	layer := []byte("layer for " + seed)
+	pushBlob(t, h, repo, config, digestOf(config))
+	pushBlob(t, h, repo, layer, digestOf(layer))
+	body, err := json.Marshal(ocispec.Manifest{
+		Versioned: specs.Versioned{SchemaVersion: 2},
+		MediaType: ocispec.MediaTypeImageManifest,
+		Config:    ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig, Digest: digest.Digest(digestOf(config)), Size: int64(len(config))},
+		Layers:    []ocispec.Descriptor{{MediaType: ocispec.MediaTypeImageLayer, Digest: digest.Digest(digestOf(layer)), Size: int64(len(layer))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := mustDo(t, h, http.MethodPut, "/v2/"+repo+"/manifests/"+tag, body, ocispec.MediaTypeImageManifest)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT subject manifest into %s: %d %s", repo, res.StatusCode, res.Body)
+	}
+	return ocispec.Descriptor{MediaType: ocispec.MediaTypeImageManifest, Digest: digest.Digest(digestOf(body)), Size: int64(len(body))}
+}
+
+// pushReferrerManifest pushes an artifact manifest (empty config) that names
+// subject, by digest, and returns its descriptor and the PUT result. A
+// non-empty explicitType is set as artifactType; otherwise the config media
+// type decides.
+func pushReferrerManifest(t *testing.T, h http.Handler, repo string, subject ocispec.Descriptor, explicitType, configType, seed string, annotations map[string]string) (ocispec.Descriptor, httpResult) {
+	t.Helper()
+	config := []byte(`{}`)
+	pushBlob(t, h, repo, config, digestOf(config))
+	layer := []byte("referrer payload " + seed)
+	pushBlob(t, h, repo, layer, digestOf(layer))
+	body, err := json.Marshal(ocispec.Manifest{
+		Versioned:    specs.Versioned{SchemaVersion: 2},
+		MediaType:    ocispec.MediaTypeImageManifest,
+		ArtifactType: explicitType,
+		Config:       ocispec.Descriptor{MediaType: configType, Digest: digest.Digest(digestOf(config)), Size: int64(len(config))},
+		Layers:       []ocispec.Descriptor{{MediaType: "application/octet-stream", Digest: digest.Digest(digestOf(layer)), Size: int64(len(layer))}},
+		Subject:      &subject,
+		Annotations:  annotations,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := digestOf(body)
+	res := mustDo(t, h, http.MethodPut, "/v2/"+repo+"/manifests/"+d, body, ocispec.MediaTypeImageManifest)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT referrer into %s: %d %s", repo, res.StatusCode, res.Body)
+	}
+	return ocispec.Descriptor{MediaType: ocispec.MediaTypeImageManifest, Digest: digest.Digest(d), Size: int64(len(body))}, res
+}
+
+func listReferrers(t *testing.T, h http.Handler, repo, subject, query string) (ocispec.Index, httpResult) {
+	t.Helper()
+	path := "/v2/" + repo + "/referrers/" + subject
+	if query != "" {
+		path += "?" + query
+	}
+	res := mustDo(t, h, http.MethodGet, path, nil, "")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: %d %s", path, res.StatusCode, res.Body)
+	}
+	var idx ocispec.Index
+	if err := json.Unmarshal([]byte(res.Body), &idx); err != nil {
+		t.Fatalf("decoding referrers index %q: %v", res.Body, err)
+	}
+	return idx, res
+}
+
+func digestsOf(idx ocispec.Index) []string {
+	out := make([]string, 0, len(idx.Manifests))
+	for _, m := range idx.Manifests {
+		out = append(out, m.Digest.String())
+	}
+	return out
+}
+
+// TestOCI_ReferrersListsOnlyManifestsPlacedInTheRepository guards invariant
+// I2 (ARCHITECTURE.md section 2) for the referrers API: a referrer is listed
+// only in the repository it is placed in, even when another repository holds
+// the same subject, and deleting it by digest removes the entry.
+func TestOCI_ReferrersListsOnlyManifestsPlacedInTheRepository(t *testing.T) {
+	client := newOCIClient(t)
+	createRepo(t, client, "team-a/app", "oci")
+	createRepo(t, client, "team-b/app", "oci")
+
+	subjectA := pushImageManifest(t, client, "team-a/app", "1.0", "same")
+	subjectB := pushImageManifest(t, client, "team-b/app", "1.0", "same")
+	if subjectA.Digest != subjectB.Digest {
+		t.Fatalf("setup: subjects differ: %s vs %s", subjectA.Digest, subjectB.Digest)
+	}
+	referrer, _ := pushReferrerManifest(t, client, "team-a/app", subjectA, "application/vnd.example.sig", ocispec.MediaTypeEmptyJSON, "sig", nil)
+
+	inA, _ := listReferrers(t, client, "team-a/app", subjectA.Digest.String(), "")
+	if got := digestsOf(inA); len(got) != 1 || got[0] != referrer.Digest.String() {
+		t.Fatalf("team-a list = %v, want [%s]", got, referrer.Digest)
+	}
+	inB, _ := listReferrers(t, client, "team-b/app", subjectA.Digest.String(), "")
+	if got := digestsOf(inB); len(got) != 0 {
+		t.Fatalf("team-b list = %v, want empty: a referrer placed only in team-a leaked", got)
+	}
+
+	del := mustDo(t, client, http.MethodDelete, "/v2/team-a/app/manifests/"+referrer.Digest.String(), nil, "")
+	if del.StatusCode != http.StatusAccepted {
+		t.Fatalf("DELETE referrer: %d %s", del.StatusCode, del.Body)
+	}
+	after, _ := listReferrers(t, client, "team-a/app", subjectA.Digest.String(), "")
+	if got := digestsOf(after); len(got) != 0 {
+		t.Fatalf("team-a list after delete = %v, want empty", got)
+	}
+}
+
+func TestOCI_ReferrersFilterAndSubjectHeader(t *testing.T) {
+	client := newOCIClient(t)
+	createRepo(t, client, "demo/app", "oci")
+	subject := pushImageManifest(t, client, "demo/app", "1.0", "filter")
+
+	annotations := map[string]string{"org.example.note": "hello"}
+	sig, sigPut := pushReferrerManifest(t, client, "demo/app", subject, "application/vnd.example.sig", ocispec.MediaTypeEmptyJSON, "sig", annotations)
+	sbom, _ := pushReferrerManifest(t, client, "demo/app", subject, "", "application/vnd.example.sbom.config", "sbom", nil)
+
+	// An index with a subject is a referrer too.
+	idxBody, err := json.Marshal(ocispec.Index{
+		Versioned:    specs.Versioned{SchemaVersion: 2},
+		MediaType:    ocispec.MediaTypeImageIndex,
+		ArtifactType: "application/vnd.example.bundle",
+		Manifests:    []ocispec.Descriptor{sig},
+		Subject:      &subject,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idxDigest := digestOf(idxBody)
+	idxPut := mustDo(t, client, http.MethodPut, "/v2/demo/app/manifests/"+idxDigest, idxBody, ocispec.MediaTypeImageIndex)
+	if idxPut.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT index with subject: %d %s", idxPut.StatusCode, idxPut.Body)
+	}
+
+	for _, put := range []httpResult{sigPut, idxPut} {
+		if got := put.Header.Get("OCI-Subject"); got != subject.Digest.String() {
+			t.Fatalf("OCI-Subject = %q, want %s", got, subject.Digest)
+		}
+	}
+	plain := mustDo(t, client, http.MethodPut, "/v2/demo/app/manifests/2.0", []byte(mustDo(t, client, http.MethodGet, "/v2/demo/app/manifests/1.0", nil, "").Body), ocispec.MediaTypeImageManifest)
+	if plain.StatusCode != http.StatusCreated || plain.Header.Get("OCI-Subject") != "" {
+		t.Fatalf("push without subject: %d, OCI-Subject %q, want 201 and none", plain.StatusCode, plain.Header.Get("OCI-Subject"))
+	}
+
+	cases := []struct {
+		name       string
+		query      string
+		want       []string
+		wantFilter bool
+	}{
+		{name: "no filter lists all three", query: "", want: []string{sig.Digest.String(), sbom.Digest.String(), idxDigest}},
+		{name: "explicit artifactType filters", query: "artifactType=application/vnd.example.sig", want: []string{sig.Digest.String()}, wantFilter: true},
+		{name: "config media type is the fallback artifactType", query: "artifactType=application/vnd.example.sbom.config", want: []string{sbom.Digest.String()}, wantFilter: true},
+		{name: "index artifactType filters", query: "artifactType=application/vnd.example.bundle", want: []string{idxDigest}, wantFilter: true},
+		{name: "unmatched filter lists none", query: "artifactType=application/none", want: nil, wantFilter: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			idx, res := listReferrers(t, client, "demo/app", subject.Digest.String(), tc.query)
+			got := digestsOf(idx)
+			if !sameSet(got, tc.want) {
+				t.Fatalf("listed %v, want %v", got, tc.want)
+			}
+			if ct := res.Header.Get("Content-Type"); ct != ocispec.MediaTypeImageIndex {
+				t.Fatalf("Content-Type = %q", ct)
+			}
+			if idx.SchemaVersion != 2 || idx.MediaType != ocispec.MediaTypeImageIndex {
+				t.Fatalf("index envelope = %+v", idx)
+			}
+			if applied := res.Header.Get("OCI-Filters-Applied") == "artifactType"; applied != tc.wantFilter {
+				t.Fatalf("OCI-Filters-Applied = %q, want applied=%v", res.Header.Get("OCI-Filters-Applied"), tc.wantFilter)
+			}
+		})
+	}
+
+	idx, _ := listReferrers(t, client, "demo/app", subject.Digest.String(), "")
+	byDigest := map[string]ocispec.Descriptor{}
+	for _, m := range idx.Manifests {
+		byDigest[m.Digest.String()] = m
+	}
+	if d := byDigest[sig.Digest.String()]; d.Size != sig.Size || d.MediaType != ocispec.MediaTypeImageManifest ||
+		d.ArtifactType != "application/vnd.example.sig" || d.Annotations["org.example.note"] != "hello" {
+		t.Fatalf("sig descriptor = %+v, want size %d, annotations %v", d, sig.Size, annotations)
+	}
+	if d := byDigest[sbom.Digest.String()]; d.ArtifactType != "application/vnd.example.sbom.config" || len(d.Annotations) != 0 {
+		t.Fatalf("sbom descriptor = %+v", d)
+	}
+	if d := byDigest[idxDigest]; d.MediaType != ocispec.MediaTypeImageIndex || d.Size != int64(len(idxBody)) {
+		t.Fatalf("index descriptor = %+v", d)
+	}
+}
+
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, s := range a {
+		seen[s]++
+	}
+	for _, s := range b {
+		seen[s]--
+	}
+	for _, n := range seen {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func TestOCI_ReferrersOfUnknownSubjectIsAnEmptyIndex(t *testing.T) {
+	client := newOCIClient(t)
+	createRepo(t, client, "demo/app", "oci")
+
+	unknown := digestOf([]byte("never pushed"))
+	res := mustDo(t, client, http.MethodGet, "/v2/demo/app/referrers/"+unknown, nil, "")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("unknown subject: %d %s, want 200", res.StatusCode, res.Body)
+	}
+	if ct := res.Header.Get("Content-Type"); ct != ocispec.MediaTypeImageIndex {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	if !strings.Contains(res.Body, `"manifests":[]`) {
+		t.Fatalf("body %s lacks an empty manifests array", res.Body)
+	}
+
+	for _, bad := range []string{"sha256:short", "nonsense", "sha256:" + strings.Repeat("Z", 64)} {
+		t.Run("malformed "+bad[:min(len(bad), 12)], func(t *testing.T) {
+			res := mustDo(t, client, http.MethodGet, "/v2/demo/app/referrers/"+bad, nil, "")
+			if res.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status %d %s, want 400", res.StatusCode, res.Body)
+			}
+			var e struct {
+				Errors []struct {
+					Code string `json:"code"`
+				} `json:"errors"`
+			}
+			if err := json.Unmarshal([]byte(res.Body), &e); err != nil || len(e.Errors) == 0 || e.Errors[0].Code != oci.CodeDigestInvalid {
+				t.Fatalf("body %s is not an OCI %s error", res.Body, oci.CodeDigestInvalid)
+			}
+		})
+	}
+}
+
+func TestOCI_ReferrersPagesWithLinkHeader(t *testing.T) {
+	defer oci.SetReferrersPageSize(2)()
+	client := newOCIClient(t)
+	createRepo(t, client, "demo/app", "oci")
+	subject := pushImageManifest(t, client, "demo/app", "1.0", "paging")
+
+	want := map[string]bool{}
+	for i := range 5 {
+		d, _ := pushReferrerManifest(t, client, "demo/app", subject, "application/vnd.example.sig", ocispec.MediaTypeEmptyJSON, fmt.Sprintf("r%d", i), nil)
+		want[d.Digest.String()] = true
+	}
+
+	seen := map[string]int{}
+	path := "/v2/demo/app/referrers/" + subject.Digest.String() + "?artifactType=application%2Fvnd.example.sig"
+	pages := 0
+	for path != "" {
+		pages++
+		if pages > 10 {
+			t.Fatal("pagination does not terminate")
+		}
+		res := mustDo(t, client, http.MethodGet, path, nil, "")
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, res.StatusCode, res.Body)
+		}
+		if res.Header.Get("OCI-Filters-Applied") != "artifactType" {
+			t.Fatalf("page %d lacks OCI-Filters-Applied", pages)
+		}
+		var idx ocispec.Index
+		if err := json.Unmarshal([]byte(res.Body), &idx); err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range digestsOf(idx) {
+			seen[d]++
+		}
+		path = ""
+		if link := res.Header.Get("Link"); link != "" {
+			start, end := strings.Index(link, "<"), strings.Index(link, ">")
+			if start != 0 || end < 0 || !strings.HasSuffix(link, `; rel="next"`) {
+				t.Fatalf("Link = %q", link)
+			}
+			path = link[1:end]
+			if !strings.Contains(path, "artifactType=application%2Fvnd.example.sig") {
+				t.Fatalf("next link %q dropped the filter", path)
+			}
+		}
+	}
+	if pages != 3 || len(seen) != len(want) {
+		t.Fatalf("pages = %d, distinct = %d, want 3 and %d", pages, len(seen), len(want))
+	}
+	for d, n := range seen {
+		if !want[d] || n != 1 {
+			t.Fatalf("referrer %s seen %d times (expected: %v)", d, n, want[d])
+		}
+	}
+}
+
+// An image whose name has a referrers segment keeps working: the route is
+// recognised only as the last two segments, /referrers/<digest> (ADR 32).
+func TestOCI_ImageNameWithReferrersSegmentStillServesManifests(t *testing.T) {
+	client := newOCIClient(t)
+	createRepo(t, client, "team", "oci")
+
+	subject := pushImageManifest(t, client, "team/referrers/app", "1.0", "legacy")
+	got := mustDo(t, client, http.MethodGet, "/v2/team/referrers/app/manifests/1.0", nil, "")
+	if got.StatusCode != http.StatusOK || digestOf([]byte(got.Body)) != subject.Digest.String() {
+		t.Fatalf("GET manifest of team/referrers/app: %d %s", got.StatusCode, got.Body)
+	}
+	tags := mustDo(t, client, http.MethodGet, "/v2/team/referrers/app/tags/list", nil, "")
+	if tags.StatusCode != http.StatusOK || !strings.Contains(tags.Body, `"1.0"`) {
+		t.Fatalf("tags of team/referrers/app: %d %s", tags.StatusCode, tags.Body)
+	}
+	idx, _ := listReferrers(t, client, "team", subject.Digest.String(), "")
+	if len(idx.Manifests) != 0 {
+		t.Fatalf("referrers = %v, want none", digestsOf(idx))
+	}
+}

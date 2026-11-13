@@ -7,6 +7,7 @@
 - [Quickstart](quickstart.md)
 - [Using pip and twine](clients/pip.md)
 - [Using npm, pnpm, and yarn](clients/npm.md)
+- [Signatures and SBOMs with cosign and oras](clients/referrers.md)
 - [Scanning and the severity gate](scanning.md)
 - [Configuration reference](configuration.md)
 - [Upgrading](upgrading.md)
@@ -58,3 +59,4 @@
   - [29. What a scan covers, and which scans a severity gate trusts](adr/0029-what-a-scan-covers.md)
   - [30. The severity gate: a ceiling, read from worker metadata](adr/0030-severity-gate.md)
   - [31. Re-scanning approved subjects, and what a new finding does](adr/0031-rescan-approved-subjects.md)
+  - [32. The OCI referrers API: a view over placed manifests](adr/0032-oci-referrers.md)

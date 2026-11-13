@@ -324,3 +324,25 @@ SELECT EXISTS (
     SELECT 1 FROM retired_files
     WHERE package_id = sqlc.arg('package_id') AND filename = sqlc.arg('filename')
 );
+
+-- name: InsertManifestSubject :exec
+-- Records what a hosted manifest says about its subject (ADR 32). The facts
+-- come from the bytes, and the row is shared by every repository that places
+-- the digest, so a later push of the same digest never changes it.
+INSERT INTO manifest_subjects (referrer_digest, subject_digest, media_type, artifact_type, size, annotations)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (referrer_digest) DO NOTHING;
+
+-- name: ListReferrers :many
+-- Invariant I2: only referrers placed in this repository are listed. The
+-- repository_blobs join is the placement check; without it every tenant's
+-- signatures would be visible through any repository that holds the subject.
+SELECT ms.referrer_digest, ms.media_type, ms.artifact_type, ms.size, ms.annotations
+FROM manifest_subjects ms
+JOIN repository_blobs rb
+  ON rb.repo_id = sqlc.arg('repo_id') AND rb.digest = ms.referrer_digest
+WHERE ms.subject_digest = sqlc.arg('subject_digest')
+  AND (sqlc.arg('artifact_type')::text = '' OR ms.artifact_type = sqlc.arg('artifact_type')::text)
+  AND ms.referrer_digest > sqlc.arg('after_digest')::text
+ORDER BY ms.referrer_digest
+LIMIT sqlc.arg('page_limit');

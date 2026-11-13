@@ -297,6 +297,9 @@ tags(repo_id FK, package_id FK, name, target_digest FK,
      PRIMARY KEY (repo_id, package_id, name))     -- mutable, OCI
 manifest_children(parent_digest FK, child_digest FK,
                   PRIMARY KEY (parent_digest, child_digest))
+manifest_subjects(referrer_digest PK FK, subject_digest,   -- OCI referrers (ADR 32);
+                  media_type, artifact_type, size,         -- read from the bytes, written once;
+                  annotations jsonb)                       -- no FK on the subject
 repository_blobs(repo_id FK, digest FK,
                  PRIMARY KEY (repo_id, digest))   -- OCI blob membership (I2)
 dist_tags(package_id FK, tag, version_id FK,
@@ -329,7 +332,7 @@ and `foo-bar` cannot both be claimed.
 
 A repository name may contain slashes, so that `team/internal` reads naturally in a
 `docker pull` or an index URL. It may not contain a segment an adapter splits paths on
-(`blobs`, `manifests`, `tags`, `uploads`, `simple`, `packages`, `upload`, and the UI's
+(`blobs`, `manifests`, `tags`, `referrers`, `uploads`, `simple`, `packages`, `upload`, and the UI's
 `-`), because
 `/pypi/team/packages/simple/foo/` would otherwise name either a repository or a download.
 The rule lives in one validator rather than in each adapter. See ADR 13.
@@ -357,11 +360,18 @@ Garbage collection is then a reachability query from tags and lifecycle states, 
 far safer than reference counting: a refcount that drifts either leaks storage forever or
 deletes live data, and it cannot be recomputed after the fact.
 
+`manifest_subjects` records, for a manifest that names a `subject`, what the OCI referrers
+API lists about it. The row says nothing about who may see it: a repository's referrers
+list is the join with `repository_blobs`, so it holds only manifests placed in that
+repository (I2). Referrers are never evidence, and no gate reads this table (ADR 32).
+
 ### Garbage collection
 
 The roots are tags, PyPI files, proxy cache hits, evidence, and every subject
 with ledger history. Anything they do not reach through `manifest_children`,
-and that was last seen before the grace period, is a candidate. That includes
+or as a referrer of something reached (`manifest_subjects`: a signature lives as
+long as the image it signs), and that was last seen before the grace period, is
+a candidate. That includes
 an untagged, unpromoted image and a layer no manifest names. Placement in
 `repository_blobs` is not a root.
 

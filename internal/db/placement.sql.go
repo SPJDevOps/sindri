@@ -594,6 +594,36 @@ func (q *Queries) InsertFileImmutable(ctx context.Context, arg InsertFileImmutab
 	return i, err
 }
 
+const insertManifestSubject = `-- name: InsertManifestSubject :exec
+INSERT INTO manifest_subjects (referrer_digest, subject_digest, media_type, artifact_type, size, annotations)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (referrer_digest) DO NOTHING
+`
+
+type InsertManifestSubjectParams struct {
+	ReferrerDigest string `json:"referrer_digest"`
+	SubjectDigest  string `json:"subject_digest"`
+	MediaType      string `json:"media_type"`
+	ArtifactType   string `json:"artifact_type"`
+	Size           int64  `json:"size"`
+	Annotations    []byte `json:"annotations"`
+}
+
+// Records what a hosted manifest says about its subject (ADR 32). The facts
+// come from the bytes, and the row is shared by every repository that places
+// the digest, so a later push of the same digest never changes it.
+func (q *Queries) InsertManifestSubject(ctx context.Context, arg InsertManifestSubjectParams) error {
+	_, err := q.db.Exec(ctx, insertManifestSubject,
+		arg.ReferrerDigest,
+		arg.SubjectDigest,
+		arg.MediaType,
+		arg.ArtifactType,
+		arg.Size,
+		arg.Annotations,
+	)
+	return err
+}
+
 const insertRetiredFile = `-- name: InsertRetiredFile :exec
 INSERT INTO retired_files (package_id, version, filename)
 VALUES ($1, $2, $3)
@@ -782,6 +812,69 @@ func (q *Queries) ListPackagesByRepo(ctx context.Context, arg ListPackagesByRepo
 			&i.RepoID,
 			&i.NormalizedName,
 			&i.DisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReferrers = `-- name: ListReferrers :many
+SELECT ms.referrer_digest, ms.media_type, ms.artifact_type, ms.size, ms.annotations
+FROM manifest_subjects ms
+JOIN repository_blobs rb
+  ON rb.repo_id = $1 AND rb.digest = ms.referrer_digest
+WHERE ms.subject_digest = $2
+  AND ($3::text = '' OR ms.artifact_type = $3::text)
+  AND ms.referrer_digest > $4::text
+ORDER BY ms.referrer_digest
+LIMIT $5
+`
+
+type ListReferrersParams struct {
+	RepoID        uuid.UUID `json:"repo_id"`
+	SubjectDigest string    `json:"subject_digest"`
+	ArtifactType  string    `json:"artifact_type"`
+	AfterDigest   string    `json:"after_digest"`
+	PageLimit     int32     `json:"page_limit"`
+}
+
+type ListReferrersRow struct {
+	ReferrerDigest string `json:"referrer_digest"`
+	MediaType      string `json:"media_type"`
+	ArtifactType   string `json:"artifact_type"`
+	Size           int64  `json:"size"`
+	Annotations    []byte `json:"annotations"`
+}
+
+// Invariant I2: only referrers placed in this repository are listed. The
+// repository_blobs join is the placement check; without it every tenant's
+// signatures would be visible through any repository that holds the subject.
+func (q *Queries) ListReferrers(ctx context.Context, arg ListReferrersParams) ([]ListReferrersRow, error) {
+	rows, err := q.db.Query(ctx, listReferrers,
+		arg.RepoID,
+		arg.SubjectDigest,
+		arg.ArtifactType,
+		arg.AfterDigest,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReferrersRow{}
+	for rows.Next() {
+		var i ListReferrersRow
+		if err := rows.Scan(
+			&i.ReferrerDigest,
+			&i.MediaType,
+			&i.ArtifactType,
+			&i.Size,
+			&i.Annotations,
 		); err != nil {
 			return nil, err
 		}

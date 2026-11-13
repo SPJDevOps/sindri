@@ -118,6 +118,7 @@ func TestRBAC_AnonymousPullAndInstallRefused(t *testing.T) {
 		{"OCIManifest", "", "/v2/docker/demo/app/manifests/1.0", "Basic"},
 		{"OCIBlob", "", "/v2/docker/demo/app/blobs/" + m.Layers[0].Digest.String(), "Basic"},
 		{"OCITags", "", "/v2/docker/demo/app/tags/list", "Basic"},
+		{"OCIReferrers", "", "/v2/docker/demo/app/referrers/" + m.Config.Digest.String(), "Basic"},
 		{"PyPIRootIndex", "", "/pypi/internal-py/simple/", "Basic"},
 		{"PyPIProjectIndex", "", "/pypi/internal-py/simple/demo-package/", "Basic"},
 		{"PyPIDownload", "", "/pypi/internal-py/packages/demo-package/demo_package-1.0-py3-none-any.whl", "Basic"},
@@ -244,5 +245,28 @@ func TestRBAC_MachineTokenScopedToRepository(t *testing.T) {
 	}
 	if r := s.request(http.MethodGet, "/v2/docker/demo/app/manifests/1.0", nil, asReader); r.status != http.StatusUnauthorized {
 		t.Fatalf("revoked token: %d, want 401", r.status)
+	}
+}
+
+// The referrers route authorizes like every other read: a caller without read
+// on the repository gets the same 404 NAME_UNKNOWN as for a manifest, so the
+// route does not disclose that the repository exists (ADR 18, ADR 32).
+func TestRBAC_ReferrersOfAnUnreadableRepositoryIs404(t *testing.T) {
+	s := startServe(t, testsupport.StartPostgres(t), rbacRepos, nil)
+	if status, body := s.pushImage("docker/demo/app", "1.0", "ref", bearer(bootstrapToken)); status != http.StatusCreated {
+		t.Fatalf("setup push: %d %s", status, body)
+	}
+	if status, body := s.pushImage("secret/app", "1.0", "ref", bearer(bootstrapToken)); status != http.StatusCreated {
+		t.Fatalf("setup push to secret: %d %s", status, body)
+	}
+	subject := s.request(http.MethodGet, "/v2/secret/app/manifests/1.0", nil, bearer(bootstrapToken)).header.Get("Docker-Content-Digest")
+	reader := basic("ci", s.issueToken(`{"name":"ci-pull","repository":"docker","role":"read"}`).Token)
+
+	if r := s.request(http.MethodGet, "/v2/docker/demo/app/referrers/"+subject, nil, reader); r.status != http.StatusOK {
+		t.Fatalf("readable repository: %d %s, want 200", r.status, r.body)
+	}
+	r := s.request(http.MethodGet, "/v2/secret/app/referrers/"+subject, nil, reader)
+	if r.status != http.StatusNotFound || ociCode(t, r.body) != "NAME_UNKNOWN" {
+		t.Fatalf("unreadable repository: %d %s, want 404 NAME_UNKNOWN", r.status, r.body)
 	}
 }

@@ -3,7 +3,9 @@
 <!-- commands checked by: scripts/m11-scan-gate.sh -->
 
 With scanning enabled, every hosted publish is scanned, and promotion is refused above a
-severity. This page turns that on, shows what a refusal looks like, and explains how to
+severity. The one exception is a signature or SBOM attached to an image as an OCI
+referrer, which is a document and not an image; see
+[Signatures and SBOMs](clients/referrers.md). This page turns that on, shows what a refusal looks like, and explains how to
 read the scan evidence behind it. It ends with how to run scanning on a server that
 cannot reach the internet.
 

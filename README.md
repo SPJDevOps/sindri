@@ -51,8 +51,8 @@ publishes an npm package.
   never serve a name you publish, which is the defence against dependency confusion.
 - **Lifecycle:** stages and promotion that change an artifact's trust status without
   copying its bytes, with gates on evidence and an append-only audit ledger.
-- **Scanning:** with the `-trivy` image and scanning enabled, every hosted publish is
-  scanned, and promotion is refused above a severity you set. Works air-gapped with a
+- **Scanning:** with the `-trivy` image and scanning enabled, every hosted image and
+  package is scanned on publish, and promotion is refused above a severity you set. Works air-gapped with a
   mirror of Trivy's databases. See
   [Scanning and the severity gate](https://spjdevops.github.io/sindri/scanning.html).
 - **Configuration as code:** one YAML file for one team, reconciled on startup, and
@@ -82,7 +82,8 @@ lifecycle:
 The full documentation is at **<https://spjdevops.github.io/sindri/>**.
 
 - **Use it:** [pip and twine](https://spjdevops.github.io/sindri/clients/pip.html),
-  [npm, pnpm, and yarn](https://spjdevops.github.io/sindri/clients/npm.html), and the
+  [npm, pnpm, and yarn](https://spjdevops.github.io/sindri/clients/npm.html),
+  [cosign and oras](https://spjdevops.github.io/sindri/clients/referrers.html), and the
   [configuration reference](https://spjdevops.github.io/sindri/configuration.html)
 - **Deploy it:** [Docker Compose](https://spjdevops.github.io/sindri/deploy/compose.html),
   [Kubernetes with Helm](https://spjdevops.github.io/sindri/deploy/helm.html), and
@@ -100,7 +101,7 @@ So that nothing is silently missing:
 - **Several replicas.** Sindri runs as one replica, because upload sessions live in memory.
 - **Other formats.** Maven, and Helm's own repository format. Helm charts as OCI artifacts
   work today.
-- **OCI:** the referrers API and cross-repository blob mounts.
+- **OCI:** cross-repository blob mounts.
 - **Storage:** native Google Cloud Storage and Azure Blob Storage.
 - **Auth:** SAML, LDAP, and per-path access rules.
 

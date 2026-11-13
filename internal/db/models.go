@@ -123,6 +123,15 @@ type ManifestChild struct {
 	ChildDigest  string `json:"child_digest"`
 }
 
+type ManifestSubject struct {
+	ReferrerDigest string `json:"referrer_digest"`
+	SubjectDigest  string `json:"subject_digest"`
+	MediaType      string `json:"media_type"`
+	ArtifactType   string `json:"artifact_type"`
+	Size           int64  `json:"size"`
+	Annotations    []byte `json:"annotations"`
+}
+
 type OrgPolicy struct {
 	ID        int16     `json:"id"`
 	Spec      []byte    `json:"spec"`

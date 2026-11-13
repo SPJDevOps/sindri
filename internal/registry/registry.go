@@ -407,7 +407,7 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 		kind = model.SubjectKindNPMTarball
 	case model.ProtocolOCI:
 	}
-	if err := r.recordSubject(ctx, q, repo, info.Digest, info.Size, kind, p.Provenance); err != nil {
+	if err := r.recordSubject(ctx, q, repo, info.Digest, info.Size, kind, p.Provenance, true); err != nil {
 		return model.File{}, err
 	}
 
@@ -815,6 +815,7 @@ var reservedNameSegments = map[string]struct{}{
 	"blobs":     {}, // OCI
 	"manifests": {}, // OCI
 	"tags":      {}, // OCI
+	"referrers": {}, // OCI
 	"uploads":   {}, // OCI
 	"simple":    {}, // PyPI
 	"packages":  {}, // PyPI

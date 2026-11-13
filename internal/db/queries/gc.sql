@@ -1,7 +1,12 @@
 -- name: GCCandidates :many
 -- The mark phase (ADR 19). A blob is live when a root reaches it, directly or
--- through manifest_children; everything else older than the grace period is a
--- candidate. The sweep re-checks each candidate under a row lock, so this
+-- through an edge; everything else older than the grace period is a
+-- candidate. An edge runs from a manifest to each of its children, and from a
+-- subject to each manifest that refers to it and is placed in a repository
+-- that also places the subject: a signature lives as long as the image it
+-- signs (ADR 32). Without the placement condition a referrer deleted from its
+-- repository would stay forever, and anyone could pin bytes to an image they
+-- do not own. The sweep re-checks each candidate under a row lock, so this
 -- query only proposes: it never decides on its own that bytes may go.
 --
 -- Roots: tags, PyPI files, proxy cache hits, evidence documents and the
@@ -21,12 +26,26 @@ WITH RECURSIVE roots (digest) AS (
     UNION
     SELECT subject_digest FROM lifecycle_events
 ),
+edges (from_digest, to_digest) AS (
+    SELECT parent_digest, child_digest FROM manifest_children
+    UNION ALL
+    SELECT ms.subject_digest, ms.referrer_digest
+    FROM manifest_subjects ms
+    WHERE EXISTS (
+        SELECT 1
+        FROM repository_blobs placed_referrer
+        JOIN repository_blobs placed_subject
+          ON placed_subject.repo_id = placed_referrer.repo_id
+         AND placed_subject.digest = ms.subject_digest
+        WHERE placed_referrer.digest = ms.referrer_digest
+    )
+),
 live (digest) AS (
     SELECT digest FROM roots
     UNION
-    SELECT mc.child_digest
-    FROM manifest_children mc
-    JOIN live l ON mc.parent_digest = l.digest
+    SELECT e.to_digest
+    FROM edges e
+    JOIN live l ON e.from_digest = l.digest
 )
 SELECT b.digest, b.size, b.last_seen_at,
        EXISTS (SELECT 1 FROM manifest_children p WHERE p.parent_digest = b.digest)::bool AS is_parent
@@ -63,7 +82,9 @@ FOR UPDATE SKIP LOCKED;
 -- name: GCBlobReferenced :one
 -- The sweep's re-check, run under the row locks. Every reference a live blob
 -- can have, counted conservatively: an edge from a dead parent still counts,
--- and the next pass collects the child once the parent has gone.
+-- and the next pass collects the child once the parent has gone. A referrer
+-- is held the same way for as long as some repository places both it and its
+-- subject.
 SELECT (
     EXISTS (SELECT 1 FROM tags WHERE target_digest = sqlc.arg('digest'))
     OR EXISTS (SELECT 1 FROM files WHERE blob_digest = sqlc.arg('digest'))
@@ -72,6 +93,15 @@ SELECT (
     OR EXISTS (SELECT 1 FROM evidence WHERE blob_digest = sqlc.arg('digest'))
     OR EXISTS (SELECT 1 FROM evidence WHERE subject_digest = sqlc.arg('digest'))
     OR EXISTS (SELECT 1 FROM lifecycle_events WHERE subject_digest = sqlc.arg('digest'))
+    OR EXISTS (
+        SELECT 1
+        FROM manifest_subjects ms
+        JOIN repository_blobs placed_referrer ON placed_referrer.digest = ms.referrer_digest
+        JOIN repository_blobs placed_subject
+          ON placed_subject.repo_id = placed_referrer.repo_id
+         AND placed_subject.digest = ms.subject_digest
+        WHERE ms.referrer_digest = sqlc.arg('digest')
+    )
 )::bool AS referenced;
 
 -- name: GCDeleteManifestEdges :exec
@@ -93,3 +123,8 @@ DELETE FROM subjects WHERE digest = $1;
 -- The foreign keys from tags, files, evidence, and remote_cache restrict, so
 -- a reference the re-check somehow missed fails this delete loudly.
 DELETE FROM blobs WHERE digest = $1;
+
+-- name: GCDeleteManifestSubject :exec
+-- referrer_digest references blobs, so the row goes before the blob does
+-- (ADR 32).
+DELETE FROM manifest_subjects WHERE referrer_digest = $1;

@@ -30,8 +30,9 @@ func OwnerRef(repoName string) string {
 //
 // Only hosted repositories hold artifacts that are ours (invariant I4). A
 // proxy cache path must never call this, and the guard below makes a mistaken
-// call a no-op rather than a promotable subject.
-func (r *Registry) recordSubject(ctx context.Context, q *db.Queries, repo db.Repository, digest model.Digest, size int64, kind model.SubjectKind, prov model.Provenance) error {
+// call a no-op rather than a promotable subject. scan false records the
+// subject without queueing a scan.
+func (r *Registry) recordSubject(ctx context.Context, q *db.Queries, repo db.Repository, digest model.Digest, size int64, kind model.SubjectKind, prov model.Provenance, scan bool) error {
 	if repo.Type != string(model.RepoTypeHosted) {
 		return nil
 	}
@@ -57,6 +58,11 @@ func (r *Registry) recordSubject(ctx context.Context, q *db.Queries, repo db.Rep
 		}); err != nil {
 			return fmt.Errorf("recording provenance of %s: %w", digest, err)
 		}
+	}
+	if !scan {
+		// A referrer is a signature or a document, not an image (ADR 32
+		// decision 7). It stays a subject, so the on-demand scan works.
+		return nil
 	}
 	return r.enqueueScan(ctx, q, repo.Name, digest, kind)
 }

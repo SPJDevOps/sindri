@@ -321,6 +321,7 @@ func (c *Collector) sweepOne(ctx context.Context, cand Candidate) (outcome, erro
 		del  func(context.Context, string) error
 	}{
 		{"manifest edges", q.GCDeleteManifestEdges},
+		{"manifest subject", q.GCDeleteManifestSubject},
 		{"placements", q.GCDeletePlacements},
 		{"owners", q.GCDeleteSubjectOwners},
 		{"provenance", q.GCDeleteProvenance},
