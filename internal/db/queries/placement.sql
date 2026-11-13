@@ -325,18 +325,13 @@ SELECT EXISTS (
     WHERE package_id = sqlc.arg('package_id') AND filename = sqlc.arg('filename')
 );
 
--- name: UpsertManifestSubject :exec
+-- name: InsertManifestSubject :exec
 -- Records what a hosted manifest says about its subject (ADR 32). The facts
--- come from the bytes, so a re-push of the same digest rewrites identical
--- values.
+-- come from the bytes, and the row is shared by every repository that places
+-- the digest, so a later push of the same digest never changes it.
 INSERT INTO manifest_subjects (referrer_digest, subject_digest, media_type, artifact_type, size, annotations)
 VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (referrer_digest) DO UPDATE
-SET subject_digest = EXCLUDED.subject_digest,
-    media_type     = EXCLUDED.media_type,
-    artifact_type  = EXCLUDED.artifact_type,
-    size           = EXCLUDED.size,
-    annotations    = EXCLUDED.annotations;
+ON CONFLICT (referrer_digest) DO NOTHING;
 
 -- name: ListReferrers :many
 -- Invariant I2: only referrers placed in this repository are listed. The

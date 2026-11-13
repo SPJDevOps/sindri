@@ -1,7 +1,9 @@
 -- name: GCCandidates :many
 -- The mark phase (ADR 19). A blob is live when a root reaches it, directly or
--- through manifest_children; everything else older than the grace period is a
--- candidate. The sweep re-checks each candidate under a row lock, so this
+-- through an edge; everything else older than the grace period is a
+-- candidate. An edge runs from a manifest to each of its children, and from a
+-- subject to each manifest that refers to it: a signature lives as long as
+-- the image it signs (ADR 32). The sweep re-checks each candidate under a row lock, so this
 -- query only proposes: it never decides on its own that bytes may go.
 --
 -- Roots: tags, PyPI files, proxy cache hits, evidence documents and the
@@ -21,12 +23,17 @@ WITH RECURSIVE roots (digest) AS (
     UNION
     SELECT subject_digest FROM lifecycle_events
 ),
+edges (from_digest, to_digest) AS (
+    SELECT parent_digest, child_digest FROM manifest_children
+    UNION ALL
+    SELECT subject_digest, referrer_digest FROM manifest_subjects
+),
 live (digest) AS (
     SELECT digest FROM roots
     UNION
-    SELECT mc.child_digest
-    FROM manifest_children mc
-    JOIN live l ON mc.parent_digest = l.digest
+    SELECT e.to_digest
+    FROM edges e
+    JOIN live l ON e.from_digest = l.digest
 )
 SELECT b.digest, b.size, b.last_seen_at,
        EXISTS (SELECT 1 FROM manifest_children p WHERE p.parent_digest = b.digest)::bool AS is_parent
@@ -63,7 +70,8 @@ FOR UPDATE SKIP LOCKED;
 -- name: GCBlobReferenced :one
 -- The sweep's re-check, run under the row locks. Every reference a live blob
 -- can have, counted conservatively: an edge from a dead parent still counts,
--- and the next pass collects the child once the parent has gone.
+-- and the next pass collects the child once the parent has gone. A referrer
+-- is held the same way for as long as its subject's blob row exists.
 SELECT (
     EXISTS (SELECT 1 FROM tags WHERE target_digest = sqlc.arg('digest'))
     OR EXISTS (SELECT 1 FROM files WHERE blob_digest = sqlc.arg('digest'))
@@ -72,6 +80,11 @@ SELECT (
     OR EXISTS (SELECT 1 FROM evidence WHERE blob_digest = sqlc.arg('digest'))
     OR EXISTS (SELECT 1 FROM evidence WHERE subject_digest = sqlc.arg('digest'))
     OR EXISTS (SELECT 1 FROM lifecycle_events WHERE subject_digest = sqlc.arg('digest'))
+    OR EXISTS (
+        SELECT 1 FROM manifest_subjects ms
+        JOIN blobs s ON s.digest = ms.subject_digest
+        WHERE ms.referrer_digest = sqlc.arg('digest')
+    )
 )::bool AS referenced;
 
 -- name: GCDeleteManifestEdges :exec

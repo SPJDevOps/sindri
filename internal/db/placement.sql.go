@@ -594,6 +594,36 @@ func (q *Queries) InsertFileImmutable(ctx context.Context, arg InsertFileImmutab
 	return i, err
 }
 
+const insertManifestSubject = `-- name: InsertManifestSubject :exec
+INSERT INTO manifest_subjects (referrer_digest, subject_digest, media_type, artifact_type, size, annotations)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (referrer_digest) DO NOTHING
+`
+
+type InsertManifestSubjectParams struct {
+	ReferrerDigest string `json:"referrer_digest"`
+	SubjectDigest  string `json:"subject_digest"`
+	MediaType      string `json:"media_type"`
+	ArtifactType   string `json:"artifact_type"`
+	Size           int64  `json:"size"`
+	Annotations    []byte `json:"annotations"`
+}
+
+// Records what a hosted manifest says about its subject (ADR 32). The facts
+// come from the bytes, and the row is shared by every repository that places
+// the digest, so a later push of the same digest never changes it.
+func (q *Queries) InsertManifestSubject(ctx context.Context, arg InsertManifestSubjectParams) error {
+	_, err := q.db.Exec(ctx, insertManifestSubject,
+		arg.ReferrerDigest,
+		arg.SubjectDigest,
+		arg.MediaType,
+		arg.ArtifactType,
+		arg.Size,
+		arg.Annotations,
+	)
+	return err
+}
+
 const insertRetiredFile = `-- name: InsertRetiredFile :exec
 INSERT INTO retired_files (package_id, version, filename)
 VALUES ($1, $2, $3)
@@ -1147,41 +1177,6 @@ type UpsertManifestChildParams struct {
 
 func (q *Queries) UpsertManifestChild(ctx context.Context, arg UpsertManifestChildParams) error {
 	_, err := q.db.Exec(ctx, upsertManifestChild, arg.ParentDigest, arg.ChildDigest)
-	return err
-}
-
-const upsertManifestSubject = `-- name: UpsertManifestSubject :exec
-INSERT INTO manifest_subjects (referrer_digest, subject_digest, media_type, artifact_type, size, annotations)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (referrer_digest) DO UPDATE
-SET subject_digest = EXCLUDED.subject_digest,
-    media_type     = EXCLUDED.media_type,
-    artifact_type  = EXCLUDED.artifact_type,
-    size           = EXCLUDED.size,
-    annotations    = EXCLUDED.annotations
-`
-
-type UpsertManifestSubjectParams struct {
-	ReferrerDigest string `json:"referrer_digest"`
-	SubjectDigest  string `json:"subject_digest"`
-	MediaType      string `json:"media_type"`
-	ArtifactType   string `json:"artifact_type"`
-	Size           int64  `json:"size"`
-	Annotations    []byte `json:"annotations"`
-}
-
-// Records what a hosted manifest says about its subject (ADR 32). The facts
-// come from the bytes, so a re-push of the same digest rewrites identical
-// values.
-func (q *Queries) UpsertManifestSubject(ctx context.Context, arg UpsertManifestSubjectParams) error {
-	_, err := q.db.Exec(ctx, upsertManifestSubject,
-		arg.ReferrerDigest,
-		arg.SubjectDigest,
-		arg.MediaType,
-		arg.ArtifactType,
-		arg.Size,
-		arg.Annotations,
-	)
 	return err
 }
 

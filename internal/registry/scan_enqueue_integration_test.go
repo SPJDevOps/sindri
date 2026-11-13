@@ -156,14 +156,20 @@ func TestScanOnPublish_ProxyCachedContentIsNeverScanned(t *testing.T) {
 
 // ADR 32 decision 7: a referrer is a signature or a document, so a manifest
 // with a subject enqueues no scan, while the same push without one does.
-func TestScanOnPublish_ManifestWithSubjectEnqueuesNoScan(t *testing.T) {
+// ADR 32: a referrer that is not an image (a signature, an SBOM) is not
+// scanned on publish. An image is, whether or not it names a subject: adding
+// a subject field must not be a way around the scan.
+func TestScanOnPublish_OnlyANonImageReferrerSkipsTheScan(t *testing.T) {
 	tests := []struct {
-		name    string
-		subject bool
-		wantJob bool
+		name        string
+		subject     bool
+		imageConfig bool
+		wantJob     bool
 	}{
-		{name: "WithoutSubjectIsScanned", subject: false, wantJob: true},
-		{name: "WithSubjectIsNotScanned", subject: true, wantJob: false},
+		{name: "ImageWithoutSubjectIsScanned", imageConfig: true, wantJob: true},
+		{name: "ArtifactWithoutSubjectIsScanned", wantJob: true},
+		{name: "ArtifactWithSubjectIsNotScanned", subject: true, wantJob: false},
+		{name: "ImageWithSubjectIsStillScanned", subject: true, imageConfig: true, wantJob: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -171,6 +177,14 @@ func TestScanOnPublish_ManifestWithSubjectEnqueuesNoScan(t *testing.T) {
 			f.reg.SetScanOnPublish(true)
 			man := ocispec.Manifest{MediaType: ocispec.MediaTypeImageManifest}
 			man.SchemaVersion = 2
+			if tt.imageConfig {
+				config := []byte(`{"architecture":"amd64","os":"linux"}`)
+				man.Config = ocispec.Descriptor{
+					MediaType: ocispec.MediaTypeImageConfig,
+					Digest:    digest.Digest(f.uploadBlob("images", config).String()),
+					Size:      int64(len(config)),
+				}
+			}
 			if tt.subject {
 				man.Subject = &ocispec.Descriptor{
 					MediaType: ocispec.MediaTypeImageManifest,
@@ -193,6 +207,69 @@ func TestScanOnPublish_ManifestWithSubjectEnqueuesNoScan(t *testing.T) {
 			var n int
 			if err := f.db.Pool().QueryRow(t.Context(), `SELECT count(*) FROM subjects WHERE digest = $1`, m.Digest.String()).Scan(&n); err != nil || n != 1 {
 				t.Fatalf("subject rows = %d, err %v, want 1", n, err)
+			}
+		})
+	}
+}
+
+// The manifest_subjects row is shared by every repository that places the
+// digest, so what it says must come from the bytes and never from a header
+// one pusher chose: otherwise a push into one repository could change what
+// another repository's referrers list says (ADR 32).
+func TestPutManifest_ReferrerFactsComeFromTheBytesNotTheContentType(t *testing.T) {
+	const sbom = "application/vnd.example.sbom.v1"
+	man := ocispec.Manifest{
+		MediaType:    ocispec.MediaTypeImageManifest,
+		ArtifactType: sbom,
+		Subject: &ocispec.Descriptor{
+			MediaType: ocispec.MediaTypeImageManifest,
+			Digest:    digest.Digest("sha256:" + strings.Repeat("b", 64)),
+			Size:      1,
+		},
+	}
+	man.SchemaVersion = 2
+	body, _ := json.Marshal(man)
+	subject, err := model.ParseDigest(man.Subject.Digest.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		// contentTypes are the headers of two pushes of the same bytes, the
+		// first into team-a and the second into team-b.
+		contentTypes [2]string
+	}{
+		{name: "MisleadingHeaderSecond", contentTypes: [2]string{ocispec.MediaTypeImageManifest, ocispec.MediaTypeImageIndex}},
+		{name: "MisleadingHeaderFirst", contentTypes: [2]string{ocispec.MediaTypeImageIndex, ocispec.MediaTypeImageManifest}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newEvictFixture(t)
+			var ref string
+			for i, repo := range []string{"team-a", "team-b"} {
+				if _, err := f.reg.EnsureOCIRepository(t.Context(), repo); err != nil {
+					t.Fatalf("EnsureOCIRepository: %v", err)
+				}
+				m, err := f.reg.PutManifest(t.Context(), repo, "app", "attached", tt.contentTypes[i], body, model.Provenance{})
+				if err != nil {
+					t.Fatalf("PutManifest into %s: %v", repo, err)
+				}
+				ref = m.Digest.String()
+			}
+			for _, repo := range []string{"team-a", "team-b"} {
+				page, err := f.reg.ListReferrers(t.Context(), repo, subject, "", "", 10)
+				if err != nil {
+					t.Fatalf("ListReferrers %s: %v", repo, err)
+				}
+				if len(page.Items) != 1 {
+					t.Fatalf("%s lists %d referrers, want 1", repo, len(page.Items))
+				}
+				got := page.Items[0]
+				if got.Digest.String() != ref || got.MediaType != ocispec.MediaTypeImageManifest || got.ArtifactType != sbom {
+					t.Fatalf("%s lists %+v, want media type %s and artifact type %s from the bytes",
+						repo, got, ocispec.MediaTypeImageManifest, sbom)
+				}
 			}
 		})
 	}

@@ -22,9 +22,11 @@ promotion. This ADR says how the two relate.
 1. **A referrer is a manifest with a `subject`, and nothing more.** On a hosted manifest
    push, Sindri records the manifest's subject digest, media type, artifact type, size,
    and annotations in `manifest_subjects`, keyed by the manifest's own digest. These are
-   facts read from the bytes, so they are the same in every repository. An image
-   manifest and an index may both carry a subject. The subject does not have to exist:
-   the specification allows a referrer to arrive first.
+   facts read from the bytes alone, never from the `Content-Type` a client sent, and the
+   first push writes the row for good: it is shared by every repository that places the
+   digest, so a later push must not be able to change it. An image manifest and an index
+   may both carry a subject. The subject does not have to exist: the specification
+   allows a referrer to arrive first.
 2. **Referrers are never evidence.** A referrer is not copied into the `evidence` table,
    and no gate reads `manifest_subjects`. A `signature` or `sbom` gate is satisfied only
    by evidence attached through `/api/v1`, as before. The referrers API is for standard
@@ -51,9 +53,12 @@ promotion. This ADR says how the two relate.
    as reachable when its subject is reachable, and collects it with its subject
    otherwise. A referrer whose subject never arrives is collected after the grace
    period, like any untagged manifest.
-7. **A referrer is not scanned on publish.** It is a signature or a document, not an
-   image, and a Trivy run on it is noise. It has no Sindri scan, so a severity gate
-   refuses it (ADR 30); the on-demand scan route still works.
+7. **A referrer that is not an image is not scanned on publish.** A signature or an SBOM
+   is a document, and a Trivy run on it is noise. The test is the manifest itself: it
+   names a subject, it is not an index, and its config is not an image config. An image
+   that names a subject is scanned like any other, so adding a `subject` field is not a
+   way around the scan. A manifest that skips the scan has no Sindri scan, so a severity
+   gate refuses it (ADR 30); the on-demand scan route still works.
 8. **No backfill.** Manifests with a subject that were pushed before this release are
    stored but not listed. Pushing them again lists them.
 9. **`referrers` is a reserved repository name segment** for new repositories, with the
@@ -70,6 +75,13 @@ promotion. This ADR says how the two relate.
   signatures only through those tags until they are pushed again. The upgrade notes say
   so.
 - An untagged signature is no longer collected a day after it was pushed.
+- The sweep holds a referrer for as long as its subject's blob row exists, the same
+  conservative rule as an edge from a dead parent, so a referrer goes one pass after its
+  subject. One race stays open: a subject pushed at the moment its long-orphaned referrer
+  is being swept loses that referrer. The client that pushes an image pushes its
+  signature afterwards, which writes it again.
+- cosign's older signature format uses an image config, so such a signature is still
+  scanned, as it was before this ADR. The newer formats are not.
 - A referrer pushed into repository B for a subject that lives only in repository A stays
   alive while A's subject does. It is listed only in B, costs B's owner nothing they
   could not get with a tag, and tells B nothing about A.
@@ -90,4 +102,8 @@ promotion. This ADR says how the two relate.
   rule for. Empty is honest and can be widened later.
 - **Rooting every referrer in the collector.** A signature for an image that has been
   collected would live forever.
-- **Scanning referrers.** See decision 7.
+- **Skipping the scan for every manifest with a subject.** An image pushed with a
+  `subject` field would then never be scanned, which breaks the claim that every hosted
+  publish is. A review of the first draft found this.
+- **Updating the row on a later push.** A push into one repository, with a misleading
+  `Content-Type`, could then change what another repository's list says.

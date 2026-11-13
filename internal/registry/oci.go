@@ -382,21 +382,30 @@ func (r *Registry) PutManifest(ctx context.Context, repoName, image, reference, 
 	if isIndexMediaType(resolvedMediaType) {
 		kind = model.SubjectKindOCIIndex
 	}
-	if err := r.recordSubject(ctx, q, repo, info.Digest, info.Size, kind, prov, !parsed.hasSubject); err != nil {
+	// ADR 32: what a manifest says about its subject is read from the bytes
+	// alone, never from the Content-Type the client sent. The row is shared
+	// by every repository that places the digest, so a second push with a
+	// different header must not be able to change it.
+	// A body that does not parse as what it says it is states no subject.
+	facts, err := parseManifest("", body)
+	if err != nil {
+		facts = parsedManifest{}
+	}
+	if err := r.recordSubject(ctx, q, repo, info.Digest, info.Size, kind, prov, !facts.isNonImageReferrer()); err != nil {
 		return Manifest{}, err
 	}
-	if parsed.hasSubject {
-		// ADR 32: the facts are read from the bytes; which repository lists
-		// them is decided by the placement linked above (I2).
-		annotations, err := json.Marshal(nonNilAnnotations(parsed.annotations))
+	if facts.hasSubject {
+		// Which repository lists the referrer is decided by the placement
+		// linked above (I2).
+		annotations, err := json.Marshal(nonNilAnnotations(facts.annotations))
 		if err != nil {
 			return Manifest{}, fmt.Errorf("encoding annotations of %s: %w", info.Digest, err)
 		}
-		if err := q.UpsertManifestSubject(ctx, db.UpsertManifestSubjectParams{
+		if err := q.InsertManifestSubject(ctx, db.InsertManifestSubjectParams{
 			ReferrerDigest: info.Digest.String(),
-			SubjectDigest:  parsed.subject.String(),
-			MediaType:      mediaType,
-			ArtifactType:   parsed.artifactType,
+			SubjectDigest:  facts.subject.String(),
+			MediaType:      facts.mediaType,
+			ArtifactType:   facts.artifactType,
 			Size:           info.Size,
 			Annotations:    annotations,
 		}); err != nil {
@@ -414,8 +423,8 @@ func (r *Registry) PutManifest(ctx context.Context, repoName, image, reference, 
 		Size:      info.Size,
 		Body:      body,
 	}
-	if parsed.hasSubject {
-		subject := parsed.subject
+	if facts.hasSubject {
+		subject := facts.subject
 		m.Subject = &subject
 	}
 	return m, nil
@@ -820,6 +829,27 @@ type parsedManifest struct {
 	hasSubject   bool
 	artifactType string
 	annotations  map[string]string
+	// configMediaType is an image manifest's config media type; empty for an
+	// index.
+	configMediaType string
+	isIndex         bool
+}
+
+// isNonImageReferrer reports whether the manifest refers to a subject and is
+// not itself an image: a signature, an SBOM, or another document with a
+// config that is not an image config. Only such a manifest skips the scan on
+// publish (ADR 32). An image stays scanned whether or not it names a subject,
+// so adding a subject field cannot be used to avoid the scan.
+func (p parsedManifest) isNonImageReferrer() bool {
+	if !p.hasSubject || p.isIndex {
+		return false
+	}
+	switch p.configMediaType {
+	case ocispec.MediaTypeImageConfig, "application/vnd.docker.container.image.v1+json":
+		return false
+	default:
+		return true
+	}
 }
 
 // parseManifest decodes a manifest with the image-spec types and validates
@@ -842,6 +872,7 @@ func parseManifest(mediaType string, body []byte) (parsedManifest, error) {
 			mediaType:    mt,
 			artifactType: idx.ArtifactType,
 			annotations:  idx.Annotations,
+			isIndex:      true,
 		}
 		for _, d := range idx.Manifests {
 			child, err := model.ParseDigest(d.Digest.String())
@@ -862,10 +893,11 @@ func parseManifest(mediaType string, body []byte) (parsedManifest, error) {
 			return parsedManifest{}, fmt.Errorf("decoding image manifest: %w", err)
 		}
 		out := parsedManifest{
-			children:     make([]model.Digest, 0, 1+len(man.Layers)),
-			mediaType:    mt,
-			artifactType: man.ArtifactType,
-			annotations:  man.Annotations,
+			children:        make([]model.Digest, 0, 1+len(man.Layers)),
+			mediaType:       mt,
+			artifactType:    man.ArtifactType,
+			annotations:     man.Annotations,
+			configMediaType: man.Config.MediaType,
 		}
 		if out.artifactType == "" {
 			out.artifactType = man.Config.MediaType

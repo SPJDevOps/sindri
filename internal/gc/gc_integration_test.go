@@ -322,6 +322,94 @@ func TestGC_UntaggedUnpromotedManifestAndItsExclusiveLayersAreCollected(t *testi
 	}
 }
 
+// attach pushes an untagged manifest whose subject is the given digest, with
+// one layer of its own: what cosign or oras leaves behind (ADR 32).
+func (f *fixture) attach(subject model.Digest, layer string) (model.Digest, model.Digest) {
+	f.t.Helper()
+	layerDigest := f.uploadLayer(repo, []byte(layer))
+	man := ocispec.Manifest{
+		MediaType:    ocispec.MediaTypeImageManifest,
+		ArtifactType: "application/vnd.example.signature.v1",
+		Layers:       []ocispec.Descriptor{descriptor(ocispec.MediaTypeImageLayer, layerDigest, int64(len(layer)))},
+		Subject:      &ocispec.Descriptor{MediaType: ocispec.MediaTypeImageManifest, Digest: digestOf(subject), Size: 1},
+	}
+	man.SchemaVersion = 2
+	return f.putManifest("", ocispec.MediaTypeImageManifest, man), layerDigest
+}
+
+// ADR 32: a referrer lives as long as its subject. Without the edge from a
+// subject to its referrers, an untagged signature is collected a day after it
+// was pushed.
+func TestGC_ReferrerOfALiveSubjectSurvives(t *testing.T) {
+	f := newFixture(t)
+	subject, _ := f.pushImage("1.0", "layer")
+	referrer, referrerLayer := f.attach(subject, "signature-of-1.0")
+	nested, nestedLayer := f.attach(referrer, "attestation-about-the-signature")
+	f.age()
+
+	f.assertNotCandidate("referrer of a tagged image", referrer, referrerLayer)
+	f.assertNotCandidate("referrer of a referrer", nested, nestedLayer)
+	f.collect()
+	f.assertSurvives("referrer of a tagged image", referrer, referrerLayer)
+	f.assertSurvives("referrer of a referrer", nested, nestedLayer)
+}
+
+func TestGC_ReferrerIsCollectedWithItsSubject(t *testing.T) {
+	f := newFixture(t)
+	subject, _ := f.pushImage("tmp", "doomed-layer")
+	referrer, referrerLayer := f.attach(subject, "signature-of-tmp")
+	if err := f.reg.DeleteManifest(t.Context(), repo, image, "tmp"); err != nil {
+		t.Fatalf("untagging: %v", err)
+	}
+	f.age()
+
+	f.collect()
+	f.assertCollected("untagged subject", subject)
+	f.assertCollected("referrer of a collected subject", referrer, referrerLayer)
+	if n := f.count(`SELECT count(*) FROM manifest_subjects`); n != 0 {
+		t.Fatalf("manifest_subjects still holds %d rows", n)
+	}
+}
+
+func TestGC_ReferrerWhoseSubjectNeverArrivedIsCollected(t *testing.T) {
+	f := newFixture(t)
+	referrer, referrerLayer := f.attach(sha256Of([]byte("an image nobody pushed")), "signature-of-nothing")
+	f.age()
+
+	f.collect()
+	f.assertCollected("referrer without a subject", referrer, referrerLayer)
+}
+
+// The subject is dead at the mark, so it and its referrer are both
+// candidates. Tagging the subject before the sweep saves the subject through
+// the re-check; the referrer must be saved with it, or a signature is lost
+// for an image that is live again.
+func TestGC_SweepKeepsAReferrerWhileItsSubjectExists(t *testing.T) {
+	f := newFixture(t)
+	subject, _ := f.pushImage("tmp", "layer")
+	referrer, _ := f.attach(subject, "signature-of-tmp")
+	if err := f.reg.DeleteManifest(t.Context(), repo, image, "tmp"); err != nil {
+		t.Fatalf("untagging: %v", err)
+	}
+	f.age()
+
+	cands, err := f.gc.Mark(t.Context())
+	if err != nil {
+		t.Fatalf("Mark: %v", err)
+	}
+	if marked := digestsOf(cands); !slices.Contains(marked, referrer.String()) || !slices.Contains(marked, subject.String()) {
+		t.Fatalf("the mark should propose the untagged subject and its referrer, got %v", marked)
+	}
+	f.exec(`INSERT INTO tags (repo_id, package_id, name, target_digest)
+		SELECT p.repo_id, p.id, 'late', $1 FROM packages p LIMIT 1`, subject.String())
+
+	if _, err := f.gc.Sweep(t.Context(), cands); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	f.assertSurvives("subject tagged after the mark", subject)
+	f.assertSurvives("referrer of a subject tagged after the mark", referrer)
+}
+
 func TestGC_LayerSharedWithATaggedManifestIsKept(t *testing.T) {
 	f := newFixture(t)
 	_, keepLayers := f.pushImage("1.0", "shared", "kept")
@@ -972,6 +1060,22 @@ func TestGCMark_MatchesReferenceReachabilityOnRandomGraphs(t *testing.T) {
 							nodes[parent], nodes[child])
 					}
 				}
+			}
+			// A subject reaches its referrers (ADR 32). Each node refers to at
+			// most one subject, in either direction, so cycles are possible
+			// here and the mark must cope with them.
+			for referrer := range n {
+				if rng.IntN(6) != 0 {
+					continue
+				}
+				subject := rng.IntN(n)
+				if subject == referrer {
+					continue
+				}
+				edges[subject] = append(edges[subject], referrer)
+				f.exec(`INSERT INTO manifest_subjects (referrer_digest, subject_digest, media_type, size)
+					VALUES ($1, $2, 'application/vnd.oci.image.manifest.v1+json', 1)`,
+					nodes[referrer], nodes[subject])
 			}
 			var roots []int
 			for i := range n {
