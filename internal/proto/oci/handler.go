@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+
+	godigest "github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/cas"
@@ -143,6 +147,12 @@ func (h *handler) dispatch(w http.ResponseWriter, r *http.Request, path string) 
 			return
 		}
 		h.handleManifest(w, r, repo, image, clientPath, ref)
+	case strings.HasPrefix(rest, "referrers/"):
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeError(w, http.StatusMethodNotAllowed, CodeUnsupported, "method not allowed")
+			return
+		}
+		h.listReferrers(w, r, repo, clientPath, strings.TrimPrefix(rest, "referrers/"))
 	case strings.HasPrefix(rest, "blobs/uploads"):
 		h.handleUpload(w, r, repo, image, clientPath, rest)
 	case strings.HasPrefix(rest, "blobs/"):
@@ -608,6 +618,11 @@ func (h *handler) putManifest(w http.ResponseWriter, r *http.Request, repo model
 	}
 	w.Header().Set("Location", "/v2/"+clientPath+"/manifests/"+ref)
 	w.Header().Set("Docker-Content-Digest", man.Digest.String())
+	if man.Subject != nil {
+		// Tells the client the registry indexed the referrer, so it need not
+		// maintain the fallback tag (ADR 32).
+		w.Header().Set("OCI-Subject", man.Subject.String())
+	}
 	w.Header().Set("Content-Length", "0")
 	w.Header().Set("Docker-Distribution-API-Version", apiVersion)
 	w.WriteHeader(http.StatusCreated)
@@ -669,4 +684,55 @@ func (h *handler) listTags(w http.ResponseWriter, r *http.Request, repo model.Re
 		"name": clientPath,
 		"tags": page.Items,
 	})
+}
+
+// referrersPageSize is how many referrers one response lists. It is a
+// variable so a test can lower it instead of pushing a hundred manifests.
+var referrersPageSize int32 = 100
+
+// listReferrers answers GET /v2/<name>/referrers/<digest> (ADR 32): an image
+// index of the manifests placed in the repository that name the digest.
+func (h *handler) listReferrers(w http.ResponseWriter, r *http.Request, repo model.Repository, clientPath, digestStr string) {
+	subject, err := model.ParseDigest(digestStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, CodeDigestInvalid, "invalid digest")
+		return
+	}
+	query := r.URL.Query()
+	artifactType := query.Get("artifactType")
+	page, err := h.res.ListOCIReferrers(r.Context(), repo.Name, subject, artifactType, query.Get("last"), referrersPageSize)
+	if err != nil {
+		mapRegistryError(w, err)
+		return
+	}
+
+	index := ocispec.Index{
+		MediaType: ocispec.MediaTypeImageIndex,
+		Manifests: make([]ocispec.Descriptor, 0, len(page.Items)),
+	}
+	index.SchemaVersion = 2
+	for _, ref := range page.Items {
+		index.Manifests = append(index.Manifests, ocispec.Descriptor{
+			MediaType:    ref.MediaType,
+			Digest:       godigest.Digest(ref.Digest.String()),
+			Size:         ref.Size,
+			ArtifactType: ref.ArtifactType,
+			Annotations:  ref.Annotations,
+		})
+	}
+
+	if page.NextCursor != "" {
+		next := url.Values{"last": {page.NextCursor}}
+		if artifactType != "" {
+			next.Set("artifactType", artifactType)
+		}
+		w.Header().Set("Link", `</v2/`+clientPath+`/referrers/`+subject.String()+`?`+next.Encode()+`>; rel="next"`)
+	}
+	if artifactType != "" {
+		w.Header().Set("OCI-Filters-Applied", "artifactType")
+	}
+	w.Header().Set("Content-Type", ocispec.MediaTypeImageIndex)
+	w.Header().Set("Docker-Distribution-API-Version", apiVersion)
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(index)
 }

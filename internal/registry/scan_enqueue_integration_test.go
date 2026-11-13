@@ -5,8 +5,10 @@ package registry_test
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/spj/sindri/internal/model"
@@ -149,5 +151,49 @@ func TestScanOnPublish_ProxyCachedContentIsNeverScanned(t *testing.T) {
 	f.cachedTag("hub", "library/alpine", "3.20")
 	if got := f.scanJobs(); len(got) != 0 {
 		t.Fatalf("jobs = %+v, want none for proxy content", got)
+	}
+}
+
+// ADR 32 decision 7: a referrer is a signature or a document, so a manifest
+// with a subject enqueues no scan, while the same push without one does.
+func TestScanOnPublish_ManifestWithSubjectEnqueuesNoScan(t *testing.T) {
+	tests := []struct {
+		name    string
+		subject bool
+		wantJob bool
+	}{
+		{name: "WithoutSubjectIsScanned", subject: false, wantJob: true},
+		{name: "WithSubjectIsNotScanned", subject: true, wantJob: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newEvictFixture(t)
+			f.reg.SetScanOnPublish(true)
+			man := ocispec.Manifest{MediaType: ocispec.MediaTypeImageManifest}
+			man.SchemaVersion = 2
+			if tt.subject {
+				man.Subject = &ocispec.Descriptor{
+					MediaType: ocispec.MediaTypeImageManifest,
+					Digest:    digest.Digest("sha256:" + strings.Repeat("a", 64)),
+					Size:      1,
+				}
+			}
+			body, _ := json.Marshal(man)
+			m, err := f.reg.PutManifest(t.Context(), "images", "app", "1.0", ocispec.MediaTypeImageManifest, body, model.Provenance{})
+			if err != nil {
+				t.Fatalf("PutManifest: %v", err)
+			}
+			if got := f.scanJobs(); (len(got) == 1) != tt.wantJob || len(got) > 1 {
+				t.Fatalf("jobs = %+v, want job=%v", got, tt.wantJob)
+			}
+			if tt.subject && (m.Subject == nil || m.Subject.String() != man.Subject.Digest.String()) {
+				t.Fatalf("returned subject = %v", m.Subject)
+			}
+			// The subject row is still recorded either way.
+			var n int
+			if err := f.db.Pool().QueryRow(t.Context(), `SELECT count(*) FROM subjects WHERE digest = $1`, m.Digest.String()).Scan(&n); err != nil || n != 1 {
+				t.Fatalf("subject rows = %d, err %v, want 1", n, err)
+			}
+		})
 	}
 }
