@@ -146,6 +146,17 @@ func (q *Queries) GCDeleteManifestEdges(ctx context.Context, parentDigest string
 	return err
 }
 
+const gCDeleteManifestSubject = `-- name: GCDeleteManifestSubject :exec
+DELETE FROM manifest_subjects WHERE referrer_digest = $1
+`
+
+// referrer_digest references blobs, so the row goes before the blob does
+// (ADR 32).
+func (q *Queries) GCDeleteManifestSubject(ctx context.Context, referrerDigest string) error {
+	_, err := q.db.Exec(ctx, gCDeleteManifestSubject, referrerDigest)
+	return err
+}
+
 const gCDeletePlacements = `-- name: GCDeletePlacements :exec
 DELETE FROM repository_blobs WHERE digest = $1
 `

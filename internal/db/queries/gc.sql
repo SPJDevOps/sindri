@@ -93,3 +93,8 @@ DELETE FROM subjects WHERE digest = $1;
 -- The foreign keys from tags, files, evidence, and remote_cache restrict, so
 -- a reference the re-check somehow missed fails this delete loudly.
 DELETE FROM blobs WHERE digest = $1;
+
+-- name: GCDeleteManifestSubject :exec
+-- referrer_digest references blobs, so the row goes before the blob does
+-- (ADR 32).
+DELETE FROM manifest_subjects WHERE referrer_digest = $1;
