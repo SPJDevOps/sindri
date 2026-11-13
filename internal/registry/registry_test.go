@@ -30,6 +30,7 @@ func TestValidateRepoName(t *testing.T) {
 		{name: "reserved oci blobs", in: "team/blobs", wantErr: true},
 		{name: "reserved oci manifests", in: "manifests/team", wantErr: true},
 		{name: "reserved oci tags", in: "team/tags/x", wantErr: true},
+		{name: "reserved oci referrers", in: "team/referrers/x", wantErr: true},
 		{name: "reserved regardless of case", in: "team/Packages", wantErr: true},
 		{name: "reserved word as substring is fine", in: "team/packages-internal"},
 		// The UI separates a repository name from the page within it with

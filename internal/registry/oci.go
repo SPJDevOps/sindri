@@ -44,6 +44,9 @@ type Manifest struct {
 	MediaType string
 	Size      int64
 	Body      []byte
+	// Subject is the digest the manifest refers to, set only by PutManifest
+	// on a hosted push (ADR 32).
+	Subject *model.Digest
 }
 
 // requireOCIRepo loads a hosted OCI repository by name.
@@ -281,10 +284,11 @@ func (r *Registry) PutManifest(ctx context.Context, repoName, image, reference, 
 	}
 	pkgName := ociImagePackage(image)
 
-	children, resolvedMediaType, err := parseManifestChildren(mediaType, body)
+	parsed, err := parseManifest(mediaType, body)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
+	children, resolvedMediaType := parsed.children, parsed.mediaType
 	if mediaType == "" {
 		mediaType = resolvedMediaType
 	}
@@ -378,20 +382,43 @@ func (r *Registry) PutManifest(ctx context.Context, repoName, image, reference, 
 	if isIndexMediaType(resolvedMediaType) {
 		kind = model.SubjectKindOCIIndex
 	}
-	if err := r.recordSubject(ctx, q, repo, info.Digest, info.Size, kind, prov); err != nil {
+	if err := r.recordSubject(ctx, q, repo, info.Digest, info.Size, kind, prov, !parsed.hasSubject); err != nil {
 		return Manifest{}, err
+	}
+	if parsed.hasSubject {
+		// ADR 32: the facts are read from the bytes; which repository lists
+		// them is decided by the placement linked above (I2).
+		annotations, err := json.Marshal(nonNilAnnotations(parsed.annotations))
+		if err != nil {
+			return Manifest{}, fmt.Errorf("encoding annotations of %s: %w", info.Digest, err)
+		}
+		if err := q.UpsertManifestSubject(ctx, db.UpsertManifestSubjectParams{
+			ReferrerDigest: info.Digest.String(),
+			SubjectDigest:  parsed.subject.String(),
+			MediaType:      mediaType,
+			ArtifactType:   parsed.artifactType,
+			Size:           info.Size,
+			Annotations:    annotations,
+		}); err != nil {
+			return Manifest{}, fmt.Errorf("recording subject of %s: %w", info.Digest, err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return Manifest{}, fmt.Errorf("committing manifest: %w", err)
 	}
 
-	return Manifest{
+	m := Manifest{
 		Digest:    info.Digest,
 		MediaType: mediaType,
 		Size:      info.Size,
 		Body:      body,
-	}, nil
+	}
+	if parsed.hasSubject {
+		subject := parsed.subject
+		m.Subject = &subject
+	}
+	return m, nil
 }
 
 // PlaceCachedManifest places an upstream OCI manifest into a proxy repository.
@@ -408,10 +435,11 @@ func (r *Registry) PlaceCachedManifest(ctx context.Context, repoName, image, ref
 	}
 	pkgName := ociImagePackage(image)
 
-	children, resolvedMediaType, err := parseManifestChildren(mediaType, body)
+	parsed, err := parseManifest(mediaType, body)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
+	children, resolvedMediaType := parsed.children, parsed.mediaType
 	if mediaType == "" {
 		mediaType = resolvedMediaType
 	}
@@ -644,6 +672,72 @@ func (r *Registry) ListTags(ctx context.Context, p ListTagsParams) (Page[string]
 	return page, nil
 }
 
+// Referrer describes one manifest that names a subject (ADR 32).
+type Referrer struct {
+	Digest       model.Digest
+	MediaType    string
+	ArtifactType string
+	Size         int64
+	Annotations  map[string]string
+}
+
+// ListReferrers returns the manifests placed in repoName whose subject is
+// subject, in digest order. An empty artifactType lists all of them. Only
+// referrers placed in this repository are listed (invariant I2); a subject
+// that is unknown has an empty list.
+func (r *Registry) ListReferrers(ctx context.Context, repoName string, subject model.Digest, artifactType, after string, limit int32) (Page[Referrer], error) {
+	repo, err := r.requireOCIRepo(ctx, repoName)
+	if err != nil {
+		return Page[Referrer]{}, err
+	}
+	limit, err = pageLimit(limit)
+	if err != nil {
+		return Page[Referrer]{}, err
+	}
+
+	rows, err := r.q.ListReferrers(ctx, db.ListReferrersParams{
+		RepoID:        repo.ID,
+		SubjectDigest: subject.String(),
+		ArtifactType:  artifactType,
+		AfterDigest:   after,
+		PageLimit:     limit + 1,
+	})
+	if err != nil {
+		return Page[Referrer]{}, fmt.Errorf("listing referrers of %s: %w", subject, err)
+	}
+
+	page := Page[Referrer]{Items: make([]Referrer, 0, len(rows))}
+	for i, row := range rows {
+		if int32(i) >= limit {
+			page.NextCursor = rows[limit-1].ReferrerDigest
+			break
+		}
+		digest, err := model.ParseDigest(row.ReferrerDigest)
+		if err != nil {
+			return Page[Referrer]{}, fmt.Errorf("referrer row %s: %w", row.ReferrerDigest, err)
+		}
+		var annotations map[string]string
+		if err := json.Unmarshal(row.Annotations, &annotations); err != nil {
+			return Page[Referrer]{}, fmt.Errorf("decoding annotations of %s: %w", row.ReferrerDigest, err)
+		}
+		page.Items = append(page.Items, Referrer{
+			Digest:       digest,
+			MediaType:    row.MediaType,
+			ArtifactType: row.ArtifactType,
+			Size:         row.Size,
+			Annotations:  annotations,
+		})
+	}
+	return page, nil
+}
+
+func nonNilAnnotations(a map[string]string) map[string]string {
+	if a == nil {
+		return map[string]string{}
+	}
+	return a
+}
+
 func (r *Registry) resolveManifestDigest(ctx context.Context, repoName, image, reference string) (model.Digest, error) {
 	if digest, err := model.ParseDigest(reference); err == nil {
 		return digest, nil
@@ -696,7 +790,7 @@ func validateTagName(name string) error {
 
 // manifestDescriptorSizes returns the size each descriptor in a manifest or
 // index claims for its target, keyed by digest. Unparseable bodies yield an
-// empty map; parseManifestChildren is the validating parse.
+// empty map; parseManifest is the validating parse.
 func manifestDescriptorSizes(body []byte) map[string]int64 {
 	var doc struct {
 		Config    *ocispec.Descriptor  `json:"config"`
@@ -716,7 +810,21 @@ func manifestDescriptorSizes(body []byte) map[string]int64 {
 	return sizes
 }
 
-func parseManifestChildren(mediaType string, body []byte) ([]model.Digest, string, error) {
+// parsedManifest is what the write path reads out of a manifest body.
+type parsedManifest struct {
+	children  []model.Digest
+	mediaType string
+	// subject is the digest the manifest refers to (ADR 32). It is not a
+	// child: it need not exist or be placed.
+	subject      model.Digest
+	hasSubject   bool
+	artifactType string
+	annotations  map[string]string
+}
+
+// parseManifest decodes a manifest with the image-spec types and validates
+// every digest it names, including the subject.
+func parseManifest(mediaType string, body []byte) (parsedManifest, error) {
 	mt := mediaType
 	if mt == "" {
 		mt = sniffManifestMediaType(body)
@@ -727,52 +835,84 @@ func parseManifestChildren(mediaType string, body []byte) ([]model.Digest, strin
 		"application/vnd.docker.distribution.manifest.list.v2+json":
 		var idx ocispec.Index
 		if err := json.Unmarshal(body, &idx); err != nil {
-			return nil, "", fmt.Errorf("decoding image index: %w", err)
+			return parsedManifest{}, fmt.Errorf("decoding image index: %w", err)
 		}
-		out := make([]model.Digest, 0, len(idx.Manifests))
+		out := parsedManifest{
+			children:     make([]model.Digest, 0, len(idx.Manifests)),
+			mediaType:    mt,
+			artifactType: idx.ArtifactType,
+			annotations:  idx.Annotations,
+		}
 		for _, d := range idx.Manifests {
 			child, err := model.ParseDigest(d.Digest.String())
 			if err != nil {
-				return nil, "", fmt.Errorf("index child digest: %w", err)
+				return parsedManifest{}, fmt.Errorf("index child digest: %w", err)
 			}
-			out = append(out, child)
+			out.children = append(out.children, child)
 		}
-		return out, mt, nil
+		if err := out.setSubject(idx.Subject); err != nil {
+			return parsedManifest{}, err
+		}
+		return out, nil
 
 	case ocispec.MediaTypeImageManifest,
 		"application/vnd.docker.distribution.manifest.v2+json":
 		var man ocispec.Manifest
 		if err := json.Unmarshal(body, &man); err != nil {
-			return nil, "", fmt.Errorf("decoding image manifest: %w", err)
+			return parsedManifest{}, fmt.Errorf("decoding image manifest: %w", err)
 		}
-		out := make([]model.Digest, 0, 1+len(man.Layers))
+		out := parsedManifest{
+			children:     make([]model.Digest, 0, 1+len(man.Layers)),
+			mediaType:    mt,
+			artifactType: man.ArtifactType,
+			annotations:  man.Annotations,
+		}
+		if out.artifactType == "" {
+			out.artifactType = man.Config.MediaType
+		}
 		if man.Config.Digest != "" {
 			cfg, err := model.ParseDigest(man.Config.Digest.String())
 			if err != nil {
-				return nil, "", fmt.Errorf("config digest: %w", err)
+				return parsedManifest{}, fmt.Errorf("config digest: %w", err)
 			}
-			out = append(out, cfg)
+			out.children = append(out.children, cfg)
 		}
 		for _, layer := range man.Layers {
 			child, err := model.ParseDigest(layer.Digest.String())
 			if err != nil {
-				return nil, "", fmt.Errorf("layer digest: %w", err)
+				return parsedManifest{}, fmt.Errorf("layer digest: %w", err)
 			}
-			out = append(out, child)
+			out.children = append(out.children, child)
 		}
-		return out, mt, nil
+		if err := out.setSubject(man.Subject); err != nil {
+			return parsedManifest{}, err
+		}
+		return out, nil
 
 	default:
 		// Unknown but still JSON: store without children rather than reject
 		// schema versions we have not specialised for yet.
 		if !json.Valid(body) {
-			return nil, "", errors.New("manifest is not valid JSON")
+			return parsedManifest{}, errors.New("manifest is not valid JSON")
 		}
 		if mt == "" {
 			mt = "application/vnd.oci.image.manifest.v1+json"
 		}
-		return nil, mt, nil
+		return parsedManifest{mediaType: mt}, nil
 	}
+}
+
+func (p *parsedManifest) setSubject(d *ocispec.Descriptor) error {
+	if d == nil {
+		return nil
+	}
+	subject, err := model.ParseDigest(d.Digest.String())
+	if err != nil {
+		return fmt.Errorf("subject digest: %w", err)
+	}
+	p.subject = subject
+	p.hasSubject = true
+	return nil
 }
 
 // isIndexMediaType reports whether mt names a multi-platform index.

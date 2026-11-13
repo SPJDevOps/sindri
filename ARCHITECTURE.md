@@ -329,7 +329,7 @@ and `foo-bar` cannot both be claimed.
 
 A repository name may contain slashes, so that `team/internal` reads naturally in a
 `docker pull` or an index URL. It may not contain a segment an adapter splits paths on
-(`blobs`, `manifests`, `tags`, `uploads`, `simple`, `packages`, `upload`, and the UI's
+(`blobs`, `manifests`, `tags`, `referrers`, `uploads`, `simple`, `packages`, `upload`, and the UI's
 `-`), because
 `/pypi/team/packages/simple/foo/` would otherwise name either a repository or a download.
 The rule lives in one validator rather than in each adapter. See ADR 13.

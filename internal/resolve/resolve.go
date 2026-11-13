@@ -79,7 +79,7 @@ func absent(err error) bool {
 
 // SplitOCIPath finds the longest repository name prefix of path and returns
 // the Sindri repository, the image name remainder, and the rest after the
-// route marker (blobs|manifests|tags).
+// route marker (blobs|manifests|tags|referrers).
 func (r *Resolver) SplitOCIPath(ctx context.Context, path string) (repo model.Repository, image, rest string, err error) {
 	path = strings.Trim(path, "/")
 	name, rest, ok := splitOCIMarkers(path)
@@ -106,6 +106,14 @@ func splitOCIMarkers(path string) (name, rest string, ok bool) {
 	}
 	if i := strings.Index(path, "/blobs/uploads"); i > 0 {
 		return path[:i], path[i+1:], true
+	}
+	// referrers is a marker only as the last two segments, /referrers/<digest>
+	// (ADR 32 decision 9), so an existing repository or image whose name has
+	// a referrers segment keeps resolving. The other markers win above.
+	if i := strings.LastIndex(path, "/"); i > 0 {
+		if j := strings.LastIndex(path[:i], "/"); j > 0 && path[j+1:i] == "referrers" {
+			return path[:j], path[j+1:], true
+		}
 	}
 	return "", "", false
 }
@@ -762,6 +770,54 @@ func (r *Resolver) ListOCITags(ctx context.Context, repoName, image string, afte
 		return page, nil
 	default:
 		return registry.Page[string]{}, fmt.Errorf("unknown repository type %s", repo.Type)
+	}
+}
+
+// ListOCIReferrers lists the manifests that name subject through hosted /
+// proxy / virtual (ADR 32). A hosted repository answers from its own
+// placements. A proxy answers empty and never contacts its upstream. A virtual
+// repository answers from the first hosted member the caller may read that
+// places the subject, even when its list is empty; lists are never merged
+// across members (I5). Digests are not name-claimed, so the walk carries no
+// name.
+func (r *Resolver) ListOCIReferrers(ctx context.Context, repoName string, subject model.Digest, artifactType, after string, limit int32) (registry.Page[registry.Referrer], error) {
+	repo, err := r.reg.GetRepository(ctx, repoName)
+	if err != nil {
+		return registry.Page[registry.Referrer]{}, err
+	}
+	switch repo.Type {
+	case model.RepoTypeHosted:
+		return r.reg.ListReferrers(ctx, repoName, subject, artifactType, after, limit)
+	case model.RepoTypeProxy:
+		return registry.Page[registry.Referrer]{Items: []registry.Referrer{}}, nil
+	case model.RepoTypeVirtual:
+		page := registry.Page[registry.Referrer]{Items: []registry.Referrer{}}
+		err := r.walkMembers(ctx, repoName, "", map[string]struct{}{}, func(ctx context.Context, m model.Repository) (bool, error) {
+			if m.Type != model.RepoTypeHosted || m.Protocol != model.ProtocolOCI {
+				return false, nil
+			}
+			if err := r.reg.CheckPlacement(ctx, m.Name, subject); err != nil {
+				if errors.Is(err, registry.ErrNotPlaced) {
+					return false, nil
+				}
+				return false, err
+			}
+			p, err := r.reg.ListReferrers(ctx, m.Name, subject, artifactType, after, limit)
+			if err != nil {
+				return false, err
+			}
+			page = p
+			return true, nil
+		})
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return page, nil
+			}
+			return registry.Page[registry.Referrer]{}, err
+		}
+		return page, nil
+	default:
+		return registry.Page[registry.Referrer]{}, fmt.Errorf("unknown repository type %s", repo.Type)
 	}
 }
 
