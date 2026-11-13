@@ -17,6 +17,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${ROOT}"
 
+# anonymous_volumes: how many anonymous Docker volumes exist. A gate that removes
+# a container without its volumes (docker rm -f, not -fv) leaves one behind per
+# run, and enough of them fill the Docker disk (SIN-86).
+anonymous_volumes() { docker volume ls -q | grep -cE '^[0-9a-f]{64}$' || true; }
+volumes_before="$(anonymous_volumes)"
+
 echo "== the docs site builds, and no internal link or anchor is broken"
 make docs
 
@@ -53,5 +59,11 @@ for check in ${checks}; do
       ;;
   esac
 done
+
+volumes_after="$(anonymous_volumes)"
+if [ "${volumes_after}" -gt "${volumes_before}" ]; then
+  echo "warning: $((volumes_after - volumes_before)) anonymous Docker volumes were left behind;" \
+    "a gate removes a container without its volumes" >&2
+fi
 
 echo "M10 docs gate passed: $(wc -w <<<"${checks}" | tr -d ' ') checks named by the docs pages ran"

@@ -101,14 +101,14 @@ LOGGED_IN=0
 cleanup() {
   for p in "${PIDS[@]:-}"; do kill "${p}" 2>/dev/null || true; done
   [ "${LOGGED_IN}" = 0 ] || docker logout "${CSINDRI}" >/dev/null 2>&1 || true
-  docker rm -f "${OWN[@]}" >/dev/null 2>&1 || true
+  docker rm -fv "${OWN[@]}" >/dev/null 2>&1 || true
   docker network rm "${NET}" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-docker rm -f "${OWN[@]}" >/dev/null 2>&1 || true
+docker rm -fv "${OWN[@]}" >/dev/null 2>&1 || true
 docker network rm "${NET}" >/dev/null 2>&1 || true
 
 # Gate-only secrets for a throwaway stand-in. The bcrypt hashes are of these.

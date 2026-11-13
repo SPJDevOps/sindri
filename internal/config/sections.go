@@ -102,7 +102,8 @@ type Storage struct {
 	// S3 region. Compatible stores ignore it, but the SDK needs one.
 	// Default: `us-east-1` on S3.
 	Region string `yaml:"region,omitempty"`
-	// URL of an S3-compatible store such as MinIO. S3 only. Default: unset,
+	// URL of an S3-compatible store such as MinIO. S3 only. Credentials
+	// written into the URL are redacted by `config show`. Default: unset,
 	// which is AWS.
 	Endpoint string `yaml:"endpoint,omitempty"`
 	// Use path-style addressing, which most S3-compatible stores need. S3
@@ -290,6 +291,15 @@ func (d Database) Redacted() string {
 	parsed, err := url.Parse(d.URL)
 	if err != nil {
 		return "postgres://invalid"
+	}
+	// A password may also be written as a connection parameter.
+	if q := parsed.Query(); q.Has("password") || q.Has("sslpassword") {
+		for _, key := range []string{"password", "sslpassword"} {
+			if q.Has(key) {
+				q.Set(key, "xxxxx")
+			}
+		}
+		parsed.RawQuery = q.Encode()
 	}
 	return parsed.Redacted()
 }
@@ -690,14 +700,16 @@ type Scanning struct {
 	Trivy string `yaml:"trivy"`
 	// A mirror of the Trivy vulnerability database, passed as
 	// `--db-repository`, for a server that cannot reach the public one. Cannot
-	// be combined with `skipDBUpdate`.
+	// be combined with `skipDBUpdate`. Credentials written into the reference
+	// are redacted by `config show`.
 	DBRepository string `yaml:"dbRepository"`
 	// A mirror of Trivy's Java vulnerability database, passed as
 	// `--java-db-repository`. Trivy fetches that database separately, and only
 	// when a scanned image or package holds a jar. An air-gapped install that
 	// scans jar-containing images sets this, or pre-seeds the Java database in
 	// `cacheDir`; otherwise, with `skipDBUpdate`, such a scan fails (fail
-	// closed). Cannot be combined with `skipDBUpdate`.
+	// closed). Cannot be combined with `skipDBUpdate`. Credentials written into
+	// the reference are redacted by `config show`.
 	JavaDBRepository string `yaml:"javaDbRepository"`
 	// Where Trivy keeps its database and caches between scans. Empty uses
 	// `sindri/trivy` under the user's cache directory (`$XDG_CACHE_HOME`, or

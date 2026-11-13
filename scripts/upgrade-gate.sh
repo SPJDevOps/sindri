@@ -43,7 +43,7 @@ PREVIOUS="${PREVIOUS#v}"
 IMAGE="${SINDRI_GATE_IMAGE:-}"
 REPO_IMAGE="ghcr.io/spjdevops/sindri"
 
-cleanup() { docker rm -f "${DIND}" >/dev/null 2>&1 || true; }
+cleanup() { docker rm -fv "${DIND}" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 cleanup
 

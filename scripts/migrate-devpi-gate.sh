@@ -96,14 +96,14 @@ WORK="$(mktemp -d)"
 PIDS=()
 cleanup() {
   for p in "${PIDS[@]:-}"; do kill "${p}" 2>/dev/null || true; done
-  docker rm -f "${DC}" "${NC}" "${CC}" >/dev/null 2>&1 || true
+  docker rm -fv "${DC}" "${NC}" "${CC}" >/dev/null 2>&1 || true
   docker network rm "${NET}" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-docker rm -f "${DC}" "${NC}" "${CC}" >/dev/null 2>&1 || true
+docker rm -fv "${DC}" "${NC}" "${CC}" >/dev/null 2>&1 || true
 docker network rm "${NET}" >/dev/null 2>&1 || true
 
 PASS_ALICE="alice-gate-password"
