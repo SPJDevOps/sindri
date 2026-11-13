@@ -34,7 +34,7 @@ DIND_IMAGE="docker:29-dind"
 NODE_IMAGE="node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914"
 IMAGE="${SINDRI_GATE_IMAGE:-}"
 
-cleanup() { docker rm -f "${DIND}" >/dev/null 2>&1 || true; }
+cleanup() { docker rm -fv "${DIND}" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 cleanup
 
