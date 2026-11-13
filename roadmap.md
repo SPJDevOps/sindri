@@ -1229,6 +1229,34 @@ stub. The real-Trivy integration tests skipped locally (no `trivy` on PATH, the 
 image did not start); the gate used the real `-trivy` image. SIN-37 (referrers) is still
 open.
 
+**Referrers slice, Sprint 12, 2026-11-13.** `make ci`, `make test-integration`, `make docs`,
+`./scripts/oci-conformance.sh`, and `./scripts/m10-docs-gate.sh` passed on `m11b-referrers`,
+with Go 1.27.4, Docker 29.9.3, oras v1.3.0, and cosign v2.4.1. The conformance suite now
+runs the content discovery workflow: 75 passed and 5 skipped, where it was 60 and 20. No
+referrers spec is skipped. The five are three cross-repository blob mount specs, which
+Sindri does not support, and two setup specs that run only when push is disabled.
+[ADR 32](docs/adr/0032-oci-referrers.md) records the rules. A hosted manifest push with a
+`subject` is indexed in `manifest_subjects` (migration 00013) from its bytes alone, and
+`GET /v2/<name>/referrers/<digest>` lists the referrers placed in that repository and no
+others (I2). A proxy answers with an empty list and asks no upstream, and a virtual
+repository answers from its first readable hosted member that holds the subject.
+Referrers are never evidence: a `signature` gate still reads only what was attached
+through `/api/v1`. The collector keeps a referrer while one repository holds both it and
+its subject. A referrer with neither an image config nor an image layer is not scanned on
+publish, and anything that looks like an image still is. The docs gate now runs 13 checks,
+among them `scripts/referrers-gate.sh`, which runs `docs/clients/referrers.md`'s own
+blocks: oras attaches and discovers an SBOM, cosign signs and verifies through the API
+with no fallback tag written, and the list is checked in another repository, through a
+proxy, through a virtual repository, and after a delete. **Two reviews changed the first
+draft:** it skipped the scan for any manifest with a subject, took the listed media type
+from the client's header, and kept a deleted referrer alive for as long as its subject
+lived. Each fix has a test that was checked to fail with its bug put back. **Limits the
+page states:** manifests pushed before 1.5 are not listed until they are pushed again, a
+repository declared in the configuration file with a `referrers` name segment must be
+renamed before the upgrade, and a file attached with oras's default layer type is scanned
+as an image. SIN-83 and SIN-86 shipped in the same sprint, in PRs #61 and #62; with the
+second, two docs-gate runs in a row leave the Docker volume list unchanged.
+
 ---
 
 ### Later
