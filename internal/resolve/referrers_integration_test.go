@@ -5,6 +5,7 @@ package resolve_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"testing"
@@ -74,6 +75,24 @@ func TestReferrers_ProxyIsEmptyAndNeverContactsUpstream(t *testing.T) {
 	}
 	if got := env.requests.Load() - before; got != 0 {
 		t.Fatalf("upstream saw %d requests, want 0", got)
+	}
+}
+
+// A repository of another protocol has no referrers route, whatever its type:
+// it answers as the tags and manifest routes do, not with an empty index.
+func TestReferrers_RepositoryOfAnotherProtocolIsNotOCI(t *testing.T) {
+	env := newEnv(t, func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
+	env.createHostedNPM(t, "js")
+	env.createProxyNPM(t, "npmjs", 3600)
+	env.createVirtualNPM(t, "javascript", "js", "npmjs")
+
+	subject := mustDigest(t, "sha256:"+shaHex([]byte("subject")))
+	for _, name := range []string{"js", "npmjs", "javascript"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := env.resolver.ListOCIReferrers(t.Context(), name, subject, "", "", 0); !errors.Is(err, registry.ErrWrongProtocol) {
+				t.Fatalf("ListOCIReferrers = %v, want ErrWrongProtocol", err)
+			}
+		})
 	}
 }
 

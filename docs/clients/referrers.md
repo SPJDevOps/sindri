@@ -24,9 +24,13 @@ oras push --plain-http -u token -p "$SINDRI_TOKEN" \
 echo '{"spdxVersion":"SPDX-2.3"}' > sbom.spdx.json
 oras attach --plain-http -u token -p "$SINDRI_TOKEN" \
   --artifact-type application/spdx+json \
-  localhost:8080/docker/demo/app:1.0 sbom.spdx.json
+  localhost:8080/docker/demo/app:1.0 sbom.spdx.json:application/spdx+json
 ```
 <!-- /referrers:attach -->
+
+The `:application/spdx+json` after the file name is the layer's media type. Give one:
+without it oras labels the file as a container image layer, and Sindri then treats the
+attachment as an image and scans it.
 
 `oras discover` lists what refers to the image:
 
@@ -88,8 +92,10 @@ A long list is paged with a `Link` header, as the tags list is.
   not ask its upstream. A virtual repository answers from its first hosted member that
   holds the image and that you may read.
 - **A referrer lives as long as its subject.** Garbage collection keeps an untagged
-  signature while the image it signs is kept, and collects it with the image.
-- **Signatures and SBOMs are not scanned on publish.** An image is, whether or not it
-  names a subject. See [Scanning](../scanning.md).
+  signature while a repository holds both it and the image it signs. It is collected
+  with the image, or once you delete it from the repository.
+- **Signatures and SBOMs are not scanned on publish.** That means a manifest that names
+  a subject and has neither an image config nor an image layer. Anything that looks like
+  an image is scanned, whether or not it names a subject. See [Scanning](../scanning.md).
 - **Pushed before 1.5?** Manifests pushed to an older Sindri are not listed. Attach them
   again. See [Upgrading](../upgrading.md#behaviour-changes-in-15).

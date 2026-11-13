@@ -785,6 +785,9 @@ func (r *Resolver) ListOCIReferrers(ctx context.Context, repoName string, subjec
 	if err != nil {
 		return registry.Page[registry.Referrer]{}, err
 	}
+	if repo.Protocol != model.ProtocolOCI {
+		return registry.Page[registry.Referrer]{}, registry.ErrWrongProtocol
+	}
 	switch repo.Type {
 	case model.RepoTypeHosted:
 		return r.reg.ListReferrers(ctx, repoName, subject, artifactType, after, limit)

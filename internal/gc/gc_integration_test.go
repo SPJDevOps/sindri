@@ -371,6 +371,54 @@ func TestGC_ReferrerIsCollectedWithItsSubject(t *testing.T) {
 	}
 }
 
+// A referrer deleted from its repository must not stay in storage for as long
+// as the image lives: nobody could reach it (I2) and nobody could remove it.
+func TestGC_ReferrerDeletedFromItsRepositoryIsCollectedWhileItsSubjectLives(t *testing.T) {
+	f := newFixture(t)
+	subject, _ := f.pushImage("1.0", "layer")
+	referrer, referrerLayer := f.attach(subject, "a-signature-to-withdraw")
+	if err := f.reg.DeleteManifest(t.Context(), repo, image, referrer.String()); err != nil {
+		t.Fatalf("deleting the referrer: %v", err)
+	}
+	f.age()
+
+	f.collect()
+	f.assertSurvives("tagged subject", subject)
+	f.assertCollected("referrer deleted from its repository", referrer, referrerLayer)
+}
+
+// A referrer in one repository for an image that only another repository
+// holds gets nothing from that image: otherwise anyone with write somewhere
+// could pin bytes to another team's image, and learn from the referrer's
+// survival that the image exists.
+func TestGC_ReferrerIsNotKeptAliveByASubjectInAnotherRepository(t *testing.T) {
+	f := newFixture(t)
+	subject, _ := f.pushImage("1.0", "layer")
+
+	const elsewhere = "elsewhere"
+	layerDigest := f.uploadLayer(elsewhere, []byte("pinned-to-someone-else"))
+	man := ocispec.Manifest{
+		MediaType:    ocispec.MediaTypeImageManifest,
+		ArtifactType: "application/vnd.example.signature.v1",
+		Layers:       []ocispec.Descriptor{descriptor(ocispec.MediaTypeImageLayer, layerDigest, 22)},
+		Subject:      &ocispec.Descriptor{MediaType: ocispec.MediaTypeImageManifest, Digest: digestOf(subject), Size: 1},
+	}
+	man.SchemaVersion = 2
+	body, err := json.Marshal(man)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put, err := f.reg.PutManifest(t.Context(), elsewhere, image, sha256Of(body).String(), ocispec.MediaTypeImageManifest, body, model.Provenance{})
+	if err != nil {
+		t.Fatalf("PutManifest: %v", err)
+	}
+	f.age()
+
+	f.collect()
+	f.assertSurvives("tagged subject", subject)
+	f.assertCollected("referrer placed only where its subject is not", put.Digest, layerDigest)
+}
+
 func TestGC_ReferrerWhoseSubjectNeverArrivedIsCollected(t *testing.T) {
 	f := newFixture(t)
 	referrer, referrerLayer := f.attach(sha256Of([]byte("an image nobody pushed")), "signature-of-nothing")
@@ -1072,10 +1120,17 @@ func TestGCMark_MatchesReferenceReachabilityOnRandomGraphs(t *testing.T) {
 				if subject == referrer {
 					continue
 				}
-				edges[subject] = append(edges[subject], referrer)
 				f.exec(`INSERT INTO manifest_subjects (referrer_digest, subject_digest, media_type, size)
 					VALUES ($1, $2, 'application/vnd.oci.image.manifest.v1+json', 1)`,
 					nodes[referrer], nodes[subject])
+				// The edge counts only when one repository places both ends.
+				if rng.IntN(3) == 0 {
+					continue
+				}
+				edges[subject] = append(edges[subject], referrer)
+				f.exec(`INSERT INTO repository_blobs (repo_id, digest)
+					SELECT id, d FROM repositories, unnest($2::text[]) AS d WHERE name = $1
+					ON CONFLICT DO NOTHING`, repo, []string{nodes[referrer], nodes[subject]})
 			}
 			var roots []int
 			for i := range n {

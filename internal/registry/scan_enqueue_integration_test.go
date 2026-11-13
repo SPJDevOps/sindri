@@ -164,12 +164,14 @@ func TestScanOnPublish_OnlyANonImageReferrerSkipsTheScan(t *testing.T) {
 		name        string
 		subject     bool
 		imageConfig bool
+		imageLayer  bool
 		wantJob     bool
 	}{
 		{name: "ImageWithoutSubjectIsScanned", imageConfig: true, wantJob: true},
 		{name: "ArtifactWithoutSubjectIsScanned", wantJob: true},
 		{name: "ArtifactWithSubjectIsNotScanned", subject: true, wantJob: false},
 		{name: "ImageWithSubjectIsStillScanned", subject: true, imageConfig: true, wantJob: true},
+		{name: "ImageLayersUnderAnOddConfigWithSubjectAreStillScanned", subject: true, imageLayer: true, wantJob: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -184,6 +186,15 @@ func TestScanOnPublish_OnlyANonImageReferrerSkipsTheScan(t *testing.T) {
 					Digest:    digest.Digest(f.uploadBlob("images", config).String()),
 					Size:      int64(len(config)),
 				}
+			}
+			if tt.imageLayer {
+				layer := []byte("a layer of a runnable image")
+				man.Config.MediaType = "application/vnd.example.not-an-image-config+json"
+				man.Layers = []ocispec.Descriptor{{
+					MediaType: ocispec.MediaTypeImageLayerGzip,
+					Digest:    digest.Digest(f.uploadBlob("images", layer).String()),
+					Size:      int64(len(layer)),
+				}}
 			}
 			if tt.subject {
 				man.Subject = &ocispec.Descriptor{

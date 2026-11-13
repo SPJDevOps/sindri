@@ -49,16 +49,18 @@ promotion. This ADR says how the two relate.
    answers from the first hosted member, in member order, that the caller may read and
    that places the subject; proxy members are passed over; if there is none, the index
    is empty. Lists are never merged across members (I5).
-6. **A referrer lives as long as its subject.** The garbage collector treats a referrer
-   as reachable when its subject is reachable, and collects it with its subject
-   otherwise. A referrer whose subject never arrives is collected after the grace
-   period, like any untagged manifest.
+6. **A referrer lives as long as its subject, in a repository that holds both.** The
+   garbage collector treats a referrer as reachable when its subject is reachable and
+   some repository places both of them. It is collected with its subject, or after the
+   grace period once it has been deleted from that repository. A referrer whose subject
+   never arrives is collected like any untagged manifest.
 7. **A referrer that is not an image is not scanned on publish.** A signature or an SBOM
    is a document, and a Trivy run on it is noise. The test is the manifest itself: it
-   names a subject, it is not an index, and its config is not an image config. An image
-   that names a subject is scanned like any other, so adding a `subject` field is not a
-   way around the scan. A manifest that skips the scan has no Sindri scan, so a severity
-   gate refuses it (ADR 30); the on-demand scan route still works.
+   names a subject, it is not an index, its config is not an image config, and none of
+   its layers has an image layer media type. Anything that looks like an image in either
+   respect is scanned like any other, so a `subject` field and an odd config type are
+   not a way around the scan. A manifest that skips the scan has no Sindri scan, so a
+   severity gate refuses it (ADR 30); the on-demand scan route still works.
 8. **No backfill.** Manifests with a subject that were pushed before this release are
    stored but not listed. Pushing them again lists them.
 9. **`referrers` is a reserved repository name segment** for new repositories, with the
@@ -75,16 +77,21 @@ promotion. This ADR says how the two relate.
   signatures only through those tags until they are pushed again. The upgrade notes say
   so.
 - An untagged signature is no longer collected a day after it was pushed.
-- The sweep holds a referrer for as long as its subject's blob row exists, the same
-  conservative rule as an edge from a dead parent, so a referrer goes one pass after its
-  subject. One race stays open: a subject pushed at the moment its long-orphaned referrer
-  is being swept loses that referrer. The client that pushes an image pushes its
-  signature afterwards, which writes it again.
+- The sweep holds a referrer for as long as some repository places both it and its
+  subject, the same conservative rule as an edge from a dead parent, so a referrer goes
+  one pass after its subject. One race stays open: a subject pushed at the moment its
+  long-orphaned referrer is being swept loses that referrer. The client that pushes an
+  image pushes its signature afterwards, which writes it again.
 - cosign's older signature format uses an image config, so such a signature is still
   scanned, as it was before this ADR. The newer formats are not.
-- A referrer pushed into repository B for a subject that lives only in repository A stays
-  alive while A's subject does. It is listed only in B, costs B's owner nothing they
-  could not get with a tag, and tells B nothing about A.
+- A referrer pushed into repository B for a subject that lives only in repository A is
+  not kept alive by A: it needs a tag of its own, or it is collected after the grace
+  period. Nothing B pushes can pin bytes to A's image, and whether B's referrer survives
+  says nothing about what A holds.
+- oras labels a file as an image layer unless told otherwise, so an attachment made with
+  its defaults is scanned. The docs show the layer media type that avoids it.
+- `referrers` as a reserved segment stops `serve --config` on a file that declares such
+  a repository. The upgrade notes say to rename it first.
 - The schema gains one table, additive, so a rollback to 1.4 needs no restore.
 
 ## Alternatives rejected
@@ -102,8 +109,14 @@ promotion. This ADR says how the two relate.
   rule for. Empty is honest and can be widened later.
 - **Rooting every referrer in the collector.** A signature for an image that has been
   collected would live forever.
-- **Skipping the scan for every manifest with a subject.** An image pushed with a
-  `subject` field would then never be scanned, which breaks the claim that every hosted
-  publish is. A review of the first draft found this.
+- **Keeping a referrer alive through its subject alone, wherever either is placed.** The
+  first draft did this. A referrer deleted from its repository then stayed in storage
+  for as long as the image lived, anyone with write on any repository could pin bytes to
+  another team's image, and the referrer's survival told its pusher whether a guessed
+  digest existed elsewhere. A review found it.
+- **Skipping the scan for every manifest with a subject, or for every one without an
+  image config.** An image pushed with a `subject` field, or with that and a renamed
+  config type, would then never be scanned, which breaks the claim that every hosted
+  image is. Reviews of the first two drafts found these.
 - **Updating the row on a later push.** A push into one repository, with a misleading
   `Content-Type`, could then change what another repository's list says.

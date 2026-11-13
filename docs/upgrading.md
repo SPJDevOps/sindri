@@ -194,11 +194,17 @@ differently:
   listed**, so attach older signatures and SBOMs again. The old tags stay and can be
   deleted once that is done. See [Signatures and SBOMs](clients/referrers.md).
 - **`referrers` is a reserved repository name segment.** A new repository cannot have a
-  name segment `referrers`. One that already exists keeps working.
+  name segment `referrers`, and a first push no longer creates one. A repository created
+  through the API keeps working. **One declared in the configuration file must be
+  renamed before the upgrade:** `sindri config check` refuses the name, and `serve
+  --config` does not start on a file that fails the check.
 - **The garbage collector keeps a referrer for as long as its subject.** An untagged
-  signature used to be collected after the grace period.
-- **A signature or SBOM attached as a referrer is not scanned on publish.** An image is,
-  as before, whether or not it names a subject.
+  signature used to be collected after the grace period. It is now kept while a
+  repository holds both it and the image it signs, and collected once it is deleted
+  from that repository or the image goes.
+- **A signature or SBOM attached as a referrer is not scanned on publish.** That is a
+  manifest that names a subject and has neither an image config nor an image layer.
+  Anything else is scanned as before, whether or not it names a subject.
 
 ## Rolling back
 

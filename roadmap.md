@@ -834,18 +834,20 @@ publish is scanned, and promotion is refused above a severity.
 | 9, Nov 10–22 | M11a scan | SIN-30, 31, 32, 36 | |
 | 10, Nov 11–29 | M11a gate | SIN-34, 38, 39, 72, 80 | v1.3.0 ✅ |
 | 11, Nov 12 | M11b re-scan ✅ | SIN-33, 35 | v1.4.0 |
-| 12, Nov 23–29 | M11b referrers | SIN-37 | v1.5.0 |
+| 12, Nov 13–29 | M11b referrers | SIN-37, 83, 86 | v1.5.0 |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
 week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9 and 10
 moved up two weeks. Sprint 9 started early on Nov 10, and Sprint 10 on Nov 11. Sprint 11
 started and closed on Nov 12. Its work shipped as v1.4.0, a minor release because it adds a
-setting, a route, and a metric, so the referrers API moved to v1.5.0.
+setting, a route, and a metric, so the referrers API moved to v1.5.0. Sprint 12 started
+early on Nov 13 and took two hardening tickets with it, SIN-83 and SIN-86.
 
 Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic, and the follow-ups
-from the Sprint 9 reviews: SIN-81, 82, 83, 84, and 85. SIN-80, the other follow-up, shipped
-in Sprint 10. Also not scheduled: SIN-86, from Sprint 10: the gate scripts leak anonymous
-Docker volumes, about 7 per docs-gate run, until the Docker disk fills.
+from the Sprint 9 reviews: SIN-81, 82, 84, and 85. SIN-80 shipped in Sprint 10, and SIN-83
+and SIN-86 (the gate scripts' leaked Docker volumes) in Sprint 12. Also not scheduled:
+SIN-116, found in Sprint 12: a proxy's upstream URL may carry credentials, and the API and
+the UI show them.
 
 ---
 
@@ -1183,14 +1185,15 @@ first; the upgrade notes say so.
 vulnerabilities show in the UI, and evidence attached through standard OCI tooling is
 discoverable. It was planned for after the announcement and started before it, on
 2026-11-12, and ships in two releases. Sprint 11 built the re-scan and the vulnerability UI,
-released as v1.4.0 on 2026-11-12. Sprint 12 is the referrers API, released as v1.5.0.
+released as v1.4.0 on 2026-11-12. Sprint 12 built the referrers API, for v1.5.0.
 
 **Scope.**
 - [x] A daily re-scan of every subject currently approved for any stage. A newly found
   vulnerability appears in the API, the UI, and a metric (SIN-33)
 - [x] The UI shows each artifact's vulnerabilities by severity (SIN-35)
-- [ ] The OCI referrers API, so evidence attached by cosign or Trivy through standard OCI
-  tooling is discoverable, which also clears the 20 skipped conformance specs (SIN-37)
+- [x] The OCI referrers API, so signatures and SBOMs attached by cosign or oras through
+  standard OCI tooling are discoverable, which also clears the skipped referrers
+  conformance specs (SIN-37, [ADR 32](docs/adr/0032-oci-referrers.md))
 
 **Out of scope.** Notifications beyond the API, UI, and metric.
 
@@ -1202,6 +1205,7 @@ make ci && make test-integration
 make up && make build && ./scripts/m11-scan-gate.sh
 # a re-scan with a newer database flags an approved artifact without changing the ledger
 ./scripts/oci-conformance.sh   # referrers specs no longer skipped
+./scripts/referrers-gate.sh    # oras and cosign attach and find through the API
 ```
 
 **Re-scan slice, Sprint 11, 2026-11-12.** `make test`, `GOTOOLCHAIN=go1.27.1 make lint`,
@@ -1238,7 +1242,7 @@ one when they are scheduled.
 **M12, a feedback window and hardening.** Two to four weeks right after the announcement
 where the roadmap is driven by what strangers report, so that the next milestone is chosen
 from evidence rather than from this list. Scope: the unscheduled hardening tickets (SIN-56,
-58, 65, 73, 74, 75, 76, 81, 82, 83, 84, 85, 86); notifications, because M11b's re-scan
+58, 65, 73, 74, 75, 76, 81, 82, 84, 85, 116); notifications, because M11b's re-scan
 finds a CVE and nothing tells anyone (a webhook on new finding and on promotion, through the
 queue table); an import tool only if the proxy-in-front migration turns out not to be
 enough. Gate: every issue opened by an outside adopter in the window is answered, and the

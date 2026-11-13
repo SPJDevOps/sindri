@@ -832,16 +832,21 @@ type parsedManifest struct {
 	// configMediaType is an image manifest's config media type; empty for an
 	// index.
 	configMediaType string
-	isIndex         bool
+	// hasImageLayer is set when any layer has a container image layer media
+	// type.
+	hasImageLayer bool
+	isIndex       bool
 }
 
-// isNonImageReferrer reports whether the manifest refers to a subject and is
-// not itself an image: a signature, an SBOM, or another document with a
-// config that is not an image config. Only such a manifest skips the scan on
-// publish (ADR 32). An image stays scanned whether or not it names a subject,
-// so adding a subject field cannot be used to avoid the scan.
+// isNonImageReferrer reports whether the manifest refers to a subject and
+// carries nothing a container runtime could run: a signature, an SBOM, or
+// another document, with neither an image config nor an image layer. Only
+// such a manifest skips the scan on publish (ADR 32). Anything that looks
+// like an image in either respect stays scanned whether or not it names a
+// subject, so a subject field and an odd config type are not a way around
+// the scan.
 func (p parsedManifest) isNonImageReferrer() bool {
-	if !p.hasSubject || p.isIndex {
+	if !p.hasSubject || p.isIndex || p.hasImageLayer {
 		return false
 	}
 	switch p.configMediaType {
@@ -850,6 +855,13 @@ func (p parsedManifest) isNonImageReferrer() bool {
 	default:
 		return true
 	}
+}
+
+// isImageLayerMediaType reports whether mt is a container image layer: the
+// OCI and Docker layer types in every compression and distribution variant.
+func isImageLayerMediaType(mt string) bool {
+	return strings.HasPrefix(mt, "application/vnd.oci.image.layer.") ||
+		strings.HasPrefix(mt, "application/vnd.docker.image.rootfs.")
 }
 
 // parseManifest decodes a manifest with the image-spec types and validates
@@ -915,6 +927,9 @@ func parseManifest(mediaType string, body []byte) (parsedManifest, error) {
 				return parsedManifest{}, fmt.Errorf("layer digest: %w", err)
 			}
 			out.children = append(out.children, child)
+			if isImageLayerMediaType(layer.MediaType) {
+				out.hasImageLayer = true
+			}
 		}
 		if err := out.setSubject(man.Subject); err != nil {
 			return parsedManifest{}, err
