@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,6 +18,10 @@ func (c *Config) RedactedCopy() Config {
 	out := *c
 	out.Desired = nil
 	out.Database.URL = c.Database.Redacted()
+	out.PublicURL = redactUserinfo(c.PublicURL)
+	out.Storage.Endpoint = redactUserinfo(c.Storage.Endpoint)
+	out.Scanning.DBRepository = redactUserinfo(c.Scanning.DBRepository)
+	out.Scanning.JavaDBRepository = redactUserinfo(c.Scanning.JavaDBRepository)
 	if out.Storage.SecretAccessKey != "" {
 		out.Storage.SecretAccessKey = Redacted
 	}
@@ -31,6 +36,8 @@ func (c *Config) RedactedCopy() Config {
 		if o.ClientSecret != "" {
 			o.ClientSecret = Redacted
 		}
+		o.Issuer = redactUserinfo(o.Issuer)
+		o.RedirectURL = redactUserinfo(o.RedirectURL)
 		out.Auth.OIDC = &o
 	}
 	if len(c.Credentials) > 0 {
@@ -49,6 +56,29 @@ func (c *Config) RedactedCopy() Config {
 		}
 	}
 	return out
+}
+
+// redactUserinfo replaces the credentials written into a URL or an image
+// reference, as in https://user:pass@host or user:pass@registry/path. The
+// whole userinfo goes, not only the password: a token is often written where
+// the user name belongs. A value without credentials is returned unchanged.
+func redactUserinfo(s string) string {
+	start := 0
+	if i := strings.Index(s, "://"); i >= 0 {
+		start = i + len("://")
+	}
+	// The authority ends at the first path, query, or fragment character, so
+	// the @ of an image digest (registry/name@sha256:...) is never taken for
+	// userinfo.
+	end := len(s)
+	if i := strings.IndexAny(s[start:], "/?#"); i >= 0 {
+		end = start + i
+	}
+	at := strings.LastIndex(s[start:end], "@")
+	if at < 0 {
+		return s
+	}
+	return s[:start] + Redacted + s[start+at:]
 }
 
 type docOut struct {
@@ -169,7 +199,7 @@ func MarshalManifests(m *Manifests) ([]byte, error) {
 			Members:  r.Spec.Members,
 		}
 		if u := r.Spec.Upstream; u != nil {
-			spec.Upstream = &upstreamOut{URL: u.URL, TTL: u.TTL, NegativeTTL: u.NegativeTTL, Credentials: u.Credentials}
+			spec.Upstream = &upstreamOut{URL: redactUserinfo(u.URL), TTL: u.TTL, NegativeTTL: u.NegativeTTL, Credentials: u.Credentials}
 		}
 		if len(r.Spec.Access.Read) > 0 || len(r.Spec.Access.Write) > 0 {
 			spec.Access = &accessOut{Read: r.Spec.Access.Read, Write: r.Spec.Access.Write}

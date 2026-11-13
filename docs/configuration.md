@@ -82,7 +82,7 @@ Short form: `storage: s3://bucket/prefix` is the same as `storage: {backend: s3,
 | `bucket` | string | Bucket name. S3 only, and required there. | unset |
 | `prefix` | string | Key prefix inside the bucket. S3 only. | unset |
 | `region` | string | S3 region. Compatible stores ignore it, but the SDK needs one. | `us-east-1` on S3 |
-| `endpoint` | string | URL of an S3-compatible store such as MinIO. S3 only. | unset, which is AWS |
+| `endpoint` | string | URL of an S3-compatible store such as MinIO. S3 only. Credentials written into the URL are redacted by `config show`. | unset, which is AWS |
 | `pathStyle` | boolean | Use path-style addressing, which most S3-compatible stores need. S3 only. | `false` |
 | `accessKeyId` | string | Static access key. Set it together with `secretAccessKey`, or leave both out to use the ambient AWS credential chain. | unset |
 | `secretAccessKey` | string | Static secret key. Redacted by `config show`. | unset |
@@ -251,8 +251,8 @@ Short form: `scanning: true` is the same as `scanning: {enabled: true}`.
 |---|---|---|---|
 | `enabled` | boolean | Scan hosted publishes for known vulnerabilities and attach the result to the artifact. Off when the section is absent. An absent `enabled` in the mapping means `true`, because writing the section signals intent. | `false` |
 | `trivy` | string | The Trivy executable. A bare name is looked up on the PATH. Sindri runs it as a separate process and never links it in. | `trivy` |
-| `dbRepository` | string | A mirror of the Trivy vulnerability database, passed as `--db-repository`, for a server that cannot reach the public one. Cannot be combined with `skipDBUpdate`. | unset |
-| `javaDbRepository` | string | A mirror of Trivy's Java vulnerability database, passed as `--java-db-repository`. Trivy fetches that database separately, and only when a scanned image or package holds a jar. An air-gapped install that scans jar-containing images sets this, or pre-seeds the Java database in `cacheDir`; otherwise, with `skipDBUpdate`, such a scan fails (fail closed). Cannot be combined with `skipDBUpdate`. | unset |
+| `dbRepository` | string | A mirror of the Trivy vulnerability database, passed as `--db-repository`, for a server that cannot reach the public one. Cannot be combined with `skipDBUpdate`. Credentials written into the reference are redacted by `config show`. | unset |
+| `javaDbRepository` | string | A mirror of Trivy's Java vulnerability database, passed as `--java-db-repository`. Trivy fetches that database separately, and only when a scanned image or package holds a jar. An air-gapped install that scans jar-containing images sets this, or pre-seeds the Java database in `cacheDir`; otherwise, with `skipDBUpdate`, such a scan fails (fail closed). Cannot be combined with `skipDBUpdate`. Credentials written into the reference are redacted by `config show`. | unset |
 | `cacheDir` | string | Where Trivy keeps its database and caches between scans. Empty uses `sindri/trivy` under the user's cache directory (`$XDG_CACHE_HOME`, or `~/.cache` on Linux). The `-trivy` release image sets `$XDG_CACHE_HOME` to `/var/cache`, so there it is `/var/cache/sindri/trivy`. | unset |
 | `timeout` | duration | How long one scan may run before it is cancelled and retried. At least `1m`. | `10m` |
 | `skipDBUpdate` | boolean | Never download the vulnerability database, and scan with the one already in `cacheDir`, including the Java database that Trivy fetches separately when it finds a jar. For an air-gapped server with a pre-seeded cache; a jar-containing subject fails to scan if the Java database is not in it. Cannot be combined with `dbRepository` or `javaDbRepository`. | `false` |
