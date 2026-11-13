@@ -37,11 +37,11 @@ IMAGE="${SINDRI_GATE_IMAGE:-}"
 WORK="$(mktemp -d)"
 
 cleanup() {
-  docker rm -f "${DIND}" >/dev/null 2>&1 || true
+  docker rm -fv "${DIND}" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
 }
 trap cleanup EXIT
-docker rm -f "${DIND}" >/dev/null 2>&1 || true
+docker rm -fv "${DIND}" >/dev/null 2>&1 || true
 
 # block FILE MARKER OUTPUT: the fenced block between a page's markers.
 block() {
@@ -141,7 +141,7 @@ through() {
     got="$(status "https://${HOST}/${path}")"
     [ "${got}" = 404 ] || fail "$1 serves /${path} with ${got}, want 404"
   done
-  docker rm -f "$1" >/dev/null
+  docker rm -fv "$1" >/dev/null
   echo "$1: pushed, pulled, and hides the operational paths"
 }
 

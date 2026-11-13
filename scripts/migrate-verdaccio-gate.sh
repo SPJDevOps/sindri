@@ -68,13 +68,13 @@ WORK="$(mktemp -d)"
 PIDS=()
 cleanup() {
   for p in "${PIDS[@]:-}"; do kill "${p}" 2>/dev/null || true; done
-  docker rm -f "${VC}" "${VC}-public" >/dev/null 2>&1 || true
+  docker rm -fv "${VC}" "${VC}-public" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-docker rm -f "${VC}" >/dev/null 2>&1 || true
+docker rm -fv "${VC}" >/dev/null 2>&1 || true
 
 # Isolate npm from the user's configuration and cache for the whole run.
 export npm_config_userconfig="${WORK}/user.npmrc"
