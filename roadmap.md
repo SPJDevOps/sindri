@@ -834,20 +834,36 @@ publish is scanned, and promotion is refused above a severity.
 | 9, Nov 10–22 | M11a scan | SIN-30, 31, 32, 36 | |
 | 10, Nov 11–29 | M11a gate | SIN-34, 38, 39, 72, 80 | v1.3.0 ✅ |
 | 11, Nov 12 | M11b re-scan ✅ | SIN-33, 35 | v1.4.0 |
-| 12, Nov 13–29 | M11b referrers | SIN-37, 83, 86 | v1.5.0 |
+| 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
+| 13, Nov 16–22 | Pre-announcement hardening | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 |
+| 14, Nov 23–29 | Notifications | SIN-117, 112 | v1.6.0 |
+| 15, Nov 30–Dec 6 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
+| 16–17, Dec 7–20 | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
 week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9 and 10
 moved up two weeks. Sprint 9 started early on Nov 10, and Sprint 10 on Nov 11. Sprint 11
 started and closed on Nov 12. Its work shipped as v1.4.0, a minor release because it adds a
 setting, a route, and a metric, so the referrers API moved to v1.5.0. Sprint 12 started
-early on Nov 13 and took two hardening tickets with it, SIN-83 and SIN-86.
+early on Nov 13 and took two hardening tickets with it, SIN-83 and SIN-86. It shipped as
+v1.5.0 on Nov 13, which completes M11b.
 
-Not scheduled: SIN-56, 58, 65, 73, 74, 75, and 76 from the hardening epic, and the follow-ups
-from the Sprint 9 reviews: SIN-81, 82, 84, and 85. SIN-80 shipped in Sprint 10, and SIN-83
-and SIN-86 (the gate scripts' leaked Docker volumes) in Sprint 12. Also not scheduled:
-SIN-116, found in Sprint 12: a proxy's upstream URL may carry credentials, and the API and
-the UI show them.
+Sprints 13 to 17 were planned on 2026-11-14. Sprint 13 takes every hardening ticket a
+stranger could hit in the first week: credentials in a proxy's upstream URL shown by the API
+and the UI (SIN-116), a cached OCI digest that cannot be evicted (SIN-73), a retired PyPI
+filename still placed under another version (SIN-75), and a scan worker that can stall or
+retry forever (SIN-81, 84, 85), plus `--offline-scan` for the air-gapped audience (SIN-82).
+Sprint 14 pulls notifications forward from M12, because a re-scan that finds a CVE in
+something approved for prod and tells nobody is the weakest point of the security claim, and
+because doing it now keeps the feedback window free for what strangers report. Sprint 15
+finishes the pages a newcomer meets first, with the three foundation tickets the UI section
+below names first. **The announcement is not tied to a sprint:** it follows the person-run M10
+walkthrough, at the earliest after Sprint 13. If it comes sooner, the M12 window moves up and
+Sprints 14 and 15 follow it.
+
+Not scheduled: SIN-56, 58, 65, 74, and 76 from the hardening epic, kept as filler for the
+M12 window. SIN-80 shipped in Sprint 10, and SIN-83 and SIN-86 (the gate scripts' leaked
+Docker volumes) in Sprint 12.
 
 ---
 
@@ -1179,13 +1195,14 @@ first; the upgrade notes say so.
 
 ---
 
-### M11b — Re-scan, vulnerability UI, and referrers
+### M11b — Re-scan, vulnerability UI, and referrers ✅
 
 **Goal.** A new CVE in something already approved for prod is flagged, each artifact's
 vulnerabilities show in the UI, and evidence attached through standard OCI tooling is
 discoverable. It was planned for after the announcement and started before it, on
-2026-11-12, and ships in two releases. Sprint 11 built the re-scan and the vulnerability UI,
-released as v1.4.0 on 2026-11-12. Sprint 12 built the referrers API, for v1.5.0.
+2026-11-12, and shipped in two releases. Sprint 11 built the re-scan and the vulnerability UI,
+released as v1.4.0 on 2026-11-12. Sprint 12 built the referrers API, released as v1.5.0 on
+2026-11-13.
 
 **Scope.**
 - [x] A daily re-scan of every subject currently approved for any stage. A newly found
@@ -1269,11 +1286,10 @@ one when they are scheduled.
 
 **M12, a feedback window and hardening.** Two to four weeks right after the announcement
 where the roadmap is driven by what strangers report, so that the next milestone is chosen
-from evidence rather than from this list. Scope: the unscheduled hardening tickets (SIN-56,
-58, 65, 73, 74, 75, 76, 81, 82, 84, 85, 116); notifications, because M11b's re-scan
-finds a CVE and nothing tells anyone (a webhook on new finding and on promotion, through the
-queue table); an import tool only if the proxy-in-front migration turns out not to be
-enough. Gate: every issue opened by an outside adopter in the window is answered, and the
+from evidence rather than from this list. Scope: the hardening tickets Sprint 13 leaves
+(SIN-56, 58, 65, 74, 76); an import tool only if the proxy-in-front migration turns out not
+to be enough. Notifications were planned here and moved to Sprint 14 (SIN-117), and most of
+the hardening list to Sprint 13, so that the window holds only what strangers report. Gate: every issue opened by an outside adopter in the window is answered, and the
 ones that block adoption are fixed.
 
 **M13, high availability.** Shared upload sessions, several replicas (SIN-71), and the split
@@ -1330,9 +1346,9 @@ shared look, UX, and size targets, and each ticket gets a milestone when it is p
   (SIN-103), environments (SIN-104), activity (SIN-105), "me" (SIN-106), system page
   (SIN-107), resolution explainer (SIN-108), compare (SIN-109).
 - **With a milestone above:** referrers and signature state with SIN-37 and M14 (SIN-110),
-  protocol presenters before M15 (SIN-111), webhook deliveries with M12 (SIN-112), replicas
-  and admission decisions with M13 and M14 (SIN-113), printable report and waivers with the
-  paid layer (SIN-114).
+  protocol presenters before M15 (SIN-111), webhook deliveries with notifications in
+  Sprint 14 (SIN-112), replicas and admission decisions with M13 and M14 (SIN-113),
+  printable report and waivers with the paid layer (SIN-114).
 - **One decision, after M12:** whether the browser may ever promote, revoke, or re-scan
   (SIN-115). Until that ADR exists, the gap below stands.
 
