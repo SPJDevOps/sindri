@@ -52,10 +52,15 @@ UPDATE webhook_deliveries
 SET state = 'failed', finished_at = now(), last_error = sqlc.arg('last_error')::text
 WHERE id = sqlc.arg('id');
 
--- name: CountFailedWebhookDeliveriesByWebhook :many
-SELECT webhook, count(*)::bigint AS failed
+-- name: WebhookDeliveryStats :many
+-- failed counts every failed delivery. failing is whether the newest finished
+-- delivery failed, so a receiver that recovers, or a redelivery that succeeds,
+-- clears it.
+SELECT webhook,
+       (count(*) FILTER (WHERE state = 'failed'))::bigint AS failed,
+       COALESCE((array_agg(state ORDER BY finished_at DESC, id DESC)
+                 FILTER (WHERE state IN ('delivered', 'failed')))[1] = 'failed', false)::boolean AS failing
 FROM webhook_deliveries
-WHERE state = 'failed'
 GROUP BY webhook;
 
 -- name: SubjectHasLiveApproval :one

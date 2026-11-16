@@ -1,5 +1,7 @@
 # Notifications
 
+<!-- commands checked by: TestDocs_NotificationsExamplesHold -->
+
 Sindri can tell another system when something happens that a person should know about.
 It POSTs a signed JSON document, a webhook, to each URL you configure. Point it at a chat
 bridge, an incident tool, or a small service of your own.
@@ -156,14 +158,15 @@ Administrators can see every webhook and its deliveries:
 
 - **In the UI**, the **System** page shows each webhook with its target host and the
   number of failed deliveries. The line at the top says whether any webhook is failing,
-  and links to the delivery log: when each delivery was made, the response status, the
+  which means its newest finished delivery failed, so a receiver that recovers clears it.
+  It links to the delivery log: when each delivery was made, the response status, the
   attempts, the next retry, and the error. An artifact's page lists the notifications
   sent about it.
 - **In the API**, these routes need an administrator:
 
   | Route | Answers |
   |---|---|
-  | `GET /api/v1/notifications/webhooks` | Each webhook: name, events, repositories, target host, failed deliveries |
+  | `GET /api/v1/notifications/webhooks` | Each webhook: name, events, repositories, target host, failed deliveries, and whether it is failing |
   | `GET /api/v1/notifications/deliveries?webhook=&state=&digest=&limit=` | The delivery log, newest first; `state` is `pending`, `delivered`, or `failed` |
   | `GET /api/v1/notifications/deliveries/{id}` | One delivery, with the body that was sent |
   | `POST /api/v1/notifications/deliveries/{id}/redeliver` | 202, and a new delivery with the same body and a new id |

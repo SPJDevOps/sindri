@@ -121,8 +121,26 @@ func TestListWebhookDeliveries_FiltersAndOrdersNewestFirst(t *testing.T) {
 		}
 	}
 
-	counts, err := q.CountFailedWebhookDeliveriesByWebhook(t.Context())
-	if err != nil || len(counts) != 1 || counts[0].Webhook != "a" || counts[0].Failed != 1 {
-		t.Errorf("failed counts = %+v, %v", counts, err)
+	stats := func() map[string]db.WebhookDeliveryStatsRow {
+		t.Helper()
+		rows, err := q.WebhookDeliveryStats(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]db.WebhookDeliveryStatsRow{}
+		for _, r := range rows {
+			out[r.Webhook] = r
+		}
+		return out
+	}
+	if s := stats(); s["a"].Failed != 1 || !s["a"].Failing || s["b"].Failed != 0 || s["b"].Failing {
+		t.Errorf("stats after a failure = %+v", s)
+	}
+	// A later delivery that succeeds clears failing; the count stays.
+	if err := q.MarkWebhookDelivered(t.Context(), a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if s := stats(); s["a"].Failed != 1 || s["a"].Failing {
+		t.Errorf("stats after a recovery = %+v", s)
 	}
 }

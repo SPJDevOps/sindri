@@ -114,28 +114,36 @@ func (h *handler) system(w http.ResponseWriter, r *http.Request) {
 	if h.opts.Notifier != nil {
 		hooks = h.opts.Notifier.Webhooks()
 	}
-	failed := map[string]int64{}
+	stats := map[string]db.WebhookDeliveryStatsRow{}
 	if q := h.queries(); q != nil {
-		rows, err := q.CountFailedWebhookDeliveriesByWebhook(r.Context())
+		rows, err := q.WebhookDeliveryStats(r.Context())
 		if err != nil {
 			h.fail(w, r, err)
 			return
 		}
 		for _, row := range rows {
-			failed[row.Webhook] = row.Failed
+			stats[row.Webhook] = row
 		}
 	}
+	// A webhook is failing while its newest finished delivery failed. Only
+	// configured webhooks count: one removed from the file cannot be fixed.
+	failing := 0
 	data.Configured = len(hooks) > 0
 	for _, wh := range hooks {
 		data.Hooks = append(data.Hooks, hookRow{
 			Name:    wh.Name,
 			Events:  strings.Join(wh.Events, ", "),
 			Target:  model.URLHost(wh.URL),
-			Failed:  failed[wh.Name],
+			Failed:  stats[wh.Name].Failed,
 			LogHref: logHref(wh.Name, ""),
 		})
 	}
-	switch n := len(failed); {
+	for _, wh := range hooks {
+		if stats[wh.Name].Failing {
+			failing++
+		}
+	}
+	switch n := failing; {
 	case n > 0:
 		data.StatusClass = "bad"
 		data.StatusText = plural(n, "webhook") + " failing"

@@ -12,38 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countFailedWebhookDeliveriesByWebhook = `-- name: CountFailedWebhookDeliveriesByWebhook :many
-SELECT webhook, count(*)::bigint AS failed
-FROM webhook_deliveries
-WHERE state = 'failed'
-GROUP BY webhook
-`
-
-type CountFailedWebhookDeliveriesByWebhookRow struct {
-	Webhook string `json:"webhook"`
-	Failed  int64  `json:"failed"`
-}
-
-func (q *Queries) CountFailedWebhookDeliveriesByWebhook(ctx context.Context) ([]CountFailedWebhookDeliveriesByWebhookRow, error) {
-	rows, err := q.db.Query(ctx, countFailedWebhookDeliveriesByWebhook)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []CountFailedWebhookDeliveriesByWebhookRow{}
-	for rows.Next() {
-		var i CountFailedWebhookDeliveriesByWebhookRow
-		if err := rows.Scan(&i.Webhook, &i.Failed); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const getWebhookDelivery = `-- name: GetWebhookDelivery :one
 SELECT d.id, d.webhook, d.event, d.subject_digest, d.repository, d.payload, d.dedupe_key, d.job_id, d.state, d.attempts, d.last_status, d.last_error, d.created_at, d.delivered_at, d.finished_at, j.run_after AS job_run_after
 FROM webhook_deliveries d
@@ -350,4 +318,42 @@ func (q *Queries) SubjectHasLiveApproval(ctx context.Context, subjectDigest stri
 	var approved bool
 	err := row.Scan(&approved)
 	return approved, err
+}
+
+const webhookDeliveryStats = `-- name: WebhookDeliveryStats :many
+SELECT webhook,
+       (count(*) FILTER (WHERE state = 'failed'))::bigint AS failed,
+       COALESCE((array_agg(state ORDER BY finished_at DESC, id DESC)
+                 FILTER (WHERE state IN ('delivered', 'failed')))[1] = 'failed', false)::boolean AS failing
+FROM webhook_deliveries
+GROUP BY webhook
+`
+
+type WebhookDeliveryStatsRow struct {
+	Webhook string `json:"webhook"`
+	Failed  int64  `json:"failed"`
+	Failing bool   `json:"failing"`
+}
+
+// failed counts every failed delivery. failing is whether the newest finished
+// delivery failed, so a receiver that recovers, or a redelivery that succeeds,
+// clears it.
+func (q *Queries) WebhookDeliveryStats(ctx context.Context) ([]WebhookDeliveryStatsRow, error) {
+	rows, err := q.db.Query(ctx, webhookDeliveryStats)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WebhookDeliveryStatsRow{}
+	for rows.Next() {
+		var i WebhookDeliveryStatsRow
+		if err := rows.Scan(&i.Webhook, &i.Failed, &i.Failing); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

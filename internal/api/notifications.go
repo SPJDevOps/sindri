@@ -29,6 +29,8 @@ type webhookResponse struct {
 	Repositories     []string `json:"repositories"`
 	Target           string   `json:"target"`
 	FailedDeliveries int64    `json:"failed_deliveries"`
+	// Failing is whether the newest finished delivery failed.
+	Failing bool `json:"failing"`
 }
 
 // deliveryResponse is one delivery. Payload is set on the single GET only.
@@ -110,14 +112,14 @@ func (a *api) listWebhooks(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r, "list notification webhooks") {
 		return
 	}
-	failed, err := a.notifyDB.Queries().CountFailedWebhookDeliveriesByWebhook(r.Context())
+	stats, err := a.notifyDB.Queries().WebhookDeliveryStats(r.Context())
 	if err != nil {
 		a.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
-	counts := make(map[string]int64, len(failed))
-	for _, f := range failed {
-		counts[f.Webhook] = f.Failed
+	byName := make(map[string]db.WebhookDeliveryStatsRow, len(stats))
+	for _, s := range stats {
+		byName[s.Webhook] = s
 	}
 	hooks := a.notifier.Webhooks()
 	out := make([]webhookResponse, 0, len(hooks))
@@ -127,7 +129,8 @@ func (a *api) listWebhooks(w http.ResponseWriter, r *http.Request) {
 			Events:           nonNil(h.Events),
 			Repositories:     nonNil(h.Repositories),
 			Target:           model.URLHost(h.URL),
-			FailedDeliveries: counts[h.Name],
+			FailedDeliveries: byName[h.Name].Failed,
+			Failing:          byName[h.Name].Failing,
 		})
 	}
 	a.writeJSON(w, r, http.StatusOK, listResponse[webhookResponse]{Items: out})
