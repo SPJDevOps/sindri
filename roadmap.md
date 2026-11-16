@@ -835,7 +835,7 @@ publish is scanned, and promotion is refused above a severity.
 | 10, Nov 11–29 | M11a gate | SIN-34, 38, 39, 72, 80 | v1.3.0 ✅ |
 | 11, Nov 12 | M11b re-scan ✅ | SIN-33, 35 | v1.4.0 |
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
-| 13, Nov 16–22 | Pre-announcement hardening | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 |
+| 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 |
 | 14, Nov 23–29 | Notifications | SIN-117, 112 | v1.6.0 |
 | 15, Nov 30–Dec 6 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
 | 16–17, Dec 7–20 | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
@@ -861,9 +861,12 @@ below names first. **The announcement is not tied to a sprint:** it follows the 
 walkthrough, at the earliest after Sprint 13. If it comes sooner, the M12 window moves up and
 Sprints 14 and 15 follow it.
 
+Sprint 13 shipped all seven tickets as v1.5.1, recorded under
+[v1.5.1 — Hardening](#v151--hardening) below.
+
 Not scheduled: SIN-56, 58, 65, 74, and 76 from the hardening epic, kept as filler for the
-M12 window. SIN-80 shipped in Sprint 10, and SIN-83 and SIN-86 (the gate scripts' leaked
-Docker volumes) in Sprint 12.
+M12 window. SIN-80 shipped in Sprint 10, SIN-83 and SIN-86 (the gate scripts' leaked
+Docker volumes) in Sprint 12, and SIN-73, 75, 81, 82, 84, 85 and 116 in Sprint 13.
 
 ---
 
@@ -1020,9 +1023,9 @@ and installs a proxied package. v1.1.1 is published, with binaries and
 **One change from the plan.** A 5xx does not start a backoff, because one package's 5xx would
 otherwise fail cold reads across its repository. Only connection failures and timeouts do.
 
-**Follow-ups, all unscheduled.** SIN-73 (evict one digest from an OCI proxy), SIN-74 (memory when
-parsing whole packuments), SIN-75 (a PyPI filename retired under one version and placed under
-another), SIN-76 (the Compose stack and MinIO's setup instance).
+**Follow-ups.** SIN-73 (evict one digest from an OCI proxy) and SIN-75 (a PyPI filename retired
+under one version and placed under another) shipped in v1.5.1. SIN-74 (memory when parsing whole
+packuments) and SIN-76 (the Compose stack and MinIO's setup instance) stay unscheduled.
 
 ---
 
@@ -1273,6 +1276,53 @@ repository declared in the configuration file with a `referrers` name segment mu
 renamed before the upgrade, and a file attached with oras's default layer type is scanned
 as an image. SIN-83 and SIN-86 shipped in the same sprint, in PRs #61 and #62; with the
 second, two docs-gate runs in a row leave the Docker volume list unchanged.
+
+---
+
+### v1.5.1 — Hardening
+
+**Goal.** Close what a stranger could hit in the first week, before the announcement: a secret
+shown by the API and the UI, a cached digest that cannot be removed, a PyPI filename that two
+versions can hold, and a scan worker that can stall or retry forever. Ship it as a patch release.
+
+**Scope.**
+- [x] A proxy upstream URL with credentials in it is refused by the API, `config check`,
+  `serve --config` and `sindri apply`. Rows that already hold one keep working, are redacted
+  on read, and log one startup warning; upstream errors no longer repeat the user name
+  (SIN-116, amends ADR 27)
+- [x] An admin evicts and blocks one digest in an OCI proxy:
+  `PUT` and `DELETE /api/v1/repositories/{name}/blocked/{digest}` and `GET .../blocked`.
+  A blocked digest answers 404 until unblocked. Migration 00014 adds the table (SIN-73, amends
+  ADR 14)
+- [x] One filename belongs to one version in a hosted PyPI repository. A publish of a filename
+  held by another version answers 409, and a delete removes the filename under every version
+  that holds it (SIN-75, amends ADR 13)
+- [x] `scanning.jobTimeout` (default 1h) bounds one whole scan job, and scans run on their own
+  worker lane, so a stalled scan cannot hold up other queue work (SIN-81)
+- [x] `scanning.offlineScan` passes `--offline-scan --skip-version-check --disable-telemetry`
+  to Trivy. It defaults to `skipDBUpdate`, for the air-gapped audience (SIN-82)
+- [x] Startup sweeps stale `sindri-scan-*` staging directories left by a crash (SIN-84)
+- [x] Scan limits a retry cannot cure (archive cap, unsafe path, too many platforms, duplicate
+  platform, unsupported child, no platforms) fail the job once and count as `failed` in
+  `sindri_scans_total`, instead of retrying or being counted as skipped. A job deadline expiry
+  is still retried (SIN-85)
+
+**Out of scope.** SIN-56, 58, 65, 74, and 76 stay unscheduled. Evicting a digest from an npm or
+PyPI proxy, and blocking by anything but digest.
+
+**Gate.**
+```bash
+make ci                      # gofmt, vet, golangci-lint, unit tests with -race, docs
+make test-integration        # real Postgres and MinIO
+go test -tags integration -run 'TestAPI_EveryRouteHasAnAuthorizationCase|TestManifests_ShortAndLongFormsAreIdentical|TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState' ./...
+scripts/m11-scan-gate.sh     # real Trivy, still green with the scan lane and deadline
+# SIN-82: run Trivy --network none with a pre-seeded cache
+# SIN-73: through an OCI proxy, pull, evict and block, re-pull gives 404, unblock, re-pull succeeds
+git tag v1.5.1 && git push origin v1.5.1   # the release workflow is green
+```
+
+**Gate run.** Not yet recorded. The release is tagged after the controller's gate run and
+the merge.
 
 ---
 

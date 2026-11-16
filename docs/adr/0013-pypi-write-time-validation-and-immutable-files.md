@@ -130,7 +130,8 @@ Delete follows the same rule. Deleting a file from a hosted PyPI repository remo
 the filename under every version of the package, records a `retired_files` row for
 each version it was under, and removes each version it empties, in the one
 transaction. The API route stays addressed to one version; a delete addressed to
-any version removes the filename from all of them. npm stays version-keyed.
+a version that holds the filename removes it from all of them, and one addressed
+to a version without it answers 404. npm stays version-keyed.
 
 `GetFileByFilename`'s "first row" ordering can no longer choose between duplicates
 for data written from now on. It remains only for data that predates this change,

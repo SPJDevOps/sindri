@@ -236,6 +236,30 @@ differently:
   fixed before the upgrade:** `config check` refuses it, and `serve --config` does not
   start on a file that fails the check.
 
+- **Migration 00014 is additive.** It adds the table that holds blocked OCI digests. A
+  rollback to 1.5.0 needs no database restore; the older binary ignores the table, and a
+  blocked digest is served again until you upgrade.
+- **Two scanning settings are new.** `scanning.jobTimeout` bounds one whole scan job and
+  defaults to `1h` (`0s` means the default, and it must be at least `timeout`). A job that
+  hits it attaches nothing and is retried with backoff. `scanning.offlineScan` defaults to
+  `false`, or to `true` when `skipDBUpdate` is set. Neither needs a change unless you want
+  them. See the [configuration reference](configuration.md).
+- **Trivy no longer phones home when offline.** With `offlineScan` on, Trivy gets
+  `--offline-scan`, `--skip-version-check` and `--disable-telemetry`. An existing server
+  with `skipDBUpdate` set therefore stops making those requests on upgrade.
+- **Some scan outcomes that were skipped are now failed jobs.** An archive over the cap, an
+  unsafe path, too many platforms, a duplicate platform, an unsupported child and an index
+  with no platforms fail once, without retries, and count as `failed` in
+  `sindri_scans_total`. Alerts on `failed` may fire for artifacts that were counted as
+  skipped before.
+- **A hosted PyPI filename belongs to one version.** Publishing through the API a filename
+  that already exists under another version answers 409 `FILE_EXISTS`. Deleting a filename
+  removes it under every version of the package that holds it, and a version it empties goes
+  too. Data written before 1.5.1 that already holds a filename twice is left as it is.
+- **An admin can evict and block one digest in an OCI proxy** with
+  `PUT /api/v1/repositories/{name}/blocked/{digest}`; `DELETE` unblocks it, and `GET
+  .../blocked` lists them.
+
 ## Rolling back
 
 Every migration stays backward compatible for one release, so the previous
