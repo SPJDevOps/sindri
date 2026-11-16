@@ -1,0 +1,34 @@
+{{define "content"}}
+<h1 class="page-title">System</h1>
+<p class="lead">What this server sends out. Administrators only.</p>
+
+<p class="status-block"><a class="status-line {{.StatusClass}}" href="{{.StatusHref}}"><span class="dot {{.StatusClass}}" aria-hidden="true"></span>{{.StatusText}}</a></p>
+
+<section class="section">
+  <h2 class="section-title">Notifications</h2>
+  {{if .Configured}}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Webhook</th><th scope="col">Events</th><th scope="col">Target</th><th scope="col">Failed deliveries</th><th scope="col">Log</th></tr></thead>
+    <tbody>
+    {{range .Hooks}}
+      <tr><th scope="row" class="mono">{{.Name}}</th><td class="mono">{{.Events}}</td><td class="mono">{{.Target}}</td><td>{{if .Failed}}<span class="dot bad" aria-hidden="true"></span>{{.Failed}}{{else}}0{{end}}</td><td><a href="{{.LogHref}}">deliveries</a></td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  <p class="hint">Only the scheme and host of a target are shown. The path, query, and signing secret are never displayed.</p>
+  {{else}}
+  <p class="hint">No webhooks configured. Add a <code>notifications:</code> section to the server configuration.</p>
+  {{end}}
+</section>
+
+<section class="section">
+  <h2 class="section-title">Payloads</h2>
+  <p class="hint">One example per event. Every delivery is signed; see the notifications guide.</p>
+  {{range .Examples}}
+  <h3 class="mono">{{.Event}}</h3>
+  <pre class="document">{{.Body}}</pre>
+  {{end}}
+</section>
+{{end}}

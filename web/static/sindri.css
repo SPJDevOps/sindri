@@ -295,3 +295,38 @@ pre.document {
   .facts dd { border-top: 0; padding-top: 0; }
   .site-footer .container { flex-direction: column; gap: 4px; }
 }
+
+/* Status dots: ok, warn, bad. Shared by the System page's webhook status
+ * and delivery states, and by the queue panel that follows. Colour is never
+ * the only signal: a text label always sits beside the dot. */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  vertical-align: baseline;
+}
+.dot.ok { background: var(--success); }
+.dot.warn { background: var(--warning); }
+.dot.bad { background: var(--error); }
+.dot.none { background: var(--text-faint); }
+
+.status-block { margin-top: 24px; }
+.status-line {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 8px 16px;
+  color: var(--text);
+}
+.status-line:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+.status-line.bad { border-color: color-mix(in srgb, var(--error) 45%, transparent); }
+
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.filter { border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 1px 10px; font-size: 12px; color: var(--text-muted); }
+.filter.active { color: var(--text); border-color: var(--accent); }
+code.command { display: inline-block; margin-top: 4px; overflow-wrap: anywhere; user-select: all; }

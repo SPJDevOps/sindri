@@ -71,6 +71,8 @@ func TestTemplates_Golden(t *testing.T) {
 	long := time.Date(2020, 3, 14, 15, 9, 26, 0, time.UTC)
 	digest := "sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe"
 	base := chrome{Title: "t", Who: "user:alice", SignOut: true, Version: "0.0.0-test"}
+	adminBase := base
+	adminBase.Admin = true
 	team := repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}
 
 	cases := map[string]struct {
@@ -129,11 +131,27 @@ func TestTemplates_Golden(t *testing.T) {
 				{ID: "ev-1", Type: model.EvidenceScan, CreatedAt: long, Metadata: json.RawMessage(`{"producer":"sindri","platform":"linux/amd64","db_updated_at":"2020-03-14T06:00:00Z","severity_counts":{"CRITICAL":1,"HIGH":0,"MEDIUM":0,"LOW":1,"UNKNOWN":0},"vulnerabilities":[{"id":"CVE-2020-0002","severity":"LOW","package":"zlib","installed":"1.2.8"},{"id":"CVE-2020-0001","severity":"CRITICAL","package":"openssl","installed":"1.1.1","fixed":"1.1.1k"}],"new_vulnerabilities":["CVE-2020-0001"]}`)},
 				{ID: "ev-2", Type: model.EvidenceScan, CreatedAt: long, Metadata: json.RawMessage(`{"producer":"sindri","platform":"linux/arm64","severity_counts":{"CRITICAL":0,"HIGH":0,"MEDIUM":0,"LOW":0,"UNKNOWN":0},"vulnerabilities":[]}`)},
 			}),
-			Children: []childRow{{Digest: digest, Size: 99, Href: "/y"}},
-			Document: "{\n  \"schemaVersion\": 2\n}"}},
+			Deliveries: []deliveryRow{{Webhook: "chat", Event: "finding.new", State: "delivered", Dot: "ok", Status: "200", At: long}},
+			Children:   []childRow{{Digest: digest, Size: 99, Href: "/y"}},
+			Document:   "{\n  \"schemaVersion\": 2\n}"}},
 		"artifact-upstream": {"artifact", artifactPage{chrome: base, Repo: "hub", RepoHref: "/ui/r/hub",
 			Digest: digest, Size: 1234, Upstream: true}},
 		"notfound": {"notfound", base},
+		"system": {"system", systemPage{chrome: adminBase, Configured: true, StatusClass: "bad", StatusText: "1 webhook failing",
+			StatusHref: "/ui/system/notifications?state=failed", Examples: examplePayloads,
+			Hooks: []hookRow{{Name: "chat", Events: "finding.new, lifecycle.promoted", Target: "https://hooks.example.com", Failed: 1, LogHref: "/ui/system/notifications?webhook=chat"}}}},
+		"system-empty": {"system", systemPage{chrome: adminBase, StatusClass: "none", StatusText: "No webhooks configured",
+			StatusHref: "/ui/system/notifications", Examples: examplePayloads}},
+		"deliveries": {"deliveries", deliveriesPage{chrome: adminBase, State: "failed", Limit: 100,
+			Filters: []stateFilter{{"all", "/ui/system/notifications", false}, {"failed", "/ui/system/notifications?state=failed", true}},
+			Rows: []deliveryRow{
+				{ID: 7, Webhook: "chat", Event: "finding.new", Digest: digest, Href: "/ui/r/team/app/-/artifact?digest=" + digest, Repository: "team/app", State: "failed", Dot: "bad",
+					Status: "503", Attempts: 3, At: long, Error: "receiver chat answered 503",
+					Redeliver: `curl -X POST -H "Authorization: Bearer $TOKEN" https://sindri.example/api/v1/notifications/deliveries/7/redeliver`},
+				{ID: 8, Webhook: "chat", Event: "lifecycle.promoted", Digest: digest, Repository: "team/app", State: "pending", Dot: "warn",
+					Status: "502", Attempts: 1, At: long, NextRetry: long.Add(time.Minute), Error: "receiver chat answered 502"},
+			}}},
+		"deliveries-empty": {"deliveries", deliveriesPage{chrome: adminBase, Limit: 100}},
 	}
 
 	for name, tc := range cases {

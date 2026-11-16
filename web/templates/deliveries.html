@@ -1,0 +1,35 @@
+{{define "content"}}
+<h1 class="page-title">Notification deliveries</h1>
+<p class="lead">Newest first.{{if .Webhook}} Showing webhook <span class="mono">{{.Webhook}}</span>. <a href="{{.Clear}}">all webhooks</a>{{end}}</p>
+
+<p class="filters" aria-label="Filter by state">{{range .Filters}}{{if .Active}}<span class="filter active">{{.Label}}</span>{{else}}<a class="filter" href="{{.Href}}">{{.Label}}</a>{{end}}{{end}}</p>
+
+<section class="section">
+  {{if .Rows}}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Webhook</th><th scope="col">Subject</th><th scope="col">Repository</th><th scope="col">State</th><th scope="col">Response</th><th scope="col">Attempts</th><th scope="col">Next retry</th><th scope="col">Error</th></tr></thead>
+    <tbody>
+    {{range .Rows}}
+      <tr>
+        <td title="{{when .At}}">{{ago .At}}</td>
+        <td class="mono">{{.Event}}</td>
+        <td class="mono">{{.Webhook}}</td>
+        <td class="mono">{{if .Href}}<a href="{{.Href}}" title="{{.Digest}}">{{short .Digest}}</a>{{else}}<span title="{{.Digest}}">{{short .Digest}}</span>{{end}}</td>
+        <td class="mono">{{.Repository}}</td>
+        <td><span class="dot {{.Dot}}" aria-hidden="true"></span>{{.State}}</td>
+        <td class="mono">{{if .Status}}{{.Status}}{{else}}-{{end}}</td>
+        <td>{{.Attempts}}</td>
+        <td>{{if not .NextRetry.IsZero}}<span class="mono">{{when .NextRetry}}</span>{{else}}-{{end}}</td>
+        <td>{{if .Error}}{{.Error}}{{else}}-{{end}}{{if .Redeliver}}<br><span class="hint">To redeliver:</span> <code class="command">{{.Redeliver}}</code>{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{if .HasMore}}<p class="hint">Showing the newest {{.Limit}}. Narrow with a filter, or read the API for more.</p>{{end}}
+  {{else}}
+  <div class="rows"><div class="row empty">No deliveries{{if or .State .Webhook}} match this filter{{end}}.</div></div>
+  {{end}}
+</section>
+{{end}}

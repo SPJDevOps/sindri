@@ -59,7 +59,7 @@ func newEnv(t *testing.T) *env {
 	reg := registry.New(database, store, "memory")
 	lc := lifecycle.New(database)
 	ev := evidence.New(database, store, "memory")
-	h, err := newHandler(Options{Registry: reg, Lifecycle: lc, Evidence: ev, SignOut: true})
+	h, err := newHandler(Options{Registry: reg, Lifecycle: lc, Evidence: ev, NotifyDB: database, SignOut: true})
 	if err != nil {
 		t.Fatalf("newHandler: %v", err)
 	}
@@ -605,10 +605,13 @@ func TestUI_EveryRouteHasAnAuthorizationCase(t *testing.T) {
 	cases := map[string]struct {
 		path      string
 		forbidden bool // alice must get 404
+		adminOnly bool // everyone but an administrator, and nobody signed in, gets 404
 	}{
-		"/":                   {path: "/ui/"},
-		"/r/*":                {path: "/ui/r/team-b/-/artifact?digest=" + d.String(), forbidden: true},
-		"/static/{version}/*": {path: "/ui/static/" + web.Version + "/sindri.css"},
+		"/":                     {path: "/ui/"},
+		"/r/*":                  {path: "/ui/r/team-b/-/artifact?digest=" + d.String(), forbidden: true},
+		"/static/{version}/*":   {path: "/ui/static/" + web.Version + "/sindri.css"},
+		"/system":               {path: "/ui/system", adminOnly: true},
+		"/system/notifications": {path: "/ui/system/notifications", adminOnly: true},
 	}
 	var routes []string
 	if err := chi.Walk(e.h.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
@@ -626,6 +629,17 @@ func TestUI_EveryRouteHasAnAuthorizationCase(t *testing.T) {
 		c, ok := cases[route]
 		if !ok {
 			t.Errorf("route %s has no authorization case; add one to this table", route)
+			continue
+		}
+		if c.adminOnly {
+			for _, user := range []string{"alice", "bob", ""} {
+				if r := e.get(user, c.path); r.status != http.StatusNotFound {
+					t.Errorf("%s as %q: %d, want 404", c.path, user, r.status)
+				}
+			}
+			if r := e.get("admin", c.path); r.status != http.StatusOK {
+				t.Errorf("%s as admin: %d, want 200", c.path, r.status)
+			}
 			continue
 		}
 		r := e.get("alice", c.path)

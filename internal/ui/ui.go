@@ -30,9 +30,11 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/spj/sindri/internal/auth"
+	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/notify"
 	"github.com/spj/sindri/internal/registry"
 	"github.com/spj/sindri/internal/version"
 	"github.com/spj/sindri/web"
@@ -56,6 +58,13 @@ type Options struct {
 	Lifecycle *lifecycle.Service
 	Evidence  *evidence.Service
 	Logger    *slog.Logger
+	// Notifier and NotifyDB feed the administrator's /system pages and the
+	// deliveries on an artifact page. Both may be nil: the pages still exist
+	// and say that no webhooks are configured.
+	Notifier *notify.Notifier
+	NotifyDB *db.DB
+	// PublicURL is the server's own address, shown in the redelivery command.
+	PublicURL string
 	// RequestID extracts the request id the server middleware set, so an
 	// error page can name the log line.
 	RequestID func(context.Context) string
@@ -105,6 +114,8 @@ func newHandler(opts Options) (*handler, error) {
 	r.Use(middleware.GetHead, securityHeaders)
 	r.Get("/", h.repositories)
 	r.Get("/r/*", h.repository)
+	r.Get("/system", h.system)
+	r.Get("/system/notifications", h.notificationLog)
 	r.Get("/static/{version}/*", h.asset)
 	r.NotFound(h.notFound)
 	r.MethodNotAllowed(func(w http.ResponseWriter, _ *http.Request) {
@@ -115,7 +126,7 @@ func newHandler(opts Options) (*handler, error) {
 	return h, nil
 }
 
-var pageFiles = []string{"repos", "repo", "package", "artifact", "notfound", "error"}
+var pageFiles = []string{"repos", "repo", "package", "artifact", "system", "deliveries", "notfound", "error"}
 
 func parsePages() (map[string]*template.Template, error) {
 	pages := make(map[string]*template.Template, len(pageFiles))
@@ -174,6 +185,8 @@ type chrome struct {
 	SignOut bool
 	Version string
 	Crumbs  []crumb
+	// Admin shows the System link.
+	Admin bool
 }
 
 type crumb struct {
@@ -189,6 +202,7 @@ func (h *handler) chrome(r *http.Request, title string, crumbs ...crumb) chrome 
 		SignOut: h.opts.SignOut && p.Kind == auth.KindUser,
 		Version: version.Version,
 		Crumbs:  crumbs,
+		Admin:   p.Admin,
 	}
 }
 
