@@ -9,6 +9,7 @@
 - [Using npm, pnpm, and yarn](clients/npm.md)
 - [Signatures and SBOMs with cosign and oras](clients/referrers.md)
 - [Scanning and the severity gate](scanning.md)
+- [Notifications](notifications.md)
 - [Configuration reference](configuration.md)
 - [Upgrading](upgrading.md)
 
