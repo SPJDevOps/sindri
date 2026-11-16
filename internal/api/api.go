@@ -19,10 +19,12 @@ import (
 
 	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/config"
+	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/gc"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/notify"
 	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/reconcile"
 	"github.com/spj/sindri/internal/registry"
@@ -71,6 +73,10 @@ type Options struct {
 	// ScanEnabled reports that scanning is on, which makes
 	// POST /subjects/{digest}/scan enqueue a scan. It needs Queue.
 	ScanEnabled bool
+	// Notifier and NotifyDB serve /notifications: the configured webhooks, the
+	// delivery log, and redelivery (ADR 34). Both or neither.
+	Notifier *notify.Notifier
+	NotifyDB *db.DB
 }
 
 // Handler returns the /api/v1 chi router. Mount it with r.Mount("/api/v1", ...).
@@ -95,6 +101,10 @@ func Handler(opts Options) http.Handler {
 		panic("api.Handler: GC and Queue must be set together")
 	}
 
+	if (opts.Notifier == nil) != (opts.NotifyDB == nil) {
+		panic("api.Handler: Notifier and NotifyDB must be set together")
+	}
+
 	if opts.ScanEnabled && opts.Queue == nil {
 		panic("api.Handler: ScanEnabled needs Queue")
 	}
@@ -111,6 +121,8 @@ func Handler(opts Options) http.Handler {
 		gc:          opts.GC,
 		queue:       opts.Queue,
 		scanEnabled: opts.ScanEnabled,
+		notifier:    opts.Notifier,
+		notifyDB:    opts.NotifyDB,
 	}
 
 	r := chi.NewRouter()
@@ -151,6 +163,13 @@ func Handler(opts Options) http.Handler {
 		r.Get("/jobs/{id}", a.getJob)
 	}
 
+	if a.notifier != nil {
+		r.Get("/notifications/webhooks", a.listWebhooks)
+		r.Get("/notifications/deliveries", a.listDeliveries)
+		r.Get("/notifications/deliveries/{id}", a.getDelivery)
+		r.Post("/notifications/deliveries/{id}/redeliver", a.redeliver)
+	}
+
 	return r
 }
 
@@ -166,6 +185,8 @@ type api struct {
 	gc          *gc.Collector
 	queue       *queue.Queue
 	scanEnabled bool
+	notifier    *notify.Notifier
+	notifyDB    *db.DB
 }
 
 func (a *api) createRepository(w http.ResponseWriter, r *http.Request) {
