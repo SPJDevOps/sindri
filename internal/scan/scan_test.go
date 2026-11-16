@@ -1326,6 +1326,19 @@ func TestRun_UndecodableArgsAndMalformedDigestFailPermanently(t *testing.T) {
 	}
 }
 
+func TestRun_PermanentErrorWithExpiredDeadlineStaysTransient(t *testing.T) {
+	f := newFixture(t)
+	// Undecodable args are permanent; the 1ns deadline has expired by the time
+	// handle returns.
+	_, err := f.scanner(Options{Trivy: "/nonexistent", JobTimeout: time.Nanosecond}).Handle(t.Context(), queue.Job{ID: 7, Kind: scanjob.JobKind, Args: json.RawMessage(`not json`)})
+	if errors.Is(err, worker.ErrPermanent) {
+		t.Fatalf("Handle error = %v, want it not permanent once the deadline expired", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "decoding scan job 7 args") {
+		t.Fatalf("Handle error = %v, want DeadlineExceeded and the original cause's message", err)
+	}
+}
+
 func TestRun_UnsafeArchivePathFailsPermanently(t *testing.T) {
 	f := newFixture(t)
 	digest := f.put(zipOf(t, map[string]string{"../escape": "x"}))

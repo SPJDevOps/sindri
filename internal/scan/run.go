@@ -80,6 +80,12 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 	}
 	res, attaching, err := s.handle(ctx, scanCtx, job)
 	if err != nil && !attaching && errors.Is(context.Cause(scanCtx), errJobDeadline) {
+		// A deadline expiry is transient (raise the timeout and it passes), so
+		// whatever else failed alongside it must not fail the job for good:
+		// keep the cause's message but drop its permanent marker.
+		if errors.Is(err, worker.ErrPermanent) {
+			err = errors.New(err.Error())
+		}
 		return nil, fmt.Errorf("scan job %d ran longer than scanning.jobTimeout (%s); nothing was attached, raise it for larger subjects: %w: %w",
 			job.ID, s.opts.JobTimeout, context.DeadlineExceeded, err)
 	}
