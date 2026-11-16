@@ -388,11 +388,11 @@ With these set, Trivy asks only the mirror. It no longer falls back to the publi
 registries. Sindri passes the values to Trivy as `--db-repository` and
 `--java-db-repository`, and Trivy reads any registry credentials from the server's Docker config.
 
-The mirror covers the two databases only. During a scan Trivy can still make other
-requests: package lookups, a check for a newer Trivy at `check.trivy.dev`, and telemetry.
-On a server that can reach the mirror and nothing else, add `offlineScan: true`, which
-passes `--offline-scan`, `--skip-version-check` and `--disable-telemetry` so Trivy makes
-none of them:
+The mirror covers the two databases only. Sindri always passes `--skip-version-check` and
+`--disable-telemetry`, so Trivy never checks `check.trivy.dev` for a newer version or sends
+telemetry, but during a scan it can still look packages up. On a server that can reach the
+mirror and nothing else, add `offlineScan: true`, which passes `--offline-scan` so Trivy
+makes no request of its own:
 
 ```yaml
 scanning:
@@ -470,9 +470,8 @@ scanning:
 
 `skipDBUpdate` cannot be combined with `dbRepository` or `javaDbRepository`, and the
 server refuses to start with both. With `skipDBUpdate`, `offlineScan` defaults to `true`,
-so Sindri also passes `--offline-scan`, `--skip-version-check` and `--disable-telemetry`,
-and Trivy makes no request of its own while scanning. Write `offlineScan: false` to allow
-those requests. Refresh the cache by repeating the steps. The Helm
+so Sindri also passes `--offline-scan`, and Trivy makes no request of its own while
+scanning. Write `offlineScan: false` to allow package lookups. Refresh the cache by repeating the steps. The Helm
 chart's scan cache is an `emptyDir`, which is empty again when the pod is replaced, so
 use the mirror there.
 

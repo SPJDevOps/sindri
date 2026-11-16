@@ -881,10 +881,38 @@ func TestRun_OmitsOfflineScanUnlessSet(t *testing.T) {
 	if _, err := s.Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	for _, flag := range []string{"--offline-scan", "--skip-version-check", "--disable-telemetry"} {
-		if strings.Contains(string(readFile(t, argsFile)), flag) {
-			t.Errorf("args carry %s without Options.OfflineScan: %s", flag, readFile(t, argsFile))
-		}
+	if strings.Contains(string(readFile(t, argsFile)), "--offline-scan") {
+		t.Errorf("args carry --offline-scan without Options.OfflineScan: %s", readFile(t, argsFile))
+	}
+}
+
+func TestRun_NeverChecksForUpdatesOrSendsTelemetry(t *testing.T) {
+	for name, opts := range map[string]Options{
+		"online":  {},
+		"offline": {OfflineScan: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			argsFile := filepath.Join(t.TempDir(), "args")
+			f := newFixture(t)
+			digest := f.image(ocispec.MediaTypeImageManifest)
+			opts.Trivy = stubPath(t)
+			s := f.scannerEnv(opts, "TRIVY_STUB_ARGS="+argsFile)
+			if _, err := s.Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			args := string(readFile(t, argsFile))
+			var scanLine string
+			for _, line := range strings.Split(args, "\n") {
+				if strings.HasPrefix(line, "image ") {
+					scanLine = line
+				}
+			}
+			for _, flag := range []string{"--skip-version-check", "--disable-telemetry"} {
+				if !strings.Contains(scanLine, flag) {
+					t.Errorf("scan args lack %s: %s", flag, args)
+				}
+			}
+		})
 	}
 }
 

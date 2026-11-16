@@ -140,7 +140,10 @@ func (s *Scanner) scanTarget(ctx context.Context, t target, outDir string) (repo
 	} else {
 		args = []string{"rootfs", t.dir}
 	}
-	args = append(args, "--format", "json", "--list-all-pkgs", "--scanners", "vuln", "--quiet")
+	// A registry never phones home on a scan's behalf: no check for a newer
+	// Trivy and no usage telemetry to Aqua, online or not.
+	args = append(args, "--format", "json", "--list-all-pkgs", "--scanners", "vuln", "--quiet",
+		"--skip-version-check", "--disable-telemetry")
 	if s.opts.CacheDir != "" {
 		args = append(args, "--cache-dir", s.opts.CacheDir)
 	}
@@ -157,9 +160,7 @@ func (s *Scanner) scanTarget(ctx context.Context, t target, outDir string) (repo
 		args = append(args, "--skip-db-update", "--skip-java-db-update")
 	}
 	if s.opts.OfflineScan {
-		// Trivy also contacts check.trivy.dev for a version notice and sends
-		// telemetry, neither of which --offline-scan covers.
-		args = append(args, "--offline-scan", "--skip-version-check", "--disable-telemetry")
+		args = append(args, "--offline-scan")
 	}
 	args = append(args, "--output", report)
 	if _, err := s.run(ctx, outDir, args...); err != nil {

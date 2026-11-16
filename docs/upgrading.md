@@ -244,9 +244,10 @@ differently:
   hits it attaches nothing and is retried with backoff. `scanning.offlineScan` defaults to
   `false`, or to `true` when `skipDBUpdate` is set. Neither needs a change unless you want
   them. See the [configuration reference](configuration.md).
-- **Trivy no longer phones home when offline.** With `offlineScan` on, Trivy gets
-  `--offline-scan`, `--skip-version-check` and `--disable-telemetry`. An existing server
-  with `skipDBUpdate` set therefore stops making those requests on upgrade.
+- **Trivy no longer phones home.** Every scan now passes `--skip-version-check` and
+  `--disable-telemetry`, so no server checks `check.trivy.dev` for a newer Trivy or sends
+  usage telemetry to Aqua. With `offlineScan` on, Trivy also gets `--offline-scan` and makes
+  no package lookups; an existing server with `skipDBUpdate` set gets it on upgrade.
 - **Some scan outcomes that were skipped or retried are now failed jobs.** Too many
   platforms, a duplicate platform, an unsupported child and an index with no platforms were
   counted as skipped before 1.5.1; an archive over the cap and an unsafe path were retried

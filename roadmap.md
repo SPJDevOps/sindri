@@ -1299,8 +1299,9 @@ versions can hold, and a scan worker that can stall or retry forever. Ship it as
   that holds it (SIN-75, amends ADR 13)
 - [x] `scanning.jobTimeout` (default 1h) bounds one whole scan job, and scans run on their own
   worker lane, so a stalled scan cannot hold up other queue work (SIN-81)
-- [x] `scanning.offlineScan` passes `--offline-scan --skip-version-check --disable-telemetry`
-  to Trivy. It defaults to `skipDBUpdate`, for the air-gapped audience (SIN-82)
+- [x] `scanning.offlineScan` passes `--offline-scan` to Trivy. It defaults to
+  `skipDBUpdate`, for the air-gapped audience (SIN-82). Every scan also passes
+  `--skip-version-check --disable-telemetry`, so no server phones home to Aqua
 - [x] Startup sweeps stale `sindri-scan-*` staging directories left by a crash (SIN-84)
 - [x] Scan limits a retry cannot cure (archive cap, unsafe path, too many platforms, duplicate
   platform, unsupported child, no platforms) fail the job once and count as `failed` in

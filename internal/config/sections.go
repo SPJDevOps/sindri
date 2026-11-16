@@ -731,9 +731,10 @@ type Scanning struct {
 	// jar-containing subject fails to scan if the Java database is not in it.
 	// Cannot be combined with `dbRepository` or `javaDbRepository`.
 	SkipDBUpdate bool `yaml:"skipDBUpdate"`
-	// Pass `--offline-scan`, `--skip-version-check` and `--disable-telemetry`
-	// to Trivy, so it makes no network request of its own while scanning: no
-	// package lookups, no check for a newer Trivy, no telemetry. A server with
+	// Pass `--offline-scan` to Trivy, so it makes no package lookups while
+	// scanning. Sindri always passes `--skip-version-check` and
+	// `--disable-telemetry`, so with this set Trivy makes no network request
+	// of its own. A server with
 	// a pre-seeded cache is offline, so this follows `skipDBUpdate`. Unlike
 	// `skipDBUpdate` it may be combined with `dbRepository` and
 	// `javaDbRepository`, for an air-gapped server that reaches only a mirror.

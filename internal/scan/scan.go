@@ -65,10 +65,10 @@ type Options struct {
 	// and it cannot be combined with DBRepository or JavaDBRepository: a mirror
 	// is only ever contacted to download.
 	SkipDBUpdate bool
-	// OfflineScan passes --offline-scan, --skip-version-check and
-	// --disable-telemetry, so Trivy makes no network request while scanning:
-	// no package lookups, no version check, no telemetry. Unlike SkipDBUpdate
-	// it may be combined with a mirror.
+	// OfflineScan passes --offline-scan, so Trivy makes no package lookups
+	// while scanning. Every scan already passes --skip-version-check and
+	// --disable-telemetry, so with this set Trivy makes no network request of
+	// its own. Unlike SkipDBUpdate it may be combined with a mirror.
 	OfflineScan bool
 	// MaxUnpackedBytes caps the bytes an archive may unpack to.
 	MaxUnpackedBytes int64
