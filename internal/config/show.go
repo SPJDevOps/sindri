@@ -23,6 +23,17 @@ func (c *Config) RedactedCopy() Config {
 	out.Storage.Endpoint = RedactUserinfo(c.Storage.Endpoint)
 	out.Scanning.DBRepository = RedactUserinfo(c.Scanning.DBRepository)
 	out.Scanning.JavaDBRepository = RedactUserinfo(c.Scanning.JavaDBRepository)
+	if len(c.Notifications.Webhooks) > 0 {
+		out.Notifications.Webhooks = make([]Webhook, len(c.Notifications.Webhooks))
+		for i, w := range c.Notifications.Webhooks {
+			// The path and query of a webhook URL commonly carry its token.
+			w.URL = model.URLHost(w.URL)
+			if w.Secret != "" {
+				w.Secret = Redacted
+			}
+			out.Notifications.Webhooks[i] = w
+		}
+	}
 	if out.Storage.SecretAccessKey != "" {
 		out.Storage.SecretAccessKey = Redacted
 	}

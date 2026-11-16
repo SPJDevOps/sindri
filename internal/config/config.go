@@ -34,13 +34,14 @@ const DefaultPath = "sindri.yaml"
 
 // Config is the whole configuration tree, after desugaring and defaulting.
 type Config struct {
-	Listen   Listen   `yaml:"listen"`
-	Storage  Storage  `yaml:"storage"`
-	Database Database `yaml:"database"`
-	Log      Log      `yaml:"log"`
-	Auth     Auth     `yaml:"auth"`
-	Worker   Worker   `yaml:"worker"`
-	Scanning Scanning `yaml:"scanning"`
+	Listen        Listen        `yaml:"listen"`
+	Storage       Storage       `yaml:"storage"`
+	Database      Database      `yaml:"database"`
+	Log           Log           `yaml:"log"`
+	Auth          Auth          `yaml:"auth"`
+	Worker        Worker        `yaml:"worker"`
+	Scanning      Scanning      `yaml:"scanning"`
+	Notifications Notifications `yaml:"notifications"`
 
 	// The origin clients reach this server at, for example
 	// `https://sindri.example.com`. Required when the file declares any npm
@@ -67,13 +68,14 @@ type Config struct {
 // Default returns the configuration a server runs on with no file present.
 func Default() Config {
 	return Config{
-		Listen:   defaultListen(),
-		Storage:  defaultStorage(),
-		Database: defaultDatabase(),
-		Log:      defaultLog(),
-		Auth:     defaultAuth(),
-		Worker:   defaultWorker(),
-		Scanning: defaultScanning(),
+		Listen:        defaultListen(),
+		Storage:       defaultStorage(),
+		Database:      defaultDatabase(),
+		Log:           defaultLog(),
+		Auth:          defaultAuth(),
+		Worker:        defaultWorker(),
+		Scanning:      defaultScanning(),
+		Notifications: defaultNotifications(),
 	}
 }
 
@@ -196,6 +198,7 @@ func (c *Config) applyDefaults() {
 	c.Auth.applyDefaults()
 	c.Worker.applyDefaults()
 	c.Scanning.applyDefaults()
+	c.Notifications.applyDefaults()
 }
 
 // Validate reports the first configuration error, naming the field.
@@ -209,6 +212,7 @@ func (c *Config) Validate() error {
 		c.validatePublicURL,
 		c.Worker.validate,
 		c.Scanning.validate,
+		c.Notifications.validate,
 		c.Credentials.validate,
 	} {
 		if err := check(); err != nil {

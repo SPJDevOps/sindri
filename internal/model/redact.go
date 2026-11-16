@@ -1,6 +1,9 @@
 package model
 
-import "strings"
+import (
+	"net/url"
+	"strings"
+)
 
 // Redacted is what is printed in place of a secret.
 const Redacted = "<redacted>"
@@ -26,4 +29,16 @@ func RedactUserinfo(s string) string {
 		return s
 	}
 	return s[:start] + Redacted + s[start+at:]
+}
+
+// URLHost reduces a URL to its scheme and host, port kept, for display: the
+// path, query, fragment, and userinfo of a webhook URL commonly carry the
+// token that authorizes it. A value that is not a URL with a host becomes
+// Redacted, so nothing the operator typed is ever echoed back.
+func URLHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return Redacted
+	}
+	return u.Scheme + "://" + u.Host
 }

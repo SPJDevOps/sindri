@@ -24,6 +24,18 @@ worker:
 # both see every field of the section.
 scanning: {enabled: false, timeout: 5m, jobTimeout: 45m, rescanInterval: 12h, javaDbRepository: mirror.example.invalid/trivy-java-db, offlineScan: true}
 
+# Webhooks (ADR 34). The URL is under .invalid (RFC 2606), so nothing is ever
+# sent; the secret is the shortest value the loader accepts.
+notifications:
+  maxAttempts: 5
+  webhooks:
+    - name: security-team
+      url: https://hooks.example.invalid/sindri
+      secret: ${SINDRI_WEBHOOK_SECRET:-not-a-secret-but-32-bytes-long!!}
+      events: [finding.new, lifecycle.promoted]
+      repositories: [docker]
+      timeout: 15s
+
 # Used only by pypi-mirror below, which exists so that the golden tests cover
 # upstream.credentials. Its upstream is under .invalid (RFC 2606), so this
 # value is never sent anywhere.

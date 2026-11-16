@@ -132,6 +132,9 @@ var plainServerFields = []string{
 	"Listen.Address",
 	"Log.Format",
 	"Log.Level",
+	"Notifications.Webhooks[0].Events[0]",
+	"Notifications.Webhooks[0].Name",
+	"Notifications.Webhooks[0].Repositories[0]",
 	"Scanning.CacheDir",
 	"Scanning.Trivy",
 	"Storage.AccessKeyID",
@@ -198,5 +201,36 @@ func fillStrings(v reflect.Value, path string, plant func(path string) string) {
 		fillStrings(elem, path+"[entry]", plant)
 		v.Set(reflect.MakeMap(v.Type()))
 		v.SetMapIndex(reflect.ValueOf("entry").Convert(v.Type().Key()), elem)
+	}
+}
+
+func TestShow_WebhooksShowOnlySchemeAndHostAndNoSecret(t *testing.T) {
+	const token = "tok3n-in-the-url"
+	const secret = "0123456789abcdef0123456789abcdef"
+	cfg := mustParse(t, `
+notifications:
+  webhooks:
+    - name: sec
+      url: https://hooks.example.com:8443/services/`+token+`?key=`+token+`
+      secret: `+secret+`
+      events: [finding.new]
+`)
+	raw, err := config.MarshalServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(raw)
+	for _, leaked := range []string{token, secret, "/services"} {
+		if strings.Contains(out, leaked) {
+			t.Errorf("config show printed %q:\n%s", leaked, out)
+		}
+	}
+	for _, want := range []string{"url: https://hooks.example.com:8443\n", "secret: " + config.Redacted} {
+		if !strings.Contains(out, want) {
+			t.Errorf("config show lacks %q:\n%s", want, out)
+		}
+	}
+	if got := cfg.Notifications.Webhooks[0].URL; !strings.Contains(got, token) || cfg.Notifications.Webhooks[0].Secret != secret {
+		t.Errorf("redacting for display changed the loaded webhook to %+v", cfg.Notifications.Webhooks[0])
 	}
 }
