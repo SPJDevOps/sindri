@@ -346,3 +346,59 @@ WHERE ms.subject_digest = sqlc.arg('subject_digest')
   AND ms.referrer_digest > sqlc.arg('after_digest')::text
 ORDER BY ms.referrer_digest
 LIMIT sqlc.arg('page_limit');
+
+-- name: InsertBlockedDigest :one
+-- Idempotent: a second block of the same digest keeps the first audit row.
+WITH ins AS (
+    INSERT INTO repository_blocked_digests (repo_id, digest, blocked_by, reason)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (repo_id, digest) DO NOTHING
+    RETURNING *
+)
+SELECT * FROM ins
+UNION ALL
+SELECT * FROM repository_blocked_digests
+WHERE repo_id = $1 AND digest = $2
+LIMIT 1;
+
+-- name: DeleteBlockedDigest :execrows
+DELETE FROM repository_blocked_digests
+WHERE repo_id = $1 AND digest = $2;
+
+-- name: ListBlockedDigests :many
+SELECT * FROM repository_blocked_digests
+WHERE repo_id = $1
+ORDER BY blocked_at, digest;
+
+-- name: IsDigestBlocked :one
+SELECT EXISTS (
+    SELECT 1 FROM repository_blocked_digests b
+    JOIN repositories r ON r.id = b.repo_id
+    WHERE r.name = sqlc.arg('repo_name') AND b.digest = sqlc.arg('digest')
+) AS blocked;
+
+-- name: DeleteRemoteCacheByBlobDigest :execrows
+DELETE FROM remote_cache
+WHERE repo_id = $1 AND blob_digest = $2;
+
+-- name: ListManifestChildren :many
+SELECT child_digest FROM manifest_children
+WHERE parent_digest = $1;
+
+-- name: IsChildReferencedInRepo :one
+-- True when a manifest still placed in the repository, other than the ones
+-- being evicted, lists child among its children.
+SELECT EXISTS (
+    SELECT 1 FROM manifest_children mc
+    JOIN repository_blobs rb ON rb.digest = mc.parent_digest AND rb.repo_id = sqlc.arg('repo_id')
+    WHERE mc.child_digest = sqlc.arg('child')
+      AND NOT (mc.parent_digest = ANY(sqlc.arg('evicting')::text[]))
+) AS referenced;
+
+-- name: DeleteRemoteCacheByManifestDigestKey :execrows
+-- Removes a proxy's cache entries for one manifest reached by digest, whatever
+-- the image: keys are "<prefix><image>:<digest>".
+DELETE FROM remote_cache
+WHERE repo_id = sqlc.arg('repo_id')
+  AND starts_with(cache_key, sqlc.arg('prefix')::text)
+  AND right(cache_key, length(sqlc.arg('digest')::text) + 1) = ':' || sqlc.arg('digest')::text;

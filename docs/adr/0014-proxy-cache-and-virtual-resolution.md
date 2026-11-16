@@ -81,7 +81,7 @@ collection.
 
 What an operator can do about a known-bad digest today, traced in the code:
 
-- **There is no way to stop one digest serving.** A proxy repository answers an OCI
+- **Before SIN-73 there was no way to stop one digest serving.** (SIN-73 below adds it.) A proxy repository answers an OCI
   `DELETE` of a manifest or blob with a read-only refusal (`ensureWritable`,
   `internal/proto/oci/handler.go`). The management API's `deleteFile` addresses `files`
   rows, which npm and PyPI use; an OCI manifest and its layers are placed in
@@ -120,10 +120,34 @@ What an operator can do about a known-bad digest today, traced in the code:
   collectable once it is also outside the grace period. With `ttl_seconds` of zero the row
   is never evicted, so the image stays rooted and no collection takes it.
 
-A follow-up (SIN-73) should add an administrator route that evicts one digest from one proxy
-repository, so a known-bad image need not cost the whole repository. It has the same limit
-as removal: unless it also makes the repository refuse that digest afterwards, the next pull
-fetches the image from upstream again.
+**Evicting and blocking one digest (SIN-73).** Three administrator routes close the gap
+above, for an OCI proxy repository only (anything else answers 400):
+
+- `PUT /api/v1/repositories/{name}/blocked/{digest}` evicts the digest and blocks it. The
+  optional body `{"reason": "..."}` is kept with the actor and the time as the audit record
+  (`repository_blocked_digests`, migration 00014). A second PUT changes nothing and answers
+  200 with the first record, so the call is idempotent, and a digest that was never placed
+  can be blocked ahead of time.
+- `DELETE` on the same path lifts the block. Nothing is placed again; the next pull
+  fetches as for any miss.
+- `GET /api/v1/repositories/{name}/blocked` lists the blocks.
+
+`Registry.EvictDigest` does this in one transaction: it unlinks the digest from
+`repository_blobs`, deletes tags that point at it and the `remote_cache` rows that
+justified them, and for a manifest or index unlinks each descendant (through
+`manifest_children`) that no other manifest still placed in the repository lists. Only the
+requested digest is blocked; its children are not. It never touches bytes (ADR 19: the
+collector reclaims them once nothing places or roots them) and never deletes
+`manifest_subjects` rows, which every repository shares.
+
+A blocked digest is refused before any upstream call when requested by digest (manifest,
+blob, or blob HEAD), and when a tag resolves upstream to it, the refusal comes before the
+placement is recorded. The refusal is `registry.ErrBlocked`, which wraps `ErrNotFound`,
+so the client sees `MANIFEST_UNKNOWN` or `BLOB_UNKNOWN` with a 404. In a virtual
+repository the blocked member counts as a miss, and the walk goes on to the next member
+under the first-hit rules. The block is per repository: the same digest in another
+repository is unaffected (I2). The placement path takes a per-digest advisory lock so an
+eviction and a racing fetch cannot leave a blocked digest placed.
 
 **Mutable names go through the TTL; immutable ones do not.** An OCI digest
 reference, once placed, is served locally without a TTL check or an upstream call, for as

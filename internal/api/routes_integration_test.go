@@ -67,6 +67,10 @@ func TestAPI_EveryRouteHasAnAuthorizationCase(t *testing.T) {
 		"PUT /repositories/{repo}/packages/{name}/versions/{version}/files/{filename}":    {path: file + "new.txt", body: "new", as: "tok-a", status: http.StatusForbidden},
 		"DELETE /repositories/{repo}/packages/{name}/versions/{version}/files/{filename}": {path: file + "doomed.txt", as: "tok-a", status: http.StatusForbidden},
 
+		"GET /repositories/{repo}/blocked":             {path: "/repositories/repo-a/blocked", as: "alice", status: http.StatusForbidden},
+		"PUT /repositories/{repo}/blocked/{digest}":    {path: "/repositories/repo-a/blocked/" + d, body: `{}`, as: "alice", status: http.StatusForbidden},
+		"DELETE /repositories/{repo}/blocked/{digest}": {path: "/repositories/repo-a/blocked/" + d, as: "alice", status: http.StatusForbidden},
+
 		"GET /lifecycle/stages": {path: "/lifecycle/stages"},
 		"PUT /lifecycle/stages": {path: "/lifecycle/stages", body: stages, as: "alice", status: http.StatusForbidden},
 

@@ -193,6 +193,14 @@ type RepositoryBlob struct {
 	Digest string    `json:"digest"`
 }
 
+type RepositoryBlockedDigest struct {
+	RepoID    uuid.UUID `json:"repo_id"`
+	Digest    string    `json:"digest"`
+	BlockedBy string    `json:"blocked_by"`
+	Reason    string    `json:"reason"`
+	BlockedAt time.Time `json:"blocked_at"`
+}
+
 type RepositoryMember struct {
 	VirtualRepoID uuid.UUID `json:"virtual_repo_id"`
 	MemberRepoID  uuid.UUID `json:"member_repo_id"`

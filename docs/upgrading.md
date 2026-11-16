@@ -70,7 +70,9 @@ Read these before upgrading a server that other people depend on.
   30 seconds by default.
   This covers npm and PyPI. On OCI, a digest manifest and its layer blobs keep serving
   from placement after upstream drops them, so an image pulled upstream as malicious keeps
-  serving by digest until its tag is evicted and the collector reclaims it. A whole-package
+  serving by digest until its tag is evicted and the collector reclaims it, unless an
+  administrator evicts and blocks the digest (`PUT /api/v1/repositories/{name}/blocked/{digest}`,
+  see [ADR 14](adr/0014-proxy-cache-and-virtual-resolution.md)). A whole-package
   404 moves a virtual repository's walk on, so with `[private-proxy, npm]` a package removed
   from the private upstream can resolve from the public proxy; only a hosted claim protects
   a private name.

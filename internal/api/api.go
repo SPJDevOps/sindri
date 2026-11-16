@@ -127,6 +127,10 @@ func Handler(opts Options) http.Handler {
 		r.Put("/{repo}/packages/{name}/versions/{version}/files/{filename}", a.publishFile)
 		r.Get("/{repo}/packages/{name}/versions/{version}/files/{filename}", a.getFile)
 		r.Delete("/{repo}/packages/{name}/versions/{version}/files/{filename}", a.deleteFile)
+
+		r.Get("/{repo}/blocked", a.listBlocked)
+		r.Put("/{repo}/blocked/{digest}", a.blockDigest)
+		r.Delete("/{repo}/blocked/{digest}", a.unblockDigest)
 	})
 
 	if a.lifecycle != nil {

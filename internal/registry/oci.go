@@ -123,6 +123,9 @@ func (r *Registry) LinkCachedBlob(ctx context.Context, repoName string, info sto
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := r.q.WithTx(tx)
+	if err := refuseBlocked(ctx, tx, q, repo.ID, repoName, info.Digest); err != nil {
+		return err
+	}
 	if _, err := q.UpsertBlob(ctx, db.UpsertBlobParams{
 		Digest:         info.Digest.String(),
 		Size:           info.Size,
@@ -478,6 +481,11 @@ func (r *Registry) PlaceCachedManifest(ctx context.Context, repoName, image, ref
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := r.q.WithTx(tx)
 
+	// A tag resolved upstream to a blocked digest is refused here, before any
+	// placement is recorded (SIN-73).
+	if err := refuseBlocked(ctx, tx, q, repo.ID, repoName, info.Digest); err != nil {
+		return Manifest{}, err
+	}
 	if _, err := q.UpsertBlob(ctx, db.UpsertBlobParams{
 		Digest:         info.Digest.String(),
 		Size:           info.Size,
