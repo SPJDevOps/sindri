@@ -777,3 +777,53 @@ func TestDeleteRepository_ReleasesRetiredNames(t *testing.T) {
 		t.Fatalf("publish into the recreated repository: %v", err)
 	}
 }
+
+// publishPyPINonImmutable places a file the way the management API does.
+func (f *evictFixture) publishPyPINonImmutable(repo, pkg, version, filename, body string) error {
+	f.t.Helper()
+	_, err := f.reg.Publish(f.t.Context(), registry.PublishParams{
+		Repo: repo, Package: pkg, Version: version, Filename: filename,
+		Body: bytes.NewReader([]byte(body)), Size: int64(len(body)),
+	})
+	return err
+}
+
+// seedLegacyDuplicate leaves one filename under two versions of a package, the
+// shape data written before SIN-75 can have. It inserts the second placement
+// directly, because Publish no longer allows it.
+func (f *evictFixture) seedLegacyDuplicate(repo, pkg, filename string) {
+	f.t.Helper()
+	f.publishPyPIAs(repo, pkg, "1.0.0", filename, "one") //nolint:errcheck // checked below
+	if f.count(`SELECT count(*) FROM files WHERE filename = $1`, filename) != 1 {
+		f.t.Fatalf("seeding %s: first placement missing", filename)
+	}
+	f.exec(`
+		WITH v AS (
+			INSERT INTO versions (package_id, version)
+			SELECT package_id, '2.0.0' FROM versions WHERE version = '1.0.0'
+			RETURNING id
+		)
+		INSERT INTO files (version_id, blob_digest, filename, media_type, metadata)
+		SELECT v.id, f.blob_digest, f.filename, f.media_type, f.metadata
+		FROM v, files f WHERE f.filename = $1`, filename)
+}
+
+// SIN-75, before the guard: the management API's non-immutable publish placed
+// one filename under two versions. Documents the behaviour being removed.
+func TestPublish_LegacyDuplicateFilenameViaAPI_BeforeGuard(t *testing.T) {
+	f := newEvictFixture(t)
+	f.hostedRepo("hosted", model.ProtocolPyPI)
+	filename := f.publishPyPI("hosted", "our-lib", "1.0.0")
+	if err := f.publishPyPINonImmutable("hosted", "our-lib", "2.0.0", filename, "other"); err != nil {
+		t.Fatalf("non-immutable publish under a second version: %v", err)
+	}
+	if err := f.reg.DeleteFile(t.Context(), "hosted", "our-lib", "1.0.0", filename, "carol"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+	if n := f.count(`SELECT count(*) FROM retired_files WHERE filename = $1`, filename); n != 1 {
+		t.Fatalf("retired_files = %d, want the filename retired", n)
+	}
+	if n := f.count(`SELECT count(*) FROM files WHERE filename = $1`, filename); n != 1 {
+		t.Fatalf("files = %d, want the retired filename still served under 2.0.0", n)
+	}
+}
