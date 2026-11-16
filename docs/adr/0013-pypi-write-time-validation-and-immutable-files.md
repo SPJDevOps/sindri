@@ -117,6 +117,28 @@ legitimately called `packages` collides with the download route. With the
 reservation, the PyPI dispatcher takes the leftmost marker segment and is
 unambiguous.
 
+## Amendment (SIN-75, v1.5.1): one filename, one version
+
+The same-package guard above ran only for `Immutable` publishes, which the PyPI
+adapter sets and the management API does not, so an API publish could still place
+one filename under two versions. The guard now runs on every publish into a hosted
+PyPI repository, inside the package lock, and the API answers 409 `FILE_EXISTS`.
+A non-immutable re-publish under the same version is still an upsert; only a
+different version is refused. Proxy and npm repositories are unchanged.
+
+Delete follows the same rule. Deleting a file from a hosted PyPI repository removes
+the filename under every version of the package, records a `retired_files` row for
+each version it was under, and removes each version it empties, in the one
+transaction. The API route stays addressed to one version; a delete addressed to
+a version that holds the filename removes it from all of them, and one addressed
+to a version without it answers 404. npm stays version-keyed.
+
+`GetFileByFilename`'s "first row" ordering can no longer choose between duplicates
+for data written from now on. It remains only for data that predates this change,
+which is not rewritten: a legacy duplicate is served from its lowest version until
+it is deleted, and the delete clears every copy. A unique index on
+`(package_id, filename)` stays rejected for the reason below.
+
 ## Consequences
 
 - Twine and `python -m build` uploads are unaffected: both derive `name` and

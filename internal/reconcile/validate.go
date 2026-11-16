@@ -315,7 +315,10 @@ func (v *validator) validateUpstream(r *config.Repository) {
 	up := r.Spec.Upstream
 	u, err := url.Parse(up.URL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		v.add(r.Source.Errorf("upstream.url", "%q is not an http(s) URL", up.URL))
+		v.add(r.Source.Errorf("upstream.url", "is not an http(s) URL"))
+	} else if u.User != nil {
+		// Neither the URL nor its userinfo is echoed: it is the secret being refused.
+		v.add(r.Source.Errorf("upstream.url", "must not carry credentials; move them to the server's credentials section and name the entry in upstream.credentials"))
 	}
 	if up.Credentials != "" && v.opts.Credentials != nil {
 		kind, ok := v.opts.Credentials[up.Credentials]

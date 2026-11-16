@@ -3,10 +3,13 @@
 package scan
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
+	"time"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
@@ -17,6 +20,7 @@ import (
 	"github.com/spj/sindri/internal/scanjob"
 	"github.com/spj/sindri/internal/storage/memstore"
 	"github.com/spj/sindri/internal/testsupport"
+	"github.com/spj/sindri/internal/worker"
 )
 
 // placementFixture stores blobs through a CAS that records them in the real
@@ -128,4 +132,83 @@ func TestPlacement_SameRepositoryImageStillAttaches(t *testing.T) {
 func (p *placementFixture) jobIn(repo string, digest model.Digest, kind string) queue.Job {
 	args, _ := json.Marshal(map[string]string{"digest": digest.String(), "kind": kind, "repository": repo})
 	return queue.Job{ID: 7, Kind: scanjob.JobKind, Args: args}
+}
+
+// runWorker runs the real worker, with the scanner as its handler, against
+// the real queue until the test ends.
+func (p *placementFixture) runWorker(t *testing.T, q *queue.Queue, s *Scanner, backoff time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = worker.Run(ctx, worker.Options{
+			Queue: q, Owner: "w", Poll: 20 * time.Millisecond, Backoff: backoff,
+			Handlers: map[string]worker.Handler{scanjob.JobKind: s.Handle},
+		})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+}
+
+func (p *placementFixture) waitJob(t *testing.T, q *queue.Queue, id int64, cond func(queue.Job) bool) queue.Job {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		job, err := q.Get(t.Context(), id)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if cond(job) {
+			return job
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out; job = %+v", job)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestQueue_OverCapArchiveFailsAfterOneAttemptWithNoEvidence(t *testing.T) {
+	p := newPlacementFixture(t, "a")
+	q := queue.New(testsupport.MigratedDB(t))
+	digest := p.put(zipOf(t, map[string]string{"big": strings.Repeat("a", 4096)}))
+	p.link("a", digest)
+	args, _ := json.Marshal(map[string]string{"digest": digest.String(), "kind": "pypi-dist", "repository": "a"})
+	job, _, err := q.Enqueue(t.Context(), queue.EnqueueParams{Kind: scanjob.JobKind, Args: args, MaxAttempts: 5, CreatedBy: "t"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	p.runWorker(t, q, p.scannerFor(Options{Trivy: "/nonexistent", MaxUnpackedBytes: 1000}), time.Millisecond)
+
+	got := p.waitJob(t, q, job.ID, queue.Job.Done)
+	if got.State != queue.StateFailed || got.Attempts != 1 {
+		t.Fatalf("job = %+v, want failed after one attempt of five", got)
+	}
+	if !strings.Contains(got.LastError, "scanning.maxUnpackedBytes (1000)") {
+		t.Fatalf("last_error = %q, want it to name the cap", got.LastError)
+	}
+	if len(p.ev.attached) != 0 {
+		t.Fatalf("attached = %d, want no evidence", len(p.ev.attached))
+	}
+}
+
+func TestQueue_TransientScanErrorStillRetries(t *testing.T) {
+	p := newPlacementFixture(t, "a")
+	q := queue.New(testsupport.MigratedDB(t))
+	m, blobs := p.image("x")
+	p.link("a", blobs...)
+	args, _ := json.Marshal(map[string]string{"digest": m.String(), "kind": "oci-manifest", "repository": "a"})
+	job, _, err := q.Enqueue(t.Context(), queue.EnqueueParams{Kind: scanjob.JobKind, Args: args, MaxAttempts: 5, CreatedBy: "t"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// A missing scanner binary is the operator's to fix, not the subject's.
+	p.runWorker(t, q, p.scannerFor(Options{Trivy: "/nonexistent"}), time.Hour)
+
+	got := p.waitJob(t, q, job.ID, func(j queue.Job) bool { return j.LastError != "" })
+	if got.State != queue.StateQueued || got.Attempts != 1 || got.FinishedAt != nil {
+		t.Fatalf("job = %+v, want queued for a retry", got)
+	}
 }

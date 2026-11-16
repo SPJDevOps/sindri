@@ -53,11 +53,23 @@ type Options struct {
 	CacheDir string
 	// Timeout bounds each target's scan. Zero means no limit.
 	Timeout time.Duration
+	// JobTimeout bounds staging and scanning; the SIN-84 staging sweep relies
+	// on it to bound how long a staging directory can live.
+	// It is checked once before attaching; attaching runs on the parent
+	// context, so an expiry never leaves a subject half attached. On expiry
+	// nothing is attached and the job fails, so the worker retries it with
+	// backoff. Zero means no limit here, but config maps 0 to its default.
+	JobTimeout time.Duration
 	// SkipDBUpdate passes --skip-db-update and --skip-java-db-update, so Trivy
 	// never downloads a database. The databases must already be in the cache,
 	// and it cannot be combined with DBRepository or JavaDBRepository: a mirror
 	// is only ever contacted to download.
 	SkipDBUpdate bool
+	// OfflineScan passes --offline-scan, so Trivy makes no package lookups
+	// while scanning. Every scan already passes --skip-version-check and
+	// --disable-telemetry, so with this set Trivy makes no network request of
+	// its own. Unlike SkipDBUpdate it may be combined with a mirror.
+	OfflineScan bool
 	// MaxUnpackedBytes caps the bytes an archive may unpack to.
 	MaxUnpackedBytes int64
 	// TempDir is the parent of staging directories; empty means os.TempDir().

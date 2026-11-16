@@ -28,6 +28,30 @@ import (
 // lost, and a handler must return promptly when it is.
 type Handler func(ctx context.Context, job queue.Job) (json.RawMessage, error)
 
+// ErrPermanent marks an error no retry can cure: the job's input is
+// malformed or over a limit. A handler returning an error that matches it
+// fails the job on this attempt whatever attempts remain. Transient causes,
+// including a job deadline expiring, must never carry it.
+var ErrPermanent = errors.New("permanent job failure")
+
+// Permanent marks err as permanent. The result matches both ErrPermanent and
+// err's own chain, and its message is err's, so last_error names the cause.
+// It returns nil for a nil err.
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return permanentError{err}
+}
+
+type permanentError struct{ err error }
+
+func (e permanentError) Error() string { return e.err.Error() }
+func (e permanentError) Unwrap() error { return e.err }
+func (e permanentError) Is(target error) bool {
+	return target == ErrPermanent
+}
+
 // Schedule enqueues Kind every Interval. The kind is its own dedupe key, so a
 // scheduled run and one requested by hand never overlap.
 type Schedule struct {
@@ -199,6 +223,12 @@ func (w *worker) run(ctx context.Context, job queue.Job) {
 			return
 		}
 		log.InfoContext(recordCtx, "job handed back on shutdown")
+	case err != nil && errors.Is(err, ErrPermanent):
+		if ferr := w.opts.Queue.FailPermanently(recordCtx, job.ID, w.opts.Owner, err.Error()); ferr != nil {
+			w.logError(recordCtx, "recording a permanently failed job", ferr)
+			return
+		}
+		log.WarnContext(ctx, "job failed permanently, not retrying", "error", err.Error())
 	case err != nil:
 		if ferr := w.opts.Queue.Fail(recordCtx, job.ID, w.opts.Owner, err.Error(), w.opts.Backoff); ferr != nil {
 			w.logError(recordCtx, "recording a failed job", ferr)

@@ -107,6 +107,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 	// makes the garbage collector safe beside it (ADR 19).
 	casStore := cas.New(blobs, cas.WithReserver(db.NewBlobReserver(database, string(cfg.Storage.Backend))))
 	reg := registry.New(database, casStore, string(cfg.Storage.Backend))
+	warnUpstreamCredentials(ctx, reg, logger)
 	jobs := queue.New(database)
 	metricsReg := prometheus.NewRegistry()
 	collector, err := gc.New(gc.Options{
@@ -313,6 +314,7 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 	if err := scan.PrepareCacheDir(cacheDir); err != nil {
 		return nil, nil, fmt.Errorf("scanning.cacheDir: %w", err)
 	}
+	sweepStaging(ctx, logger, filepath.Join(cacheDir, "sindri-staging"), sc.JobTimeout.Duration())
 	mx, err := newScanMetrics(reg)
 	if err != nil {
 		return nil, nil, err
@@ -328,7 +330,8 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 		"cache_dir", cacheDir,
 		"db_mirror", sc.DBRepository != "", // the values may carry credentials
 		"java_db_mirror", sc.JavaDBRepository != "",
-		"skip_db_update", sc.SkipDBUpdate)
+		"skip_db_update", sc.SkipDBUpdate,
+		"offline_scan", sc.OfflineScan)
 	return scan.New(store, ev, placement, scan.Options{
 		Trivy:            sc.Trivy,
 		DBRepository:     sc.DBRepository,
@@ -336,9 +339,32 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 		CacheDir:         cacheDir,
 		TempDir:          filepath.Join(cacheDir, "sindri-staging"),
 		Timeout:          sc.Timeout.Duration(),
+		JobTimeout:       sc.JobTimeout.Duration(),
 		SkipDBUpdate:     sc.SkipDBUpdate,
+		OfflineScan:      sc.OfflineScan,
 		MaxUnpackedBytes: sc.MaxUnpackedBytes,
 	}, logger), mx, nil
+}
+
+// stagingSweepMargin keeps clock and mtime coarseness from ever making a
+// live job's staging directory look stale.
+const stagingSweepMargin = 10 * time.Minute
+
+// sweepStaging removes staging directories a killed process left behind. The
+// job deadline bounds a live job, so anything older than it plus a margin is
+// abandoned. With no deadline configured nothing can be proven stale, so it
+// does nothing. A failure is logged and never stops startup.
+func sweepStaging(ctx context.Context, logger *slog.Logger, dir string, jobTimeout time.Duration) {
+	if jobTimeout <= 0 || logger == nil {
+		return
+	}
+	res, err := scan.SweepStaging(dir, jobTimeout+stagingSweepMargin)
+	if err != nil {
+		logger.WarnContext(ctx, "sweeping stale scan staging directories failed; continuing", "dir", dir, "error", err)
+	}
+	if res.Removed > 0 {
+		logger.InfoContext(ctx, "removed stale scan staging directories", "count", res.Removed, "bytes", res.Bytes)
+	}
 }
 
 // approvedFindingCounts reads sindri_approved_findings: the approved subjects
@@ -354,5 +380,20 @@ func approvedFindingCounts(q *db.Queries) func(context.Context) (map[string]int6
 			counts[r.Severity] = r.Subjects
 		}
 		return counts, nil
+	}
+}
+
+// warnUpstreamCredentials logs one warning per proxy repository whose stored
+// upstream URL carries credentials. Such a row predates their refusal
+// (SIN-116): it keeps working, and only the repository's name is logged.
+func warnUpstreamCredentials(ctx context.Context, reg *registry.Registry, logger *slog.Logger) {
+	names, err := reg.ProxiesWithUpstreamCredentials(ctx)
+	if err != nil {
+		logger.WarnContext(ctx, "could not check proxy upstream URLs for credentials", "error", err)
+		return
+	}
+	for _, name := range names {
+		logger.WarnContext(ctx, "proxy repository's upstream URL carries credentials; move them to the credentials section and recreate the repository",
+			"repository", name)
 	}
 }

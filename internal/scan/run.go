@@ -13,6 +13,7 @@ import (
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/scanjob"
+	"github.com/spj/sindri/internal/worker"
 )
 
 // evidenceMetadata is what the worker writes on Sindri's own evidence. Only
@@ -57,16 +58,55 @@ type scanned struct {
 	vulns  []vulnerability
 }
 
+// errJobDeadline is the cancellation cause of a job that ran past
+// Options.JobTimeout, which tells it apart from a lease loss or a shutdown
+// cancelling the parent context.
+var errJobDeadline = errors.New("scan job deadline exceeded")
+
 // Handle runs one scan job; it matches worker.Handler. Args are
 // {"digest": ..., "kind": ...}.
+//
+// Options.JobTimeout bounds staging and scanning. The deadline is checked once
+// after the last target is scanned: if it has passed, nothing is attached and
+// the job fails. Attaching then runs on the caller's context alone, so a
+// deadline that expires mid-attach cannot leave a subject half attached; lease
+// loss and shutdown still cancel it.
 func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, error) {
+	scanCtx := ctx
+	if s.opts.JobTimeout > 0 {
+		var cancel context.CancelFunc
+		scanCtx, cancel = context.WithTimeoutCause(ctx, s.opts.JobTimeout, errJobDeadline)
+		defer cancel()
+	}
+	res, attaching, err := s.handle(ctx, scanCtx, job)
+	if err != nil && !attaching && errors.Is(context.Cause(scanCtx), errJobDeadline) {
+		// A deadline expiry is transient (raise the timeout and it passes), so
+		// whatever else failed alongside it must not fail the job for good:
+		// keep the cause's message but drop its permanent marker.
+		if errors.Is(err, worker.ErrPermanent) {
+			err = errors.New(err.Error())
+		}
+		return nil, fmt.Errorf("scan job %d ran longer than scanning.jobTimeout (%s); nothing was attached, raise it for larger subjects: %w: %w",
+			job.ID, s.opts.JobTimeout, context.DeadlineExceeded, err)
+	}
+	return res, err
+}
+
+// handle does the work. Staging and scanning run on scanCtx, everything after
+// on ctx; attaching reports whether the attach phase was reached.
+func (s *Scanner) handle(ctx, scanCtx context.Context, job queue.Job) (res json.RawMessage, attaching bool, err error) {
+	res, err = s.handleScan(ctx, scanCtx, job, &attaching)
+	return res, attaching, err
+}
+
+func (s *Scanner) handleScan(ctx, scanCtx context.Context, job queue.Job, attaching *bool) (json.RawMessage, error) {
 	var args scanjob.Args
 	if err := json.Unmarshal(job.Args, &args); err != nil {
-		return nil, fmt.Errorf("decoding scan job %d args: %w", job.ID, err)
+		return nil, worker.Permanent(fmt.Errorf("decoding scan job %d args: %w", job.ID, err))
 	}
 	digest, err := model.ParseDigest(args.Digest)
 	if err != nil {
-		return nil, fmt.Errorf("scan job %d: %w", job.ID, err)
+		return nil, worker.Permanent(fmt.Errorf("scan job %d: %w", job.ID, err))
 	}
 	kind := model.SubjectKind(args.Kind)
 	if kind == model.SubjectKindFile {
@@ -96,37 +136,28 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		return s.skippedNotInRepository(ctx, job, digest)
 	}
 
-	targets, err := s.stage(ctx, args.Repository, root, kind, digest)
+	targets, err := s.stage(scanCtx, args.Repository, root, kind, digest)
 	var notIn *notInRepositoryError
 	if errors.As(err, &notIn) {
 		return s.skippedNotInRepository(ctx, job, notIn.digest)
 	}
+	// Everything below fails the job for good: the subject itself is what is
+	// wrong, so a retry would stage the same bytes and fail the same way.
+	// Nothing is attached, so a severity gate refuses the subject (fail
+	// closed), and last_error says why.
 	var dup *duplicatePlatformError
 	if errors.As(err, &dup) {
-		s.logger.WarnContext(ctx, "scan skipped: duplicate platform", "job", job.ID, "platform", dup.platform)
-		return skipResult(struct {
-			Skipped  string `json:"skipped"`
-			Platform string `json:"platform"`
-		}{"duplicate platform", dup.platform})
+		return nil, worker.Permanent(fmt.Errorf("staging %s: %w", digest, err))
 	}
 	var unsupported *unsupportedChildError
 	if errors.As(err, &unsupported) {
-		s.logger.WarnContext(ctx, "scan skipped: unsupported index child", "job", job.ID, "digest", unsupported.digest.String(), "media_type", unsupported.mediaType)
-		return skipResult(struct {
-			Skipped   string `json:"skipped"`
-			Digest    string `json:"digest"`
-			MediaType string `json:"mediaType"`
-		}{"unsupported child", unsupported.digest.String(), unsupported.mediaType})
+		return nil, worker.Permanent(fmt.Errorf("staging %s: %w", digest, err))
 	}
-	if errors.Is(err, errTooManyPlatforms) || errors.Is(err, errNoPlatforms) {
-		// Partial or empty scans are never attached, so a severity gate
-		// refuses the subject (fail closed). Retrying would not change it.
-		reason := "no scannable platforms"
-		if errors.Is(err, errTooManyPlatforms) {
-			reason = "too many platforms"
-		}
-		s.logger.WarnContext(ctx, "scan skipped", "job", job.ID, "subject", digest.String(), "reason", reason)
-		return json.RawMessage(`{"skipped":"` + reason + `"}`), nil
+	if errors.Is(err, errTooManyPlatforms) || errors.Is(err, errNoPlatforms) || errors.Is(err, ErrUnsafePath) {
+		return nil, worker.Permanent(fmt.Errorf("staging %s: %w", digest, err))
+	}
+	if errors.Is(err, ErrArchiveTooLarge) {
+		return nil, worker.Permanent(fmt.Errorf("staging %s: %w (scanning.maxUnpackedBytes (%d); raise it for larger archives)", digest, err, s.opts.MaxUnpackedBytes))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("staging %s: %w", digest, err)
@@ -143,7 +174,7 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		if err := os.MkdirAll(outDir, 0o700); err != nil {
 			return nil, fmt.Errorf("creating output directory: %w", err)
 		}
-		report, sbom, err := s.scanTarget(ctx, t, outDir)
+		report, sbom, err := s.scanTarget(scanCtx, t, outDir)
 		if err != nil {
 			return nil, fmt.Errorf("scanning %s: %w", digest, err)
 		}
@@ -153,6 +184,12 @@ func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, e
 		}
 		done = append(done, scanned{t: t, report: report, sbom: sbom, counts: counts, vulns: vulns})
 	}
+
+	// The deadline is checked once, here, so a timed-out job attaches nothing.
+	if err := scanCtx.Err(); err != nil {
+		return nil, fmt.Errorf("scanning %s: %w", digest, context.Cause(scanCtx))
+	}
+	*attaching = true
 
 	// Read the previous scans once, before anything is attached, so this
 	// job's own attachments never count as "previous".

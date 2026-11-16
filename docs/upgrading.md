@@ -70,7 +70,9 @@ Read these before upgrading a server that other people depend on.
   30 seconds by default.
   This covers npm and PyPI. On OCI, a digest manifest and its layer blobs keep serving
   from placement after upstream drops them, so an image pulled upstream as malicious keeps
-  serving by digest until its tag is evicted and the collector reclaims it. A whole-package
+  serving by digest until its tag is evicted and the collector reclaims it, unless an
+  administrator evicts and blocks the digest (`PUT /api/v1/repositories/{name}/blocked/{digest}`,
+  see [ADR 14](adr/0014-proxy-cache-and-virtual-resolution.md)). A whole-package
   404 moves a virtual repository's walk on, so with `[private-proxy, npm]` a package removed
   from the private upstream can resolve from the public proxy; only a hosted claim protects
   a private name.
@@ -205,6 +207,60 @@ differently:
 - **A signature or SBOM attached as a referrer is not scanned on publish.** That is a
   manifest that names a subject and has neither an image config nor an image layer.
   Anything else is scanned as before, whether or not it names a subject.
+
+## Behaviour changes in 1.5.1
+
+- **A proxy repository's upstream URL may not carry credentials.** `https://user:token@host`
+  is refused when a repository is created through the API (400) and by `sindri config
+  check`, `serve --config` and `sindri apply`. The error names the field and does not
+  repeat the value. Put the secret in the server's `credentials:` section and name it with
+  `upstream.credentials` (`credentials_ref` in the API):
+
+  ```yaml
+  credentials:
+    mirror:
+      username: sindri
+      password: ${MIRROR_TOKEN}
+  repos:
+    pypi-mirror:
+      protocol: pypi
+      upstream: { url: https://pypi.mirror.example/simple, credentials: mirror }
+  ```
+
+- **Existing repositories keep working.** A repository created through the API with
+  credentials in its URL keeps authenticating, and startup logs one warning per such
+  repository, naming only the repository. The UI, `diff` and `apply` now show the URL with
+  the credentials replaced by `<redacted>`. To remove the warning, create a replacement
+  repository with `credentials_ref` and delete the old one.
+  **A repository declared in the configuration file with credentials in its URL must be
+  fixed before the upgrade:** `config check` refuses it, and `serve --config` does not
+  start on a file that fails the check.
+
+- **Migration 00014 is additive.** It adds the table that holds blocked OCI digests. A
+  rollback to 1.5.0 needs no database restore; the older binary ignores the table, and a
+  blocked digest is served again until you upgrade.
+- **Two scanning settings are new.** `scanning.jobTimeout` bounds one whole scan job and
+  defaults to `1h` (`0s` means the default, and it must be at least `timeout`). A job that
+  hits it attaches nothing and is retried with backoff. `scanning.offlineScan` defaults to
+  `false`, or to `true` when `skipDBUpdate` is set. Neither needs a change unless you want
+  them. See the [configuration reference](configuration.md).
+- **Trivy no longer phones home.** Every scan now passes `--skip-version-check` and
+  `--disable-telemetry`, so no server checks `check.trivy.dev` for a newer Trivy or sends
+  usage telemetry to Aqua. With `offlineScan` on, Trivy also gets `--offline-scan` and makes
+  no package lookups; an existing server with `skipDBUpdate` set gets it on upgrade.
+- **Some scan outcomes that were skipped or retried are now failed jobs.** Too many
+  platforms, a duplicate platform, an unsupported child and an index with no platforms were
+  counted as skipped before 1.5.1; an archive over the cap and an unsafe path were retried
+  until attempts ran out. All six now fail once, without retries, and count as `failed` in
+  `sindri_scans_total`. Alerts on `failed` may fire for artifacts that were counted as
+  skipped before.
+- **A hosted PyPI filename belongs to one version.** Publishing through the API a filename
+  that already exists under another version answers 409 `FILE_EXISTS`. Deleting a filename
+  removes it under every version of the package that holds it, and a version it empties goes
+  too. Data written before 1.5.1 that already holds a filename twice is left as it is.
+- **An admin can evict and block one digest in an OCI proxy** with
+  `PUT /api/v1/repositories/{name}/blocked/{digest}`; `DELETE` unblocks it, and `GET
+  .../blocked` lists them.
 
 ## Rolling back
 

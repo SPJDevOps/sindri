@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/spj/sindri/internal/model"
@@ -33,12 +35,58 @@ var errUpstreamDown = errors.New("upstream not answering")
 var ErrFileGone = fmt.Errorf("%w: upstream no longer lists the file", ErrUpstreamNotFound)
 
 // down marks err as the upstream not answering, unless the caller or a
-// redirect rule ended the request: those say nothing about the upstream.
+// redirect rule ended the request: those say nothing about the upstream. The
+// user name of the URL in the error is removed first, on every path.
 func down(err error) error {
+	err = scrubUserinfo(err)
 	if errors.Is(err, context.Canceled) || errors.Is(err, errRedirectRefused) {
 		return err
 	}
 	return fmt.Errorf("%w: %w", errUpstreamDown, err)
+}
+
+// scrubbedError prints the text of its cause with the user name taken out of
+// a URL. As reaches a scrubbed copy of the *url.Error, never the original, so
+// formatting what As returns cannot leak; Is still consults the original chain.
+type scrubbedError struct {
+	text     string
+	scrubbed *url.Error
+	original error
+}
+
+func (e *scrubbedError) Error() string        { return e.text }
+func (e *scrubbedError) Unwrap() error        { return e.scrubbed }
+func (e *scrubbedError) Is(target error) bool { return errors.Is(e.original, target) }
+
+// scrubUserinfo removes the user name from the URL a *url.Error carries.
+// net/http masks the password there but not the user name, and a stored
+// upstream URL from before credentials were refused (SIN-116) may hold a token
+// in it. Wrapper text and sentinels around the *url.Error are kept, and if the
+// text still shows the user info afterwards it falls back to a message without
+// the URL: the scrub fails closed.
+func scrubUserinfo(err error) error {
+	var ue *url.Error
+	if err == nil || !errors.As(err, &ue) {
+		return err
+	}
+	u, perr := url.Parse(ue.URL)
+	if perr != nil || u.User == nil {
+		return err
+	}
+	secrets := []string{u.User.Username()}
+	if pw, ok := u.User.Password(); ok {
+		secrets = append(secrets, pw)
+	}
+	u.User = nil
+	scrubbed := &url.Error{Op: ue.Op, URL: u.String(), Err: ue.Err}
+	text := strings.ReplaceAll(err.Error(), ue.URL, scrubbed.URL)
+	for _, secret := range secrets {
+		if secret != "" && strings.Contains(text, secret) {
+			text = "upstream request failed: URL withheld"
+			break
+		}
+	}
+	return &scrubbedError{text: text, scrubbed: scrubbed, original: err}
 }
 
 // inBackoff reports whether a refresh of repo's documents failed recently.

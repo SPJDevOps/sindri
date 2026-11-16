@@ -101,3 +101,27 @@ in the guide.
 - `reconcile.ValidateOptions.Credentials`, `reconcile.New`, and `api.Options.Credentials`
   carry `map[string]model.CredentialKind` instead of a set of names.
 - Existing configuration files are unaffected: `username` and `password` still mean Basic.
+
+## Amendment (1.5.1): no credentials in `upstream.url`
+
+`upstream.url` is displayed, so a secret written into it (`https://user:token@host`) was
+shown by the UI, printed by `sindri diff` and `apply`, and carried into error text. SIN-116
+closes that.
+
+- **Refused at write time.** The API (400, `ErrInvalidInput`) and `config check` / `serve
+  --config` / `apply` refuse a proxy upstream URL with a userinfo part. The message names
+  the field and points at `credentials:`; it never echoes the URL, and the old echo of a
+  malformed URL in `config check` is gone too.
+- **Existing rows keep working.** An API-created repository stored with userinfo still
+  authenticates as before: outgoing requests are not changed. Refusing to start on such a
+  row would brick an upgrade, so startup logs one warning per repository, naming only the
+  repository. Config-managed rows fail `config check` and must be fixed before the upgrade.
+- **Every read path redacts.** The UI, the diff fields from `registry.Changes` and `config
+  show` use one helper (`model.RedactUserinfo`, exposed as `config.RedactUserinfo`). The
+  API never returned the URL. In `internal/remote`, net/http masks a URL's password in a
+  `*url.Error` but prints the user name, so `down()` strips the userinfo from it.
+
+Rejected: stripping userinfo from outgoing requests (breaks working deployments on upgrade),
+and a migration that moves the secret into a credentials entry (the credentials live in the
+server configuration, not the database, so a migration cannot create them).
+

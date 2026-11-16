@@ -67,7 +67,10 @@ func ociUpstream(remote registry.Remote, repoName, image, method, suffix, accept
 // tag, stale asks upstream again and falls back to the local tag only when
 // upstream is unavailable.
 func (c *Client) FetchOCIManifest(ctx context.Context, repoName, image, reference, accept string) (registry.Manifest, error) {
-	if _, err := model.ParseDigest(reference); err == nil {
+	if d, err := model.ParseDigest(reference); err == nil {
+		if err := c.refuseBlocked(ctx, repoName, d); err != nil {
+			return registry.Manifest{}, err
+		}
 		if man, err := c.reg.GetManifest(ctx, repoName, image, reference); err == nil {
 			return man, nil
 		} else if !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrNotPlaced) {
@@ -147,6 +150,21 @@ func (c *Client) fetchAndCacheOCIManifest(ctx context.Context, repoName, image, 
 	return man, nil
 }
 
+// refuseBlocked fails with registry.ErrBlocked, before any upstream call, when
+// an operator blocked digest in this proxy repository (SIN-73). It wraps
+// ErrNotFound: the client sees the protocol's "unknown" error and a virtual
+// walk counts the member as a miss.
+func (c *Client) refuseBlocked(ctx context.Context, repoName string, digest model.Digest) error {
+	blocked, err := c.reg.IsDigestBlocked(ctx, repoName, digest)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return registry.ErrBlocked
+	}
+	return nil
+}
+
 // errMetadataTooLarge is why readMetadata refused a document.
 var errMetadataTooLarge = errors.New("document exceeds the size bound")
 
@@ -167,6 +185,9 @@ func readMetadata(r io.Reader, limit int64) ([]byte, error) {
 // placement when cached, otherwise from an upstream HEAD. A HEAD never
 // downloads or caches bytes.
 func (c *Client) StatOCIBlob(ctx context.Context, repoName, image string, digest model.Digest) (int64, error) {
+	if err := c.refuseBlocked(ctx, repoName, digest); err != nil {
+		return 0, err
+	}
 	if info, err := c.reg.StatBlob(ctx, repoName, digest); err == nil {
 		return info.Size, nil
 	} else if !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrNotPlaced) {
@@ -202,6 +223,9 @@ func (c *Client) StatOCIBlob(ctx context.Context, repoName, image string, digest
 // repository once its digest verifies. The size is -1 when upstream did not
 // declare one.
 func (c *Client) FetchOCIBlob(ctx context.Context, repoName, image string, digest model.Digest) (io.ReadCloser, int64, error) {
+	if err := c.refuseBlocked(ctx, repoName, digest); err != nil {
+		return nil, 0, err
+	}
 	if info, rc, err := c.reg.GetBlob(ctx, repoName, digest); err == nil {
 		return rc, info.Size, nil
 	} else if !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrNotPlaced) {

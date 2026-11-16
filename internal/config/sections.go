@@ -719,12 +719,27 @@ type Scanning struct {
 	// How long one scan may run before it is cancelled and retried. At least
 	// `1m`.
 	Timeout Duration `yaml:"timeout"`
+	// How long one whole scan job may run, across every platform of an image
+	// index and the staging in front of them, before it is cancelled, attaches
+	// nothing, and is retried with backoff. Must be at least `timeout`.
+	// Default `1h`, or `timeout` when that is longer; `0s` means the
+	// default, not no limit.
+	JobTimeout Duration `yaml:"jobTimeout"`
 	// Never download the vulnerability database, and scan with the one already
 	// in `cacheDir`, including the Java database that Trivy fetches separately
 	// when it finds a jar. For an air-gapped server with a pre-seeded cache; a
 	// jar-containing subject fails to scan if the Java database is not in it.
 	// Cannot be combined with `dbRepository` or `javaDbRepository`.
 	SkipDBUpdate bool `yaml:"skipDBUpdate"`
+	// Pass `--offline-scan` to Trivy, so it makes no package lookups while
+	// scanning. Sindri always passes `--skip-version-check` and
+	// `--disable-telemetry`, so with this set Trivy makes no network request
+	// of its own. A server with
+	// a pre-seeded cache is offline, so this follows `skipDBUpdate`. Unlike
+	// `skipDBUpdate` it may be combined with `dbRepository` and
+	// `javaDbRepository`, for an air-gapped server that reaches only a mirror.
+	// Default `false`, or `true` when `skipDBUpdate` is set.
+	OfflineScan bool `yaml:"offlineScan"`
 	// The most bytes unpacked from one wheel or tarball while scanning it, so
 	// that an archive bomb cannot fill the disk. At least 1048576 (1 MiB).
 	MaxUnpackedBytes int64 `yaml:"maxUnpackedBytes"`
@@ -741,6 +756,7 @@ func defaultScanning() Scanning {
 	return Scanning{
 		Trivy:            "trivy",
 		Timeout:          Duration(10 * time.Minute),
+		JobTimeout:       Duration(time.Hour),
 		MaxUnpackedBytes: 1 << 30,
 		RescanInterval:   Duration(24 * time.Hour),
 	}
@@ -765,8 +781,12 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		JavaDBRepository string   `yaml:"javaDbRepository"`
 		CacheDir         string   `yaml:"cacheDir"`
 		Timeout          Duration `yaml:"timeout"`
+		JobTimeout       Duration `yaml:"jobTimeout"`
 		SkipDBUpdate     bool     `yaml:"skipDBUpdate"`
 		MaxUnpackedBytes int64    `yaml:"maxUnpackedBytes"`
+		// A pointer, because an absent value takes skipDBUpdate's value
+		// while an explicit false does not.
+		OfflineScan *bool `yaml:"offlineScan"`
 		// A pointer, because an explicit 0 disables the schedule while an
 		// absent value takes the default.
 		RescanInterval *Duration `yaml:"rescanInterval"`
@@ -778,6 +798,12 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 	if raw.RescanInterval != nil {
 		rescan = *raw.RescanInterval
 	}
+	// Resolved here, not in applyDefaults, because only here can an absent
+	// value be told from an explicit false. The loaded tree is explicit.
+	offline := raw.SkipDBUpdate
+	if raw.OfflineScan != nil {
+		offline = *raw.OfflineScan
+	}
 	*s = Scanning{
 		Enabled:          raw.Enabled == nil || *raw.Enabled,
 		Trivy:            raw.Trivy,
@@ -785,7 +811,9 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		JavaDBRepository: raw.JavaDBRepository,
 		CacheDir:         raw.CacheDir,
 		Timeout:          raw.Timeout,
+		JobTimeout:       raw.JobTimeout,
 		SkipDBUpdate:     raw.SkipDBUpdate,
+		OfflineScan:      offline,
 		MaxUnpackedBytes: raw.MaxUnpackedBytes,
 		RescanInterval:   rescan,
 	}
@@ -799,6 +827,9 @@ func (s *Scanning) applyDefaults() {
 	}
 	if s.Timeout == 0 {
 		s.Timeout = d.Timeout
+	}
+	if s.JobTimeout == 0 {
+		s.JobTimeout = max(d.JobTimeout, s.Timeout)
 	}
 	if s.MaxUnpackedBytes == 0 {
 		s.MaxUnpackedBytes = d.MaxUnpackedBytes
@@ -824,6 +855,9 @@ func (s Scanning) ResolvedCacheDir() (string, error) {
 func (s *Scanning) validate() error {
 	if s.Timeout.Duration() < time.Minute {
 		return fmt.Errorf("scanning.timeout: %s would cancel scans that are still working; use at least 1m", s.Timeout)
+	}
+	if s.JobTimeout < s.Timeout {
+		return fmt.Errorf("scanning.jobTimeout: %s is shorter than scanning.timeout (%s), so a single target could never finish; use at least %s", s.JobTimeout, s.Timeout, s.Timeout)
 	}
 	if s.RescanInterval < 0 {
 		return fmt.Errorf("scanning.rescanInterval: %s is negative; use 0s to disable the schedule", s.RescanInterval)

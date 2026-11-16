@@ -227,6 +227,17 @@ func (q *Queue) Fail(ctx context.Context, id int64, owner, cause string, backoff
 	return leaseResult("failing", id, n, err)
 }
 
+// FailPermanently fails a running job now, whatever attempts remain, for an
+// error a retry cannot cure.
+func (q *Queue) FailPermanently(ctx context.Context, id int64, owner, cause string) error {
+	n, err := q.q.FailJobPermanently(ctx, db.FailJobPermanentlyParams{
+		LastError: text(cause),
+		ID:        id,
+		Owner:     text(owner),
+	})
+	return leaseResult("failing permanently", id, n, err)
+}
+
 // Release hands a running job back without counting the attempt, for a
 // worker that is stopping before the job finished.
 func (q *Queue) Release(ctx context.Context, id int64, owner string) error {

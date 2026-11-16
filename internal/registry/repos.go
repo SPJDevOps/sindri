@@ -166,6 +166,10 @@ func validateCreateParams(p CreateRepositoryParams) error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("%w: upstream_url must be an http(s) URL", ErrInvalidInput)
 		}
+		if u.User != nil {
+			// The value is not echoed: it is the secret being refused.
+			return fmt.Errorf("%w: upstream_url must not carry credentials; name an entry of the server's credentials section in credentials_ref instead", ErrInvalidInput)
+		}
 		if p.TTLSeconds < 0 || p.NegativeTTL < 0 {
 			return fmt.Errorf("%w: ttl values must be non-negative", ErrInvalidInput)
 		}
@@ -268,6 +272,34 @@ func (r *Registry) GetRemote(ctx context.Context, repoName string) (Remote, erro
 		TTL:            time.Duration(row.TtlSeconds) * time.Second,
 		NegativeTTL:    time.Duration(row.NegativeTtlSeconds) * time.Second,
 	}, nil
+}
+
+// ProxiesWithUpstreamCredentials names the proxy repositories whose stored
+// upstream URL carries credentials. API-created rows from before such URLs were
+// refused (SIN-116) keep working, so startup warns about them instead of
+// failing. Only names are returned, never the URLs.
+func (r *Registry) ProxiesWithUpstreamCredentials(ctx context.Context) ([]string, error) {
+	repos, err := r.AllRepositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, repo := range repos {
+		if repo.Type != model.RepoTypeProxy {
+			continue
+		}
+		remote, err := r.GetRemote(ctx, repo.Name)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if u, perr := url.Parse(remote.UpstreamURL); perr == nil && u.User != nil {
+			names = append(names, repo.Name)
+		}
+	}
+	return names, nil
 }
 
 // ListMembers returns the ordered member repositories of a virtual repository.

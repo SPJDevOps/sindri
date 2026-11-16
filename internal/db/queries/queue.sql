@@ -69,6 +69,17 @@ SET state = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
     lease_expires_at = NULL
 WHERE id = sqlc.arg('id') AND state = 'running' AND lease_owner = sqlc.arg('owner');
 
+-- name: FailJobPermanently :execrows
+-- Ends a job at once, whatever attempts remain, for an error a retry cannot
+-- cure. The attempt was already counted when the job was claimed.
+UPDATE jobs
+SET state = 'failed',
+    last_error = sqlc.arg('last_error'),
+    finished_at = now(),
+    lease_owner = NULL,
+    lease_expires_at = NULL
+WHERE id = sqlc.arg('id') AND state = 'running' AND lease_owner = sqlc.arg('owner');
+
 -- name: ReleaseJob :execrows
 -- Gives a job back without counting the attempt, for a worker that is
 -- shutting down mid-job.

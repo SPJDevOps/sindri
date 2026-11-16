@@ -777,3 +777,95 @@ func TestDeleteRepository_ReleasesRetiredNames(t *testing.T) {
 		t.Fatalf("publish into the recreated repository: %v", err)
 	}
 }
+
+// publishPyPINonImmutable places a file the way the management API does.
+func (f *evictFixture) publishPyPINonImmutable(repo, pkg, version, filename, body string) error {
+	f.t.Helper()
+	_, err := f.reg.Publish(f.t.Context(), registry.PublishParams{
+		Repo: repo, Package: pkg, Version: version, Filename: filename,
+		Body: bytes.NewReader([]byte(body)), Size: int64(len(body)),
+	})
+	return err
+}
+
+// seedLegacyDuplicate leaves one filename under two versions of a package, the
+// shape data written before SIN-75 can have. It inserts the second placement
+// directly, because Publish no longer allows it.
+func (f *evictFixture) seedLegacyDuplicate(repo, pkg, filename string) {
+	f.t.Helper()
+	if err := f.publishPyPIAs(repo, pkg, "1.0.0", filename, "one"); err != nil {
+		f.t.Fatalf("seeding %s: %v", filename, err)
+	}
+	if f.count(`SELECT count(*) FROM files WHERE filename = $1`, filename) != 1 {
+		f.t.Fatalf("seeding %s: first placement missing", filename)
+	}
+	f.exec(`
+		WITH v AS (
+			INSERT INTO versions (package_id, version)
+			SELECT package_id, '2.0.0' FROM versions WHERE version = '1.0.0'
+			RETURNING id
+		)
+		INSERT INTO files (version_id, blob_digest, filename, media_type, metadata)
+		SELECT v.id, f.blob_digest, f.filename, f.media_type, f.metadata
+		FROM v, files f WHERE f.filename = $1`, filename)
+}
+
+// SIN-75: the management API's non-immutable publish must not place one
+// filename under a second version, but a re-publish under the same version
+// stays an upsert.
+func TestPublish_PyPIFilenameUnderAnotherVersionIsRefusedWithoutImmutable(t *testing.T) {
+	f := newEvictFixture(t)
+	f.hostedRepo("hosted", model.ProtocolPyPI)
+	filename := f.publishPyPI("hosted", "our-lib", "1.0.0")
+
+	err := f.publishPyPINonImmutable("hosted", "our-lib", "2.0.0", filename, "other")
+	if !errors.Is(err, registry.ErrFileExists) {
+		t.Fatalf("non-immutable publish under another version = %v, want ErrFileExists", err)
+	}
+	if n := f.count(`SELECT count(*) FROM files WHERE filename = $1`, filename); n != 1 {
+		t.Fatalf("files = %d, want the refused publish to place nothing", n)
+	}
+	if n := f.count(`SELECT count(*) FROM versions WHERE version = '2.0.0'`); n != 0 {
+		t.Fatalf("versions at 2.0.0 = %d, want the refused publish rolled back", n)
+	}
+	if err := f.publishPyPINonImmutable("hosted", "our-lib", "1.0.0", filename, "replaced"); err != nil {
+		t.Fatalf("non-immutable re-publish under the same version: %v", err)
+	}
+}
+
+// SIN-75: deleting a filename removes every placement of it in the package, so
+// data that predates the guard cannot keep serving a retired name.
+func TestDeleteFile_PyPIRemovesFilenameFromEveryVersion(t *testing.T) {
+	cases := []struct {
+		name     string
+		deleteAt string
+	}{
+		{name: "addressed to the first version", deleteAt: "1.0.0"},
+		{name: "addressed to the second version", deleteAt: "2.0.0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEvictFixture(t)
+			f.hostedRepo("hosted", model.ProtocolPyPI)
+			const filename = "our-lib-1.0.0.tar.gz"
+			f.seedLegacyDuplicate("hosted", "our-lib", filename)
+
+			if err := f.reg.DeleteFile(t.Context(), "hosted", "our-lib", tc.deleteAt, filename, "carol"); err != nil {
+				t.Fatalf("DeleteFile: %v", err)
+			}
+			if n := f.count(`SELECT count(*) FROM files WHERE filename = $1`, filename); n != 0 {
+				t.Fatalf("files = %d, want the filename gone from every version", n)
+			}
+			if n := f.count(`SELECT count(*) FROM retired_files WHERE filename = $1`, filename); n != 2 {
+				t.Fatalf("retired_files = %d, want one row per version", n)
+			}
+			if n := f.count(`SELECT count(*) FROM versions`); n != 0 {
+				t.Fatalf("versions = %d, want the emptied versions removed", n)
+			}
+			err := f.publishPyPINonImmutable("hosted", "our-lib", "3.0.0", filename, "new")
+			if !errors.Is(err, registry.ErrFileExists) {
+				t.Fatalf("republish of the deleted filename = %v, want ErrFileExists", err)
+			}
+		})
+	}
+}

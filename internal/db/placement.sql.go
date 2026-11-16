@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -137,6 +138,24 @@ func (q *Queries) CreateRepository(ctx context.Context, arg CreateRepositoryPara
 	return i, err
 }
 
+const deleteBlockedDigest = `-- name: DeleteBlockedDigest :execrows
+DELETE FROM repository_blocked_digests
+WHERE repo_id = $1 AND digest = $2
+`
+
+type DeleteBlockedDigestParams struct {
+	RepoID uuid.UUID `json:"repo_id"`
+	Digest string    `json:"digest"`
+}
+
+func (q *Queries) DeleteBlockedDigest(ctx context.Context, arg DeleteBlockedDigestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteBlockedDigest, arg.RepoID, arg.Digest)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteFile = `-- name: DeleteFile :execrows
 DELETE FROM files f
 USING versions v, packages p, repositories r
@@ -179,6 +198,52 @@ func (q *Queries) DeleteManifestChildren(ctx context.Context, parentDigest strin
 	return err
 }
 
+const deletePackageFilesByFilename = `-- name: DeletePackageFilesByFilename :many
+WITH gone AS (
+    DELETE FROM files f
+    WHERE f.filename = $1
+      AND f.version_id IN (SELECT pv.id FROM versions pv WHERE pv.package_id = $2)
+    RETURNING f.version_id
+)
+SELECT v.id AS version_id, v.version
+FROM versions v
+JOIN gone ON gone.version_id = v.id
+`
+
+type DeletePackageFilesByFilenameParams struct {
+	Filename  string    `json:"filename"`
+	PackageID uuid.UUID `json:"package_id"`
+}
+
+type DeletePackageFilesByFilenameRow struct {
+	VersionID uuid.UUID `json:"version_id"`
+	Version   string    `json:"version"`
+}
+
+// Unlinks one filename under every version of a package and says which
+// versions held it. Hosted PyPI delete uses it (SIN-75): the version-less
+// download path resolves by filename alone, so a delete cannot leave a copy
+// under another version.
+func (q *Queries) DeletePackageFilesByFilename(ctx context.Context, arg DeletePackageFilesByFilenameParams) ([]DeletePackageFilesByFilenameRow, error) {
+	rows, err := q.db.Query(ctx, deletePackageFilesByFilename, arg.Filename, arg.PackageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeletePackageFilesByFilenameRow{}
+	for rows.Next() {
+		var i DeletePackageFilesByFilenameRow
+		if err := rows.Scan(&i.VersionID, &i.Version); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deletePackageIfEmpty = `-- name: DeletePackageIfEmpty :execrows
 DELETE FROM packages p
 WHERE p.id = $1
@@ -187,6 +252,47 @@ WHERE p.id = $1
 
 func (q *Queries) DeletePackageIfEmpty(ctx context.Context, id uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deletePackageIfEmpty, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteRemoteCacheByBlobDigest = `-- name: DeleteRemoteCacheByBlobDigest :execrows
+DELETE FROM remote_cache
+WHERE repo_id = $1 AND blob_digest = $2
+`
+
+type DeleteRemoteCacheByBlobDigestParams struct {
+	RepoID     uuid.UUID   `json:"repo_id"`
+	BlobDigest pgtype.Text `json:"blob_digest"`
+}
+
+func (q *Queries) DeleteRemoteCacheByBlobDigest(ctx context.Context, arg DeleteRemoteCacheByBlobDigestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRemoteCacheByBlobDigest, arg.RepoID, arg.BlobDigest)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteRemoteCacheByManifestDigestKey = `-- name: DeleteRemoteCacheByManifestDigestKey :execrows
+DELETE FROM remote_cache
+WHERE repo_id = $1
+  AND starts_with(cache_key, $2::text)
+  AND right(cache_key, length($3::text) + 1) = ':' || $3::text
+`
+
+type DeleteRemoteCacheByManifestDigestKeyParams struct {
+	RepoID uuid.UUID `json:"repo_id"`
+	Prefix string    `json:"prefix"`
+	Digest string    `json:"digest"`
+}
+
+// Removes a proxy's cache entries for one manifest reached by digest, whatever
+// the image: keys are "<prefix><image>:<digest>".
+func (q *Queries) DeleteRemoteCacheByManifestDigestKey(ctx context.Context, arg DeleteRemoteCacheByManifestDigestKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRemoteCacheByManifestDigestKey, arg.RepoID, arg.Prefix, arg.Digest)
 	if err != nil {
 		return 0, err
 	}
@@ -550,6 +656,54 @@ func (q *Queries) InsertBlobPlaceholder(ctx context.Context, arg InsertBlobPlace
 	return err
 }
 
+const insertBlockedDigest = `-- name: InsertBlockedDigest :one
+WITH ins AS (
+    INSERT INTO repository_blocked_digests (repo_id, digest, blocked_by, reason)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (repo_id, digest) DO NOTHING
+    RETURNING repo_id, digest, blocked_by, reason, blocked_at
+)
+SELECT repo_id, digest, blocked_by, reason, blocked_at FROM ins
+UNION ALL
+SELECT repo_id, digest, blocked_by, reason, blocked_at FROM repository_blocked_digests
+WHERE repo_id = $1 AND digest = $2
+LIMIT 1
+`
+
+type InsertBlockedDigestParams struct {
+	RepoID    uuid.UUID `json:"repo_id"`
+	Digest    string    `json:"digest"`
+	BlockedBy string    `json:"blocked_by"`
+	Reason    string    `json:"reason"`
+}
+
+type InsertBlockedDigestRow struct {
+	RepoID    uuid.UUID `json:"repo_id"`
+	Digest    string    `json:"digest"`
+	BlockedBy string    `json:"blocked_by"`
+	Reason    string    `json:"reason"`
+	BlockedAt time.Time `json:"blocked_at"`
+}
+
+// Idempotent: a second block of the same digest keeps the first audit row.
+func (q *Queries) InsertBlockedDigest(ctx context.Context, arg InsertBlockedDigestParams) (InsertBlockedDigestRow, error) {
+	row := q.db.QueryRow(ctx, insertBlockedDigest,
+		arg.RepoID,
+		arg.Digest,
+		arg.BlockedBy,
+		arg.Reason,
+	)
+	var i InsertBlockedDigestRow
+	err := row.Scan(
+		&i.RepoID,
+		&i.Digest,
+		&i.BlockedBy,
+		&i.Reason,
+		&i.BlockedAt,
+	)
+	return i, err
+}
+
 const insertFileImmutable = `-- name: InsertFileImmutable :one
 INSERT INTO files (version_id, blob_digest, filename, media_type, metadata)
 VALUES ($1, $2, $3, $4, $5)
@@ -664,6 +818,50 @@ func (q *Queries) IsBlobLinkedToRepository(ctx context.Context, arg IsBlobLinked
 	return linked, err
 }
 
+const isChildReferencedInRepo = `-- name: IsChildReferencedInRepo :one
+SELECT EXISTS (
+    SELECT 1 FROM manifest_children mc
+    JOIN repository_blobs rb ON rb.digest = mc.parent_digest AND rb.repo_id = $1
+    WHERE mc.child_digest = $2
+      AND NOT (mc.parent_digest = ANY($3::text[]))
+) AS referenced
+`
+
+type IsChildReferencedInRepoParams struct {
+	RepoID   uuid.UUID `json:"repo_id"`
+	Child    string    `json:"child"`
+	Evicting []string  `json:"evicting"`
+}
+
+// True when a manifest still placed in the repository, other than the ones
+// being evicted, lists child among its children.
+func (q *Queries) IsChildReferencedInRepo(ctx context.Context, arg IsChildReferencedInRepoParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isChildReferencedInRepo, arg.RepoID, arg.Child, arg.Evicting)
+	var referenced bool
+	err := row.Scan(&referenced)
+	return referenced, err
+}
+
+const isDigestBlocked = `-- name: IsDigestBlocked :one
+SELECT EXISTS (
+    SELECT 1 FROM repository_blocked_digests b
+    JOIN repositories r ON r.id = b.repo_id
+    WHERE r.name = $1 AND b.digest = $2
+) AS blocked
+`
+
+type IsDigestBlockedParams struct {
+	RepoName string `json:"repo_name"`
+	Digest   string `json:"digest"`
+}
+
+func (q *Queries) IsDigestBlocked(ctx context.Context, arg IsDigestBlockedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isDigestBlocked, arg.RepoName, arg.Digest)
+	var blocked bool
+	err := row.Scan(&blocked)
+	return blocked, err
+}
+
 const isFilenameRetired = `-- name: IsFilenameRetired :one
 SELECT EXISTS (
     SELECT 1 FROM retired_files
@@ -720,6 +918,38 @@ func (q *Queries) LinkRepositoryBlob(ctx context.Context, arg LinkRepositoryBlob
 	return err
 }
 
+const listBlockedDigests = `-- name: ListBlockedDigests :many
+SELECT repo_id, digest, blocked_by, reason, blocked_at FROM repository_blocked_digests
+WHERE repo_id = $1
+ORDER BY blocked_at, digest
+`
+
+func (q *Queries) ListBlockedDigests(ctx context.Context, repoID uuid.UUID) ([]RepositoryBlockedDigest, error) {
+	rows, err := q.db.Query(ctx, listBlockedDigests, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RepositoryBlockedDigest{}
+	for rows.Next() {
+		var i RepositoryBlockedDigest
+		if err := rows.Scan(
+			&i.RepoID,
+			&i.Digest,
+			&i.BlockedBy,
+			&i.Reason,
+			&i.BlockedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFilesByPackage = `-- name: ListFilesByPackage :many
 SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata,
        v.version, b.size AS blob_size
@@ -772,6 +1002,31 @@ func (q *Queries) ListFilesByPackage(ctx context.Context, arg ListFilesByPackage
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listManifestChildren = `-- name: ListManifestChildren :many
+SELECT child_digest FROM manifest_children
+WHERE parent_digest = $1
+`
+
+func (q *Queries) ListManifestChildren(ctx context.Context, parentDigest string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listManifestChildren, parentDigest)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var child_digest string
+		if err := rows.Scan(&child_digest); err != nil {
+			return nil, err
+		}
+		items = append(items, child_digest)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

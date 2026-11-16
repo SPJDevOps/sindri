@@ -244,6 +244,32 @@ func (q *Queries) FailJob(ctx context.Context, arg FailJobParams) (int64, error)
 	return result.RowsAffected(), nil
 }
 
+const failJobPermanently = `-- name: FailJobPermanently :execrows
+UPDATE jobs
+SET state = 'failed',
+    last_error = $1,
+    finished_at = now(),
+    lease_owner = NULL,
+    lease_expires_at = NULL
+WHERE id = $2 AND state = 'running' AND lease_owner = $3
+`
+
+type FailJobPermanentlyParams struct {
+	LastError pgtype.Text `json:"last_error"`
+	ID        int64       `json:"id"`
+	Owner     pgtype.Text `json:"owner"`
+}
+
+// Ends a job at once, whatever attempts remain, for an error a retry cannot
+// cure. The attempt was already counted when the job was claimed.
+func (q *Queries) FailJobPermanently(ctx context.Context, arg FailJobPermanentlyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failJobPermanently, arg.LastError, arg.ID, arg.Owner)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getActiveJobByDedupeKey = `-- name: GetActiveJobByDedupeKey :one
 SELECT id, kind, args, state, dedupe_key, attempts, max_attempts, run_after, lease_owner, lease_expires_at, created_by, created_at, started_at, finished_at, last_error, result FROM jobs
 WHERE dedupe_key = $1 AND state IN ('queued', 'running')

@@ -2,6 +2,7 @@ package reconcile_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -348,5 +349,92 @@ spec:
 	err = reconcile.ValidateSet(m, reconcile.ValidateOptions{Credentials: map[string]model.CredentialKind{"bearer": model.CredentialToken}})
 	if err == nil || !strings.Contains(err.Error(), "username/password") {
 		t.Fatalf("want a username/password refusal, got %v", err)
+	}
+}
+
+// SIN-116: a secret written into upstream.url would be stored, shown in the
+// UI and printed by diff. Both spellings refuse it, and the error never echoes
+// the URL.
+func TestValidateSet_UpstreamURLWithCredentialsIsRefused(t *testing.T) {
+	const secretURL = "https://alice:s3cret@pypi.mirror.invalid/simple"
+	long := `
+kind: Repository
+metadata: { name: mirror }
+spec:
+  type: proxy
+  protocol: pypi
+  upstream: { url: ` + secretURL + ` }
+`
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "testdata", "config", "sindri.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const clean = "https://pypi.mirror.invalid/simple"
+	if !strings.Contains(string(fixture), clean) {
+		t.Fatalf("fixture no longer contains %s", clean)
+	}
+	short := strings.Replace(string(fixture), clean, secretURL, 1)
+
+	tests := []struct {
+		name string
+		load func(t *testing.T) (*config.Manifests, map[string]model.CredentialKind)
+	}{
+		{"LongForm", func(t *testing.T) (*config.Manifests, map[string]model.CredentialKind) {
+			m, err := config.ParseManifests([]byte(long), "m.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return m, nil
+		}},
+		{"ShortForm", func(t *testing.T) (*config.Manifests, map[string]model.CredentialKind) {
+			path := filepath.Join(t.TempDir(), "sindri.yaml")
+			if err := os.WriteFile(path, []byte(short), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return cfg.Desired, cfg.Credentials.Names()
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, creds := tc.load(t)
+			err := reconcile.ValidateSet(m, reconcile.ValidateOptions{Credentials: creds})
+			if !errors.Is(err, reconcile.ErrInvalid) {
+				t.Fatalf("want ErrInvalid, got %v", err)
+			}
+			msg := err.Error()
+			for _, leak := range []string{"s3cret", "alice", "@pypi"} {
+				if strings.Contains(msg, leak) {
+					t.Errorf("error echoes %q: %s", leak, msg)
+				}
+			}
+			if !strings.Contains(msg, "upstream.url") || !strings.Contains(msg, "credentials") {
+				t.Errorf("error does not name the field and point at credentials: %s", msg)
+			}
+		})
+	}
+}
+
+func TestValidateSet_NonHTTPUpstreamDoesNotEchoTheURL(t *testing.T) {
+	m, perr := config.ParseManifests([]byte(`
+kind: Repository
+metadata: { name: mirror }
+spec:
+  type: proxy
+  protocol: pypi
+  upstream: { url: "ftp://bob:hunter2@host/simple" }
+`), "m.yaml")
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	err := reconcile.ValidateSet(m, reconcile.ValidateOptions{})
+	if !errors.Is(err, reconcile.ErrInvalid) {
+		t.Fatalf("want ErrInvalid, got %v", err)
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("error echoes the URL: %v", err)
 	}
 }

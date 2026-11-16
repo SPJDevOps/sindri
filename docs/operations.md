@@ -70,6 +70,28 @@ The worker runs inside `serve` and does two different jobs, configured under
 Blobs seen within `worker.gc.grace` (24 hours by default) are always kept, which protects
 uploads in progress.
 
+## Stopping one bad digest
+
+An OCI proxy keeps serving a cached digest after upstream drops it. To stop one digest in
+one proxy repository without deleting the repository, an administrator evicts and blocks it:
+
+```bash
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"reason":"CVE-2026-0001"}' \
+  "localhost:8080/api/v1/repositories/hub/blocked/sha256:..."
+```
+
+The digest is unplaced there, its tags and cache entries are removed, and layers no other
+image in the repository uses are unplaced with it. The repository then answers 404
+(`MANIFEST_UNKNOWN` or `BLOB_UNKNOWN`) for it, by digest or by a tag that resolves to it,
+and never fetches it from upstream again. The same digest in another repository is
+unaffected. The bytes go at the next collection. `GET .../blocked` lists the blocks with
+who set them and why, and `DELETE .../blocked/{digest}` lifts one. In a virtual
+repository, a member that blocks a digest counts as a miss, so the walk continues and
+another proxy member can still serve the same digest. To stop the image for clients
+pulling through a virtual repository, block the digest in every proxy member that can
+fetch it.
+
 ## Metrics and alerts
 
 `GET /metrics` serves Prometheus metrics with no authentication, so keep it off the public
