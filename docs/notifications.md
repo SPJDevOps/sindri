@@ -10,7 +10,7 @@ Two events are sent:
 
 | Event | Sent when |
 |---|---|
-| `finding.new` | A scan finds a vulnerability that the previous scan of the same artifact did not have, and the artifact is approved at some stage. |
+| `finding.new` | A scan finds a vulnerability that the previous scan of the same artifact did not have, and the artifact is approved at some stage. One event is sent for each repository that holds an approval of it. |
 | `lifecycle.promoted` | An artifact is promoted (approved) to a stage. |
 
 `finding.new` is the one that matters most. A re-scan can find a new CVE in something that
@@ -41,8 +41,11 @@ notifications:
 - **`url`** must be https, or http on a loopback address. It may not contain a user name or
   password. Sindri never prints more of it than the scheme and host, because webhook URLs
   often carry a token in the path.
-- **`repositories`** filters by the repository the event happened in: the repository a
-  promotion was made in, or the repository the scan read the artifact from.
+- **`repositories`** filters by the repository the event concerns: the repository a
+  promotion was made in, or, for a finding, each repository where the artifact is
+  approved. A digest that is in `app-staging` but approved only in `prod` sends its
+  finding for `prod` alone, so a webhook with `repositories: [prod]` hears about it
+  whichever repository the scan read the bytes from.
 
 The full list of keys is in the [configuration reference](configuration.md#notifications).
 `kill -HUP` reloads the webhook list with the rest of the file. A webhook you remove stops
@@ -81,7 +84,10 @@ A `finding.new` body:
 ```
 
 `severityCounts` counts every finding in the new scan, not only the new ones. A
-multi-platform image sends one delivery per platform that has something new.
+multi-platform image sends one delivery per platform that has something new, and an
+artifact approved in several repositories sends each of those deliveries once per
+repository; `subject.repository` names it and `approvedStages` lists the stages approved
+in that repository.
 
 A `lifecycle.promoted` body:
 
@@ -144,12 +150,14 @@ restart loses nothing.
 - **A 2xx response** means delivered.
 - **408, 429, a 5xx, a timeout, or a network error** is retried with exponential backoff,
   up to `maxAttempts` attempts in all. After the last one the delivery is recorded as
-  failed.
+  failed, including when a worker died on the last attempt.
 - **Any other response**, including a redirect, fails the delivery at once. Sindri does
   not follow redirects; point the webhook at the final URL.
 
 The same event is never delivered twice to one webhook, even if the job that caused it is
-retried. Receivers should still treat `X-Sindri-Delivery` as an idempotency key, because a
+retried. The same finding, meaning the same new IDs on the same platform of the same
+artifact in the same repository, is sent once per webhook, even if it disappears from a
+scan and later reappears. Receivers should still treat `X-Sindri-Delivery` as an idempotency key, because a
 receiver that answers too slowly may be sent the same delivery again.
 
 ## See what was sent

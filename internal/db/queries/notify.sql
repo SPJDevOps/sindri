@@ -76,18 +76,13 @@ SELECT webhook,
 FROM webhook_deliveries
 GROUP BY webhook;
 
--- name: SubjectHasLiveApproval :one
--- Is this digest approved, at any stage in any repository? A finding on a
--- subject nobody approved is not sent (ADR 34).
-SELECT EXISTS (
-    SELECT 1 FROM lifecycle_current
-    WHERE subject_digest = $1 AND action = 'approve'
-) AS approved;
-
--- name: ListApprovedStages :many
--- The names of the stages this digest is currently approved for.
-SELECT DISTINCT s.name, s.position
+-- name: ListApprovedRepositoryStages :many
+-- Every (repository, stage) at which this digest is currently approved. A
+-- finding on a subject nobody approved is not sent, and one that is approved
+-- is sent once per repository holding an approval (ADR 34).
+SELECT r.name AS repository, s.name AS stage
 FROM lifecycle_current c
 JOIN lifecycle_stages s ON s.id = c.stage_id
+JOIN repositories r ON r.id = c.repo_id
 WHERE c.subject_digest = $1 AND c.action = 'approve'
-ORDER BY s.position;
+ORDER BY r.name, s.position;

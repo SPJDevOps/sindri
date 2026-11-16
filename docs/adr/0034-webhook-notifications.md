@@ -20,8 +20,9 @@ start from it. Both need to leave Sindri without a person polling.
    - `finding.new`: a Sindri scan attaches a non-empty `new_vulnerabilities` list (ADR 31)
      for a subject that has a current `approve` row in `lifecycle_current` at any stage.
      A finding on a subject nobody approved is not sent; it is not running anywhere.
-     One event per attached scan evidence row, so a multi-platform image can send one
-     per platform.
+     One event per attached scan evidence row and per repository holding an approval of
+     the digest, so a multi-platform image can send one per platform, and a digest
+     approved in two repositories sends one for each.
    - `lifecycle.promoted`: a promotion (`approve`) commits.
 
    Revoke, publish, and first-scan events are not sent. They can be added when adopters
@@ -39,7 +40,8 @@ start from it. Both need to leave Sindri without a person polling.
    }
    ```
 
-   For `finding.new`, `subject.stage` is absent and `data` holds `newVulnerabilities`,
+   For `finding.new`, `subject.repository` is a repository holding an approval,
+   `subject.stage` is absent, and `data` holds `newVulnerabilities`,
    `severityCounts`, `platform`, `approvedStages`, and `evidenceId`. For
    `lifecycle.promoted`, `data` holds `actor`, `reason`, `eventId` (the ledger row), and
    `evidenceIds`. A payload never carries a credential, a token, or artifact bytes.
@@ -53,8 +55,8 @@ start from it. Both need to leave Sindri without a person polling.
    evidence row that carries `new_vulnerabilities`. Either both commit or neither does, so
    a failed emit fails the attach and the job retries with nothing lost and nothing
    doubled. Nothing is sent on the request path (ADR 20). A delivery's dedupe key is unique per webhook:
-   `promoted:<ledger id>`, and for a finding `finding:<digest>:<platform>:<hash of the
-   sorted new ids>`. A re-attached scan gets a new evidence id, so the key names the
+   `promoted:<ledger id>`, and for a finding `finding:<digest>:<repository>:<platform>:<hash
+   of the sorted new ids>`. A re-attached scan gets a new evidence id, so the key names the
    finding, not the row, and the same finding emitted twice sends once.
 5. **Outcomes.** A 2xx response is delivered. 408, 429, 5xx, and network errors are
    retried with the queue's exponential backoff, up to `notifications.maxAttempts`
@@ -86,6 +88,11 @@ start from it. Both need to leave Sindri without a person polling.
   examples.
 - Deliveries are retained as rows; pruning them is a later question, like evidence
   retention.
+- A promotion committing at the same moment as a scan may not see that scan's
+  `finding.new`: each reads the other's rows only once committed. Its own
+  `lifecycle.promoted` still goes out.
+- A delivery whose job ended without an outcome, such as a worker that died on the last
+  attempt, is failed by a periodic sweep, so no row stays pending forever.
 - A webhook removed from the configuration leaves its queued deliveries to fail, which
   the log shows, rather than vanishing.
 

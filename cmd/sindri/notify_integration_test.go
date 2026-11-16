@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,11 +74,26 @@ func (rc *receiver) all() []received {
 // stage, and one webhook pointing at rc.
 func notifyStack(t *testing.T, dbURL, stub string, rc *receiver, maxAttempts int, blobs *memstore.Store) *stack {
 	t.Helper()
+	return notifyStackRepos(t, dbURL, stub, rc, maxAttempts, blobs, []string{"docker"}, "")
+}
+
+// notifyStackRepos is notifyStack with several hosted OCI repositories and an
+// optional repositories filter on the webhook (a YAML flow list, or empty for
+// none).
+func notifyStackRepos(t *testing.T, dbURL, stub string, rc *receiver, maxAttempts int, blobs *memstore.Store, repos []string, filter string) *stack {
+	t.Helper()
+	var repoYAML strings.Builder
+	for _, r := range repos {
+		fmt.Fprintf(&repoYAML, "  %s: { protocol: oci }\n", r)
+	}
+	if filter != "" {
+		filter = "      repositories: " + filter + "\n"
+	}
 	body := fmt.Sprintf("scanning:\n  enabled: true\n  trivy: %q\n  cacheDir: %q\n  rescanInterval: 0s\n"+
 		"notifications:\n  maxAttempts: %d\n  webhooks:\n    - name: security\n      url: %s%s\n      secret: %s\n"+
-		"      events: [finding.new, lifecycle.promoted]\n      timeout: 5s\n"+
-		"repos:\n  docker: { protocol: oci }\nlifecycle:\n  stages: [dev]\n",
-		stub, t.TempDir(), maxAttempts, rc.srv.URL, hookPath, hookSecret)
+		"      events: [finding.new, lifecycle.promoted]\n      timeout: 5s\n%s"+
+		"repos:\n%slifecycle:\n  stages: [dev]\n",
+		stub, t.TempDir(), maxAttempts, rc.srv.URL, hookPath, hookSecret, filter, repoYAML.String())
 	return startServeOn(t, "127.0.0.1:0", dbURL, "", body, func(h *serveHooks) {
 		scanHooks(h)
 		h.build.Blobs = blobs
@@ -328,5 +344,95 @@ func TestNotifications_RedeliverCreatesNewDelivery(t *testing.T) {
 	}
 	if r := s.request(http.MethodPost, "/api/v1/notifications/deliveries/999999/redeliver", nil, bearer(bootstrapToken)); r.status != http.StatusNotFound {
 		t.Errorf("redeliver unknown id: %d, want 404", r.status)
+	}
+}
+
+// promoteIn promotes subject to stage in the named repository.
+func (s *stack) promoteIn(subject, repository, stage string) {
+	s.t.Helper()
+	r := s.request(http.MethodPost, "/api/v1/subjects/"+subject+"/promote",
+		strings.NewReader(fmt.Sprintf(`{"repository":%q,"stage":%q,"reason":"repo test"}`, repository, stage)), bearer(bootstrapToken))
+	if r.status != http.StatusCreated {
+		s.t.Fatalf("promote in %s: %d %s", repository, r.status, r.body)
+	}
+}
+
+// findingsSeen returns the finding.new envelopes the receiver holds.
+func findingsSeen(rc *receiver) []received {
+	var out []received
+	for _, in := range rc.all() {
+		if in.envelope.Event == "finding.new" {
+			out = append(out, in)
+		}
+	}
+	return out
+}
+
+func TestNotifications_FindingGoesToTheRepositoryThatApprovedTheDigest(t *testing.T) {
+	// The digest sits in app-staging and prod but is approved only in prod. A
+	// re-scan reads from app-staging, the lowest-named owner; the webhook
+	// that watches prod must still hear about the finding, once, for prod.
+	db := testsupport.DatabaseURL(t)
+	stub, newerDatabase := rescanStub(t)
+	rc := newReceiver(t, http.StatusOK)
+	s := notifyStackRepos(t, db, stub, rc, 3, memstore.New(), []string{"app-staging", "prod"}, "[prod]")
+
+	digest := s.push("app-staging/demo/app", "1.0", "notify-two-repos")
+	if again := s.push("prod/demo/app", "1.0", "notify-two-repos"); again != digest {
+		t.Fatalf("the same content has two digests: %s, %s", digest, again)
+	}
+	eventually(t, "the first scan", func() bool { return len(s.scans(digest)) >= 1 })
+	awaitScansFinished(t, db, 1)
+	s.promoteIn(digest, "prod", "dev")
+	eventually(t, "the promotion webhook", func() bool { return len(rc.all()) == 1 })
+
+	newerDatabase()
+	if r := s.request(http.MethodPost, "/api/v1/subjects/"+digest+"/scan", nil, bearer(bootstrapToken)); r.status != http.StatusAccepted {
+		t.Fatalf("POST scan: %d %s", r.status, r.body)
+	}
+	eventually(t, "the finding webhook", func() bool { return len(findingsSeen(rc)) >= 1 })
+	time.Sleep(300 * time.Millisecond)
+
+	got := findingsSeen(rc)
+	if len(got) != 1 {
+		t.Fatalf("receiver saw %d finding.new deliveries, want 1", len(got))
+	}
+	var data notify.FindingData
+	if err := json.Unmarshal(got[0].envelope.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if got[0].envelope.Subject.Repository != "prod" || len(data.ApprovedStages) != 1 || data.ApprovedStages[0] != "dev" {
+		t.Errorf("subject = %+v, stages = %v, want prod and [dev]", got[0].envelope.Subject, data.ApprovedStages)
+	}
+}
+
+func TestNotifications_FindingIsSentOncePerApprovingRepository(t *testing.T) {
+	db := testsupport.DatabaseURL(t)
+	stub, newerDatabase := rescanStub(t)
+	rc := newReceiver(t, http.StatusOK)
+	s := notifyStackRepos(t, db, stub, rc, 3, memstore.New(), []string{"app-staging", "prod"}, "")
+
+	digest := s.push("app-staging/demo/app", "1.0", "notify-both-repos")
+	s.push("prod/demo/app", "1.0", "notify-both-repos")
+	eventually(t, "the first scan", func() bool { return len(s.scans(digest)) >= 1 })
+	awaitScansFinished(t, db, 1)
+	s.promoteIn(digest, "prod", "dev")
+	s.promoteIn(digest, "app-staging", "dev")
+	eventually(t, "both promotion webhooks", func() bool { return len(rc.all()) == 2 })
+
+	newerDatabase()
+	if r := s.request(http.MethodPost, "/api/v1/subjects/"+digest+"/scan", nil, bearer(bootstrapToken)); r.status != http.StatusAccepted {
+		t.Fatalf("POST scan: %d %s", r.status, r.body)
+	}
+	eventually(t, "both finding webhooks", func() bool { return len(findingsSeen(rc)) >= 2 })
+	time.Sleep(300 * time.Millisecond)
+
+	var repos []string
+	for _, in := range findingsSeen(rc) {
+		repos = append(repos, in.envelope.Subject.Repository)
+	}
+	sort.Strings(repos)
+	if fmt.Sprint(repos) != "[app-staging prod]" {
+		t.Errorf("finding.new repositories = %v, want one each for app-staging and prod", repos)
 	}
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/spj/sindri/internal/testsupport"
 )
 
-func TestSubjectHasLiveApproval_FollowsTheLatestEventPerStage(t *testing.T) {
+func TestListApprovedRepositoryStages_FollowsTheLatestEventPerRepositoryAndStage(t *testing.T) {
 	database := testsupport.MigratedDB(t)
 	exec := func(sql string, args ...any) {
 		t.Helper()
@@ -23,50 +23,44 @@ func TestSubjectHasLiveApproval_FollowsTheLatestEventPerStage(t *testing.T) {
 	digest := fmt.Sprintf("sha256:%064x", 1)
 	exec(`INSERT INTO blobs (digest, size, storage_backend) VALUES ($1, 1, 'memory')`, digest)
 	exec(`INSERT INTO subjects (digest, size, kind) VALUES ($1, 1, 'oci-manifest')`, digest)
-	exec(`INSERT INTO repositories (name, type, protocol, managed_by) VALUES ('docker', 'hosted', 'oci', 'api')`)
+	exec(`INSERT INTO repositories (name, type, protocol, managed_by) VALUES ('docker', 'hosted', 'oci', 'api'), ('staging', 'hosted', 'oci', 'api')`)
 	exec(`INSERT INTO lifecycle_stages (name, position) VALUES ('dev', 0), ('prod', 1)`)
-	event := func(stage, action string) {
+	event := func(repo, stage, action string) {
 		exec(`INSERT INTO lifecycle_events (subject_digest, repo_id, stage_id, action, actor)
-		      SELECT $1, r.id, s.id, $3, 'tester' FROM repositories r, lifecycle_stages s WHERE r.name = 'docker' AND s.name = $2`,
-			digest, stage, action)
+		      SELECT $1, r.id, s.id, $4, 'tester' FROM repositories r, lifecycle_stages s WHERE r.name = $2 AND s.name = $3`,
+			digest, repo, stage, action)
 	}
 	q := database.Queries()
-	approved := func() bool {
+	approvals := func() string {
 		t.Helper()
-		got, err := q.SubjectHasLiveApproval(t.Context(), digest)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return got
-	}
-	stages := func() []string {
-		t.Helper()
-		rows, err := q.ListApprovedStages(t.Context(), digest)
+		rows, err := q.ListApprovedRepositoryStages(t.Context(), digest)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var out []string
 		for _, r := range rows {
-			out = append(out, r.Name)
+			out = append(out, r.Repository+"/"+r.Stage)
 		}
-		return out
+		return fmt.Sprint(out)
 	}
 
-	if approved() || len(stages()) != 0 {
-		t.Fatal("a subject with no events is approved")
+	if got := approvals(); got != "[]" {
+		t.Fatalf("a subject with no events has approvals %s", got)
 	}
-	event("dev", "approve")
-	event("prod", "approve")
-	if !approved() || fmt.Sprint(stages()) != "[dev prod]" {
-		t.Errorf("approved = %t, stages = %v, want true, [dev prod]", approved(), stages())
+	event("docker", "dev", "approve")
+	event("docker", "prod", "approve")
+	event("staging", "dev", "approve")
+	if got := approvals(); got != "[docker/dev docker/prod staging/dev]" {
+		t.Errorf("approvals = %s", got)
 	}
-	event("prod", "revoke")
-	if !approved() || fmt.Sprint(stages()) != "[dev]" {
-		t.Errorf("after revoking prod: approved = %t, stages = %v, want true, [dev]", approved(), stages())
+	event("docker", "prod", "revoke")
+	if got := approvals(); got != "[docker/dev staging/dev]" {
+		t.Errorf("after revoking docker/prod: %s", got)
 	}
-	event("dev", "revoke")
-	if approved() || len(stages()) != 0 {
-		t.Errorf("after revoking every stage: approved = %t, stages = %v", approved(), stages())
+	event("docker", "dev", "revoke")
+	event("staging", "dev", "revoke")
+	if got := approvals(); got != "[]" {
+		t.Errorf("after revoking everything: %s", got)
 	}
 }
 

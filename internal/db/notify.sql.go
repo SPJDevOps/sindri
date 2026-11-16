@@ -137,30 +137,33 @@ func (q *Queries) InsertWebhookDelivery(ctx context.Context, arg InsertWebhookDe
 	return i, err
 }
 
-const listApprovedStages = `-- name: ListApprovedStages :many
-SELECT DISTINCT s.name, s.position
+const listApprovedRepositoryStages = `-- name: ListApprovedRepositoryStages :many
+SELECT r.name AS repository, s.name AS stage
 FROM lifecycle_current c
 JOIN lifecycle_stages s ON s.id = c.stage_id
+JOIN repositories r ON r.id = c.repo_id
 WHERE c.subject_digest = $1 AND c.action = 'approve'
-ORDER BY s.position
+ORDER BY r.name, s.position
 `
 
-type ListApprovedStagesRow struct {
-	Name     string `json:"name"`
-	Position int32  `json:"position"`
+type ListApprovedRepositoryStagesRow struct {
+	Repository string `json:"repository"`
+	Stage      string `json:"stage"`
 }
 
-// The names of the stages this digest is currently approved for.
-func (q *Queries) ListApprovedStages(ctx context.Context, subjectDigest string) ([]ListApprovedStagesRow, error) {
-	rows, err := q.db.Query(ctx, listApprovedStages, subjectDigest)
+// Every (repository, stage) at which this digest is currently approved. A
+// finding on a subject nobody approved is not sent, and one that is approved
+// is sent once per repository holding an approval (ADR 34).
+func (q *Queries) ListApprovedRepositoryStages(ctx context.Context, subjectDigest string) ([]ListApprovedRepositoryStagesRow, error) {
+	rows, err := q.db.Query(ctx, listApprovedRepositoryStages, subjectDigest)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListApprovedStagesRow{}
+	items := []ListApprovedRepositoryStagesRow{}
 	for rows.Next() {
-		var i ListApprovedStagesRow
-		if err := rows.Scan(&i.Name, &i.Position); err != nil {
+		var i ListApprovedRepositoryStagesRow
+		if err := rows.Scan(&i.Repository, &i.Stage); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -324,22 +327,6 @@ type SetWebhookDeliveryPayloadParams struct {
 func (q *Queries) SetWebhookDeliveryPayload(ctx context.Context, arg SetWebhookDeliveryPayloadParams) error {
 	_, err := q.db.Exec(ctx, setWebhookDeliveryPayload, arg.Payload, arg.ID)
 	return err
-}
-
-const subjectHasLiveApproval = `-- name: SubjectHasLiveApproval :one
-SELECT EXISTS (
-    SELECT 1 FROM lifecycle_current
-    WHERE subject_digest = $1 AND action = 'approve'
-) AS approved
-`
-
-// Is this digest approved, at any stage in any repository? A finding on a
-// subject nobody approved is not sent (ADR 34).
-func (q *Queries) SubjectHasLiveApproval(ctx context.Context, subjectDigest string) (bool, error) {
-	row := q.db.QueryRow(ctx, subjectHasLiveApproval, subjectDigest)
-	var approved bool
-	err := row.Scan(&approved)
-	return approved, err
 }
 
 const webhookDeliveryStats = `-- name: WebhookDeliveryStats :many
