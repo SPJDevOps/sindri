@@ -93,7 +93,7 @@ type FindingData struct {
 	SeverityCounts     map[string]int `json:"severityCounts"`
 	Platform           string         `json:"platform"`
 	ApprovedStages     []string       `json:"approvedStages"`
-	EvidenceID         int64          `json:"evidenceId"`
+	EvidenceID         string         `json:"evidenceId"`
 }
 
 // EventKind implements EventData.
@@ -118,10 +118,10 @@ func (d FindingData) MarshalJSON() ([]byte, error) {
 
 // PromotedData is the data of lifecycle.promoted.
 type PromotedData struct {
-	Actor       string  `json:"actor"`
-	Reason      string  `json:"reason"`
-	EventID     int64   `json:"eventId"`
-	EvidenceIDs []int64 `json:"evidenceIds"`
+	Actor       string   `json:"actor"`
+	Reason      string   `json:"reason"`
+	EventID     int64    `json:"eventId"`
+	EvidenceIDs []string `json:"evidenceIds"`
 }
 
 // EventKind implements EventData.
@@ -132,7 +132,7 @@ func (d PromotedData) MarshalJSON() ([]byte, error) {
 	type plain PromotedData
 	p := plain(d)
 	if p.EvidenceIDs == nil {
-		p.EvidenceIDs = []int64{}
+		p.EvidenceIDs = []string{}
 	}
 	return json.Marshal(p)
 }

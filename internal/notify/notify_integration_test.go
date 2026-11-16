@@ -36,7 +36,7 @@ func digestOf(t *testing.T, c string) model.Digest {
 func findingEvent(t *testing.T, key string) notify.Event {
 	return notify.Event{
 		Digest: digestOf(t, "a"), Repository: "docker", DedupeKey: key,
-		Data: notify.FindingData{NewVulnerabilities: []string{"CVE-2026-1"}, SeverityCounts: map[string]int{"HIGH": 1}, EvidenceID: 7},
+		Data: notify.FindingData{NewVulnerabilities: []string{"CVE-2026-1"}, SeverityCounts: map[string]int{"HIGH": 1}, EvidenceID: "7"},
 	}
 }
 
