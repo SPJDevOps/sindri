@@ -51,11 +51,17 @@ func (a *app) handlers(cfg config.Worker) map[string]worker.Handler {
 			if err != nil {
 				return nil, fmt.Errorf("purging staged uploads: %w", err)
 			}
+			// Before the jobs go: a delivery whose job ended without
+			// recording an outcome would otherwise read pending forever.
+			deliveries, err := notify.SweepOrphaned(ctx, a.db.Queries())
+			if err != nil {
+				return nil, err
+			}
 			jobs, err := a.queue.DeleteFinished(ctx, finishedJobRetention)
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(map[string]int64{"uploads": int64(uploads), "jobs": jobs})
+			return json.Marshal(map[string]int64{"uploads": int64(uploads), "jobs": jobs, "deliveries": deliveries})
 		},
 	}
 	// Webhook deliveries run on the general lane: a slow receiver must not

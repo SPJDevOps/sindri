@@ -12,6 +12,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const failOrphanedWebhookDeliveries = `-- name: FailOrphanedWebhookDeliveries :execrows
+UPDATE webhook_deliveries d
+SET state = 'failed', finished_at = now(), last_error = $1::text
+WHERE d.state = 'pending'
+  AND d.created_at < now() - interval '1 minute'
+  AND NOT EXISTS (
+      SELECT 1 FROM jobs j WHERE j.id = d.job_id AND j.state <> 'failed'
+  )
+`
+
+// A pending delivery whose job failed, or no longer exists, will never get an
+// outcome: the worker died on the last attempt, or the job failed without
+// reaching the handler's bookkeeping. The age bound keeps a row whose job is
+// still being enqueued in another transaction out of reach.
+func (q *Queries) FailOrphanedWebhookDeliveries(ctx context.Context, lastError string) (int64, error) {
+	result, err := q.db.Exec(ctx, failOrphanedWebhookDeliveries, lastError)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getWebhookDelivery = `-- name: GetWebhookDelivery :one
 SELECT d.id, d.webhook, d.event, d.subject_digest, d.repository, d.payload, d.dedupe_key, d.job_id, d.state, d.attempts, d.last_status, d.last_error, d.created_at, d.delivered_at, d.finished_at, j.run_after AS job_run_after
 FROM webhook_deliveries d
@@ -242,7 +264,7 @@ func (q *Queries) MarkWebhookDelivered(ctx context.Context, id int64) error {
 const markWebhookFailed = `-- name: MarkWebhookFailed :exec
 UPDATE webhook_deliveries
 SET state = 'failed', finished_at = now(), last_error = $1::text
-WHERE id = $2
+WHERE id = $2 AND state = 'pending'
 `
 
 type MarkWebhookFailedParams struct {

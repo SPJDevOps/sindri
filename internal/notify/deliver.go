@@ -128,6 +128,28 @@ func (d *Deliverer) Handle(ctx context.Context, job queue.Job) (json.RawMessage,
 	if err := json.Unmarshal(job.Args, &args); err != nil || args.Delivery == 0 {
 		return nil, worker.Permanent(errors.New("deliver_webhook job has no delivery id"))
 	}
+	result, err := d.handle(ctx, args.Delivery)
+	if err != nil && job.Attempts >= job.MaxAttempts && ctx.Err() == nil {
+		// Out of attempts: whatever went wrong, the queue will not call again,
+		// so the row must not stay pending. A stopping worker releases the
+		// job without counting the attempt, so that case is left alone.
+		d.failOnLastAttempt(ctx, args.Delivery, err)
+	}
+	return result, err
+}
+
+// failOnLastAttempt marks a delivery failed after its job's final attempt
+// returned err. It is best effort: if it cannot, SweepOrphaned will.
+func (d *Deliverer) failOnLastAttempt(ctx context.Context, id int64, cause error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := d.queries.MarkWebhookFailed(ctx, db.MarkWebhookFailedParams{ID: id, LastError: cause.Error()}); err != nil {
+		d.log.WarnContext(ctx, "could not record the failure of a delivery on its last attempt", "delivery", id, "error", err.Error())
+	}
+}
+
+func (d *Deliverer) handle(ctx context.Context, id int64) (json.RawMessage, error) {
+	args := jobArgs{Delivery: id}
 	row, err := d.queries.GetWebhookDelivery(ctx, args.Delivery)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, worker.Permanent(fmt.Errorf("delivery %d does not exist", args.Delivery))
@@ -191,14 +213,7 @@ func (d *Deliverer) Handle(ctx context.Context, job queue.Job) (json.RawMessage,
 		}
 		return nil, worker.Permanent(failure)
 	default:
-		// FailJob requeues unless attempts have run out, and counts the
-		// attempt when the job is claimed, so this is the last one when
-		// Attempts has reached MaxAttempts.
-		if job.Attempts >= job.MaxAttempts {
-			if err := d.queries.MarkWebhookFailed(ctx, db.MarkWebhookFailedParams{ID: row.ID, LastError: failure.Error()}); err != nil {
-				return nil, fmt.Errorf("recording the failure of delivery %d: %w", row.ID, err)
-			}
-		}
+		// Handle marks the row failed when this was the job's last attempt.
 		return nil, failure
 	}
 }

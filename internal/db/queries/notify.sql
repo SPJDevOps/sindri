@@ -50,7 +50,20 @@ WHERE id = $1;
 -- name: MarkWebhookFailed :exec
 UPDATE webhook_deliveries
 SET state = 'failed', finished_at = now(), last_error = sqlc.arg('last_error')::text
-WHERE id = sqlc.arg('id');
+WHERE id = sqlc.arg('id') AND state = 'pending';
+
+-- name: FailOrphanedWebhookDeliveries :execrows
+-- A pending delivery whose job failed, or no longer exists, will never get an
+-- outcome: the worker died on the last attempt, or the job failed without
+-- reaching the handler's bookkeeping. The age bound keeps a row whose job is
+-- still being enqueued in another transaction out of reach.
+UPDATE webhook_deliveries d
+SET state = 'failed', finished_at = now(), last_error = sqlc.arg('last_error')::text
+WHERE d.state = 'pending'
+  AND d.created_at < now() - interval '1 minute'
+  AND NOT EXISTS (
+      SELECT 1 FROM jobs j WHERE j.id = d.job_id AND j.state <> 'failed'
+  );
 
 -- name: WebhookDeliveryStats :many
 -- failed counts every failed delivery. failing is whether the newest finished

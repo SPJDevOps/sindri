@@ -433,3 +433,19 @@ func inTx(ctx context.Context, pool *pgxpool.Pool, fn func(q *db.Queries) error)
 type jobArgs struct {
 	Delivery int64 `json:"delivery"`
 }
+
+// orphanedError is what a swept delivery records.
+const orphanedError = "the delivery job ended without an outcome"
+
+// SweepOrphaned fails every pending delivery whose job failed or no longer
+// exists, and that is more than a minute old. A worker that dies during the
+// last attempt, or a job that fails before the handler can record it, leaves
+// such a row; without the sweep it would read pending forever. It returns how
+// many rows it failed.
+func SweepOrphaned(ctx context.Context, q *db.Queries) (int64, error) {
+	n, err := q.FailOrphanedWebhookDeliveries(ctx, orphanedError)
+	if err != nil {
+		return 0, fmt.Errorf("failing orphaned webhook deliveries: %w", err)
+	}
+	return n, nil
+}

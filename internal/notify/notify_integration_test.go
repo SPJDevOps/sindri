@@ -342,3 +342,112 @@ func TestRedeliver_CopiesThePayloadIntoANewDelivery(t *testing.T) {
 		t.Errorf("Redeliver(removed webhook) = %v", err)
 	}
 }
+
+// failAttemptWrites makes every update that bumps a delivery's attempt count
+// fail, so RecordWebhookAttempt returns a plain database error while
+// MarkWebhookFailed still works.
+func failAttemptWrites(t *testing.T, database *db.DB) {
+	t.Helper()
+	for _, stmt := range []string{
+		`CREATE FUNCTION refuse_attempts() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'attempt writes refused'; END $$`,
+		`CREATE TRIGGER refuse_attempts BEFORE UPDATE ON webhook_deliveries FOR EACH ROW WHEN (NEW.attempts <> OLD.attempts) EXECUTE FUNCTION refuse_attempts()`,
+	} {
+		if _, err := database.Pool().Exec(t.Context(), stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestHandle_DatabaseErrorOnTheLastAttemptStillFailsTheDelivery(t *testing.T) {
+	tests := []struct {
+		name      string
+		attempt   int
+		wantState string
+	}{
+		{name: "LastAttemptMarksTheRowFailed", attempt: 3, wantState: "failed"},
+		{name: "EarlierAttemptLeavesItPending", attempt: 1, wantState: "pending"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rcv := newReceiver(t, 500)
+			_, d, database, job, id := setup(t, hook(rcv.srv.URL))
+			failAttemptWrites(t, database)
+			job.Attempts = tc.attempt
+
+			if _, err := d.Handle(t.Context(), job); err == nil {
+				t.Fatal("Handle succeeded")
+			}
+			row, err := database.Queries().GetWebhookDelivery(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if row.State != tc.wantState {
+				t.Errorf("state = %q, want %q", row.State, tc.wantState)
+			}
+		})
+	}
+}
+
+func TestSweepOrphaned_FailsPendingDeliveriesWhoseJobEndedOrIsGone(t *testing.T) {
+	tests := []struct {
+		name      string
+		prepare   string // SQL run with $1 = the job id and $2 = the delivery id
+		wantState string
+	}{
+		{name: "FailedJobOrphansTheDelivery", prepare: `UPDATE jobs SET state = 'failed', finished_at = now() WHERE id = $1`, wantState: "failed"},
+		{name: "DeletedJobOrphansTheDelivery", prepare: `DELETE FROM jobs WHERE id = $1`, wantState: "failed"},
+		{name: "QueuedJobKeepsTheDeliveryPending", prepare: `SELECT $1::bigint`, wantState: "pending"},
+		{name: "RunningJobKeepsTheDeliveryPending", prepare: `UPDATE jobs SET state = 'running' WHERE id = $1`, wantState: "pending"},
+		{name: "DeliveryNewerThanAMinuteIsLeftAlone", prepare: `UPDATE jobs SET state = 'failed' WHERE id = $1; UPDATE webhook_deliveries SET created_at = now() WHERE id = $2`, wantState: "pending"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, database, job, id := setup(t, hook("https://a.example"))
+			ctx := t.Context()
+			if _, err := database.Pool().Exec(ctx, `UPDATE webhook_deliveries SET created_at = now() - interval '2 minutes' WHERE id = $1`, id); err != nil {
+				t.Fatal(err)
+			}
+			for _, stmt := range strings.Split(tc.prepare, ";") {
+				args := []any{job.ID}
+				if !strings.Contains(stmt, "$1") {
+					args = []any{id}
+					stmt = strings.ReplaceAll(stmt, "$2", "$1")
+				}
+				if _, err := database.Pool().Exec(ctx, stmt, args...); err != nil {
+					t.Fatalf("%s: %v", stmt, err)
+				}
+			}
+
+			swept, err := notify.SweepOrphaned(ctx, database.Queries())
+			if err != nil {
+				t.Fatalf("SweepOrphaned: %v", err)
+			}
+			row, err := database.Queries().GetWebhookDelivery(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if row.State != tc.wantState || (tc.wantState == "failed") != (swept == 1) {
+				t.Errorf("state = %q after sweeping %d, want %q", row.State, swept, tc.wantState)
+			}
+			if tc.wantState == "failed" && row.LastError.String != "the delivery job ended without an outcome" {
+				t.Errorf("last_error = %q", row.LastError.String)
+			}
+		})
+	}
+}
+
+func TestSweepOrphaned_LeavesFinishedDeliveriesAlone(t *testing.T) {
+	rcv := newReceiver(t, 200)
+	_, d, database, job, id := setup(t, hook(rcv.srv.URL))
+	if _, err := d.Handle(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Pool().Exec(t.Context(), `UPDATE webhook_deliveries SET created_at = now() - interval '2 minutes'; DELETE FROM jobs`); err != nil {
+		t.Fatal(err)
+	}
+	swept, err := notify.SweepOrphaned(t.Context(), database.Queries())
+	row, _ := database.Queries().GetWebhookDelivery(t.Context(), id)
+	if err != nil || swept != 0 || row.State != "delivered" {
+		t.Errorf("swept %d (%v), state %q", swept, err, row.State)
+	}
+}
