@@ -793,7 +793,9 @@ func (f *evictFixture) publishPyPINonImmutable(repo, pkg, version, filename, bod
 // directly, because Publish no longer allows it.
 func (f *evictFixture) seedLegacyDuplicate(repo, pkg, filename string) {
 	f.t.Helper()
-	f.publishPyPIAs(repo, pkg, "1.0.0", filename, "one") //nolint:errcheck // checked below
+	if err := f.publishPyPIAs(repo, pkg, "1.0.0", filename, "one"); err != nil {
+		f.t.Fatalf("seeding %s: %v", filename, err)
+	}
 	if f.count(`SELECT count(*) FROM files WHERE filename = $1`, filename) != 1 {
 		f.t.Fatalf("seeding %s: first placement missing", filename)
 	}
@@ -808,22 +810,62 @@ func (f *evictFixture) seedLegacyDuplicate(repo, pkg, filename string) {
 		FROM v, files f WHERE f.filename = $1`, filename)
 }
 
-// SIN-75, before the guard: the management API's non-immutable publish placed
-// one filename under two versions. Documents the behaviour being removed.
-func TestPublish_LegacyDuplicateFilenameViaAPI_BeforeGuard(t *testing.T) {
+// SIN-75: the management API's non-immutable publish must not place one
+// filename under a second version, but a re-publish under the same version
+// stays an upsert.
+func TestPublish_PyPIFilenameUnderAnotherVersionIsRefusedWithoutImmutable(t *testing.T) {
 	f := newEvictFixture(t)
 	f.hostedRepo("hosted", model.ProtocolPyPI)
 	filename := f.publishPyPI("hosted", "our-lib", "1.0.0")
-	if err := f.publishPyPINonImmutable("hosted", "our-lib", "2.0.0", filename, "other"); err != nil {
-		t.Fatalf("non-immutable publish under a second version: %v", err)
-	}
-	if err := f.reg.DeleteFile(t.Context(), "hosted", "our-lib", "1.0.0", filename, "carol"); err != nil {
-		t.Fatalf("DeleteFile: %v", err)
-	}
-	if n := f.count(`SELECT count(*) FROM retired_files WHERE filename = $1`, filename); n != 1 {
-		t.Fatalf("retired_files = %d, want the filename retired", n)
+
+	err := f.publishPyPINonImmutable("hosted", "our-lib", "2.0.0", filename, "other")
+	if !errors.Is(err, registry.ErrFileExists) {
+		t.Fatalf("non-immutable publish under another version = %v, want ErrFileExists", err)
 	}
 	if n := f.count(`SELECT count(*) FROM files WHERE filename = $1`, filename); n != 1 {
-		t.Fatalf("files = %d, want the retired filename still served under 2.0.0", n)
+		t.Fatalf("files = %d, want the refused publish to place nothing", n)
+	}
+	if n := f.count(`SELECT count(*) FROM versions WHERE version = '2.0.0'`); n != 0 {
+		t.Fatalf("versions at 2.0.0 = %d, want the refused publish rolled back", n)
+	}
+	if err := f.publishPyPINonImmutable("hosted", "our-lib", "1.0.0", filename, "replaced"); err != nil {
+		t.Fatalf("non-immutable re-publish under the same version: %v", err)
+	}
+}
+
+// SIN-75: deleting a filename removes every placement of it in the package, so
+// data that predates the guard cannot keep serving a retired name.
+func TestDeleteFile_PyPIRemovesFilenameFromEveryVersion(t *testing.T) {
+	cases := []struct {
+		name     string
+		deleteAt string
+	}{
+		{name: "addressed to the first version", deleteAt: "1.0.0"},
+		{name: "addressed to the second version", deleteAt: "2.0.0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEvictFixture(t)
+			f.hostedRepo("hosted", model.ProtocolPyPI)
+			const filename = "our-lib-1.0.0.tar.gz"
+			f.seedLegacyDuplicate("hosted", "our-lib", filename)
+
+			if err := f.reg.DeleteFile(t.Context(), "hosted", "our-lib", tc.deleteAt, filename, "carol"); err != nil {
+				t.Fatalf("DeleteFile: %v", err)
+			}
+			if n := f.count(`SELECT count(*) FROM files WHERE filename = $1`, filename); n != 0 {
+				t.Fatalf("files = %d, want the filename gone from every version", n)
+			}
+			if n := f.count(`SELECT count(*) FROM retired_files WHERE filename = $1`, filename); n != 2 {
+				t.Fatalf("retired_files = %d, want one row per version", n)
+			}
+			if n := f.count(`SELECT count(*) FROM versions`); n != 0 {
+				t.Fatalf("versions = %d, want the emptied versions removed", n)
+			}
+			err := f.publishPyPINonImmutable("hosted", "our-lib", "3.0.0", filename, "new")
+			if !errors.Is(err, registry.ErrFileExists) {
+				t.Fatalf("republish of the deleted filename = %v, want ErrFileExists", err)
+			}
+		})
 	}
 }

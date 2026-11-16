@@ -198,6 +198,52 @@ func (q *Queries) DeleteManifestChildren(ctx context.Context, parentDigest strin
 	return err
 }
 
+const deletePackageFilesByFilename = `-- name: DeletePackageFilesByFilename :many
+WITH gone AS (
+    DELETE FROM files f
+    WHERE f.filename = $1
+      AND f.version_id IN (SELECT pv.id FROM versions pv WHERE pv.package_id = $2)
+    RETURNING f.version_id
+)
+SELECT v.id AS version_id, v.version
+FROM versions v
+JOIN gone ON gone.version_id = v.id
+`
+
+type DeletePackageFilesByFilenameParams struct {
+	Filename  string    `json:"filename"`
+	PackageID uuid.UUID `json:"package_id"`
+}
+
+type DeletePackageFilesByFilenameRow struct {
+	VersionID uuid.UUID `json:"version_id"`
+	Version   string    `json:"version"`
+}
+
+// Unlinks one filename under every version of a package and says which
+// versions held it. Hosted PyPI delete uses it (SIN-75): the version-less
+// download path resolves by filename alone, so a delete cannot leave a copy
+// under another version.
+func (q *Queries) DeletePackageFilesByFilename(ctx context.Context, arg DeletePackageFilesByFilenameParams) ([]DeletePackageFilesByFilenameRow, error) {
+	rows, err := q.db.Query(ctx, deletePackageFilesByFilename, arg.Filename, arg.PackageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeletePackageFilesByFilenameRow{}
+	for rows.Next() {
+		var i DeletePackageFilesByFilenameRow
+		if err := rows.Scan(&i.VersionID, &i.Version); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deletePackageIfEmpty = `-- name: DeletePackageIfEmpty :execrows
 DELETE FROM packages p
 WHERE p.id = $1

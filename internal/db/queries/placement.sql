@@ -135,6 +135,21 @@ WHERE v.package_id = sqlc.arg('package_id')
   AND f.filename = sqlc.arg('filename')
   AND f.version_id <> sqlc.arg('version_id');
 
+-- name: DeletePackageFilesByFilename :many
+-- Unlinks one filename under every version of a package and says which
+-- versions held it. Hosted PyPI delete uses it (SIN-75): the version-less
+-- download path resolves by filename alone, so a delete cannot leave a copy
+-- under another version.
+WITH gone AS (
+    DELETE FROM files f
+    WHERE f.filename = sqlc.arg('filename')
+      AND f.version_id IN (SELECT pv.id FROM versions pv WHERE pv.package_id = sqlc.arg('package_id'))
+    RETURNING f.version_id
+)
+SELECT v.id AS version_id, v.version
+FROM versions v
+JOIN gone ON gone.version_id = v.id;
+
 -- name: GetFile :one
 SELECT f.* FROM files f
 JOIN versions v ON v.id = f.version_id

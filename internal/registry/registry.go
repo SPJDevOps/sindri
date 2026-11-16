@@ -352,11 +352,13 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 	}
 
 	var file db.File
-	if p.Immutable {
-		// The files unique constraint is (version_id, filename), so the same
-		// filename under a second version of one package would make the
-		// version-less read path ambiguous. Reject it while still in the
-		// transaction that would create it.
+	// The files unique constraint is (version_id, filename), so the same
+	// filename under a second version of one package would make the
+	// version-less read path ambiguous. Reject it while still in the
+	// transaction that would create it. A hosted PyPI repository checks every
+	// publish, immutable or not, so the management API cannot place a second
+	// copy either (SIN-75). A re-publish under the same version is not "other".
+	if p.Immutable || (repo.Type == string(model.RepoTypeHosted) && model.Protocol(repo.Protocol) == model.ProtocolPyPI) {
 		others, err := q.CountPackageFilesWithFilename(ctx, db.CountPackageFilesWithFilenameParams{
 			PackageID: pkg.ID,
 			Filename:  p.Filename,
@@ -369,7 +371,8 @@ func (r *Registry) Publish(ctx context.Context, p PublishParams) (model.File, er
 			return model.File{}, fmt.Errorf("%w: %s is already published under another version of %s",
 				ErrFileExists, p.Filename, p.Package)
 		}
-
+	}
+	if p.Immutable {
 		file, err = q.InsertFileImmutable(ctx, db.InsertFileImmutableParams(placeParams))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -588,17 +591,43 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 		}
 	}
 
-	n, err := q.DeleteFile(ctx, db.DeleteFileParams{
-		Name:           repo,
-		NormalizedName: normalized,
-		Version:        version,
-		Filename:       filename,
-	})
-	if err != nil {
-		return fmt.Errorf("unlinking file: %w", err)
+	// Hosted PyPI serves a file by filename alone, so a delete removes the
+	// filename under every version of the package and retires each (SIN-75).
+	// Every other repository unlinks exactly the addressed placement.
+	pypiHosted := retires && model.Protocol(repoRow.Protocol) == model.ProtocolPyPI
+	type placement struct {
+		versionID uuid.UUID
+		version   string
 	}
-	if n == 0 {
-		return ErrNotFound
+	var removedFrom []placement
+	if pypiHosted {
+		rows, err := q.DeletePackageFilesByFilename(ctx, db.DeletePackageFilesByFilenameParams{
+			PackageID: pkgRow.ID,
+			Filename:  filename,
+		})
+		if err != nil {
+			return fmt.Errorf("unlinking file: %w", err)
+		}
+		if len(rows) == 0 {
+			return ErrNotFound
+		}
+		for _, row := range rows {
+			removedFrom = append(removedFrom, placement{versionID: row.VersionID, version: row.Version})
+		}
+	} else {
+		n, err := q.DeleteFile(ctx, db.DeleteFileParams{
+			Name:           repo,
+			NormalizedName: normalized,
+			Version:        version,
+			Filename:       filename,
+		})
+		if err != nil {
+			return fmt.Errorf("unlinking file: %w", err)
+		}
+		if n == 0 {
+			return ErrNotFound
+		}
+		removedFrom = []placement{{versionID: versionID, version: version}}
 	}
 
 	// Dist-tags cascade with their version, so record the tags a removal takes
@@ -621,19 +650,27 @@ func (r *Registry) DeleteFile(ctx context.Context, repo, pkg, version, filename,
 	// mirrors upstream, and an OCI-protocol repository keeps its v1.0 behaviour;
 	// both must be able to place the file again.
 	if retires {
-		if err := q.InsertRetiredFile(ctx, db.InsertRetiredFileParams{
-			PackageID: pkgRow.ID,
-			Version:   version,
-			Filename:  filename,
-		}); err != nil {
-			return fmt.Errorf("retiring %s: %w", filename, err)
+		for _, pl := range removedFrom {
+			if err := q.InsertRetiredFile(ctx, db.InsertRetiredFileParams{
+				PackageID: pkgRow.ID,
+				Version:   pl.version,
+				Filename:  filename,
+			}); err != nil {
+				return fmt.Errorf("retiring %s: %w", filename, err)
+			}
 		}
 	}
 
 	// Empty parent cleanup. Blob rows and CAS bytes stay (GC is later).
-	removed, err := q.DeleteVersionIfEmpty(ctx, versionID)
-	if err != nil {
-		return fmt.Errorf("cleaning empty version: %w", err)
+	var removed int64
+	for _, pl := range removedFrom {
+		n, err := q.DeleteVersionIfEmpty(ctx, pl.versionID)
+		if err != nil {
+			return fmt.Errorf("cleaning empty version: %w", err)
+		}
+		if pl.versionID == versionID {
+			removed = n
+		}
 	}
 	if removed > 0 {
 		for _, tag := range strandedTags {
