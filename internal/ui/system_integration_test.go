@@ -165,14 +165,14 @@ func TestArtifactPage_ShowsDeliveriesToAdministratorsOnly(t *testing.T) {
 	e.delivery("chat", notify.EventFindingNew, d, "delivered", 1, 200, "")
 
 	admin := e.get("admin", "/ui/r/team-a/-/artifact?digest="+d.String())
-	if !strings.Contains(admin.body, "Notification sent to") || !strings.Contains(admin.body, "chat") || !strings.Contains(admin.body, "finding.new") {
+	if !strings.Contains(admin.body, "Notification to") || !strings.Contains(admin.body, "chat") || !strings.Contains(admin.body, "finding.new") {
 		t.Errorf("an administrator does not see the delivery:\n%s", admin.body)
 	}
 	alice := e.get("alice", "/ui/r/team-a/-/artifact?digest="+d.String())
 	if alice.status != http.StatusOK {
 		t.Fatalf("alice: %d", alice.status)
 	}
-	for _, leak := range []string{"Notification sent", "chat", "finding.new"} {
+	for _, leak := range []string{"Notification to", "chat", "finding.new"} {
 		if strings.Contains(alice.body, leak) {
 			t.Errorf("a non-administrator sees %q on the artifact page", leak)
 		}
