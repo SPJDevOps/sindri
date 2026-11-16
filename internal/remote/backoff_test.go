@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -57,5 +59,22 @@ func TestNoteRefresh_ASuccessEndsTheBackoffAndTheWindowExpires(t *testing.T) {
 	c.noteRefresh("r", nil)
 	if c.inBackoff("r") {
 		t.Fatal("a success did not clear the backoff")
+	}
+}
+
+// SIN-116: net/http masks a URL's password in a *url.Error but prints its user
+// name, which is where a token is often written. A stored upstream URL that
+// predates the refusal must not leak that into an error or a log line.
+func TestDown_DoesNotCarryUpstreamUserinfo(t *testing.T) {
+	cause := &url.Error{Op: "Get", URL: "https://ghp_tok3n:***@registry.example.com/v2/x", Err: errors.New("connection refused")}
+	err := down(cause)
+	if !errors.Is(err, errUpstreamDown) {
+		t.Fatalf("error is not marked as an outage: %v", err)
+	}
+	if strings.Contains(err.Error(), "ghp_tok3n") {
+		t.Errorf("error carries the user name: %v", err)
+	}
+	if !strings.Contains(err.Error(), "registry.example.com") || !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("error lost its diagnosis: %v", err)
 	}
 }

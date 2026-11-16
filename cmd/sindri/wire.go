@@ -107,6 +107,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 	// makes the garbage collector safe beside it (ADR 19).
 	casStore := cas.New(blobs, cas.WithReserver(db.NewBlobReserver(database, string(cfg.Storage.Backend))))
 	reg := registry.New(database, casStore, string(cfg.Storage.Backend))
+	warnUpstreamCredentials(ctx, reg, logger)
 	jobs := queue.New(database)
 	metricsReg := prometheus.NewRegistry()
 	collector, err := gc.New(gc.Options{
@@ -354,5 +355,20 @@ func approvedFindingCounts(q *db.Queries) func(context.Context) (map[string]int6
 			counts[r.Severity] = r.Subjects
 		}
 		return counts, nil
+	}
+}
+
+// warnUpstreamCredentials logs one warning per proxy repository whose stored
+// upstream URL carries credentials. Such a row predates their refusal
+// (SIN-116): it keeps working, and only the repository's name is logged.
+func warnUpstreamCredentials(ctx context.Context, reg *registry.Registry, logger *slog.Logger) {
+	names, err := reg.ProxiesWithUpstreamCredentials(ctx)
+	if err != nil {
+		logger.WarnContext(ctx, "could not check proxy upstream URLs for credentials", "error", err)
+		return
+	}
+	for _, name := range names {
+		logger.WarnContext(ctx, "proxy repository's upstream URL carries credentials; move them to the credentials section and recreate the repository",
+			"repository", name)
 	}
 }

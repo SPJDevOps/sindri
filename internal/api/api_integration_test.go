@@ -5,6 +5,7 @@ package api_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -334,6 +335,57 @@ func TestAPI_RepublishAfterDelete(t *testing.T) {
 			}
 			if tc.want == http.StatusConflict && !strings.Contains(res.Body, `"code":"FILE_EXISTS"`) {
 				t.Fatalf("conflict body = %s, want code FILE_EXISTS", res.Body)
+			}
+		})
+	}
+}
+
+// SIN-116: a secret in upstream_url would be stored and shown. The API refuses
+// it with a 400 that does not echo the value.
+func TestAPI_CreateProxyRefusesCredentialsInUpstreamURL(t *testing.T) {
+	database := testsupport.MigratedDB(t)
+	blobs := memstore.New()
+	srv, err := server.New(server.Options{
+		Address:  "127.0.0.1:0",
+		Database: database,
+		Blobs:    blobs,
+		API: api.Handler(api.Options{
+			Registry:  registry.New(database, cas.New(blobs), "memory"),
+			Auth:      auth.NewStaticBearer(testToken),
+			RequestID: server.RequestIDFromContext,
+		}),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	h := srv.Handler()
+	tests := []struct {
+		name string
+		url  string
+		want int
+	}{
+		{"PlainURLIsCreated", "https://registry.example.com", http.StatusCreated},
+		{"UserAndPasswordAreRefused", "https://alice:s3cret@registry.example.com", http.StatusBadRequest},
+		{"TokenAsUserIsRefused", "https://ghp_s3cret@registry.example.com", http.StatusBadRequest},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"name":"proxy-%d","type":"proxy","protocol":"oci","upstream_url":%q}`, i, tc.url)
+			res := mustDo(t, h, http.MethodPost, "/api/v1/repositories", []byte(body), "application/json")
+			if res.StatusCode != tc.want {
+				t.Fatalf("status = %d, want %d: %s", res.StatusCode, tc.want, res.Body)
+			}
+			if tc.want == http.StatusBadRequest {
+				if strings.Contains(res.Body, "s3cret") || strings.Contains(res.Body, "alice") {
+					t.Errorf("response echoes the credential: %s", res.Body)
+				}
+				if !strings.Contains(res.Body, "credentials") {
+					t.Errorf("response does not point at credentials: %s", res.Body)
+				}
+			}
+			if strings.Contains(res.Body, "s3cret") {
+				t.Errorf("response carries the secret: %s", res.Body)
 			}
 		})
 	}

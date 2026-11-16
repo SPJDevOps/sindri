@@ -66,7 +66,7 @@ func (h *handler) repositories(w http.ResponseWriter, r *http.Request) {
 		switch repo.Type {
 		case model.RepoTypeProxy:
 			if remote, err := h.opts.Registry.GetRemote(r.Context(), repo.Name); err == nil {
-				t.Detail = "caches " + remote.UpstreamURL
+				t.Detail = "caches " + model.RedactUserinfo(remote.UpstreamURL)
 			}
 		case model.RepoTypeVirtual:
 			members, err := h.readableMembers(r, repo.Name)
@@ -147,7 +147,7 @@ func (h *handler) repositoryPage(w http.ResponseWriter, r *http.Request, repo mo
 		return
 	case model.RepoTypeProxy:
 		if remote, err := h.opts.Registry.GetRemote(r.Context(), repo.Name); err == nil {
-			data.Upstream = remote.UpstreamURL
+			data.Upstream = model.RedactUserinfo(remote.UpstreamURL)
 		}
 	case model.RepoTypeHosted:
 	}

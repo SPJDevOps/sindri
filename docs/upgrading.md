@@ -206,6 +206,34 @@ differently:
   manifest that names a subject and has neither an image config nor an image layer.
   Anything else is scanned as before, whether or not it names a subject.
 
+## Behaviour changes in 1.5.1
+
+- **A proxy repository's upstream URL may not carry credentials.** `https://user:token@host`
+  is refused when a repository is created through the API (400) and by `sindri config
+  check`, `serve --config` and `sindri apply`. The error names the field and does not
+  repeat the value. Put the secret in the server's `credentials:` section and name it with
+  `upstream.credentials` (`credentials_ref` in the API):
+
+  ```yaml
+  credentials:
+    mirror:
+      username: sindri
+      password: ${MIRROR_TOKEN}
+  repos:
+    pypi-mirror:
+      protocol: pypi
+      upstream: { url: https://pypi.mirror.example/simple, credentials: mirror }
+  ```
+
+- **Existing repositories keep working.** A repository created through the API with
+  credentials in its URL keeps authenticating, and startup logs one warning per such
+  repository, naming only the repository. The UI, `diff` and `apply` now show the URL with
+  the credentials replaced by `<redacted>`. To remove the warning, create a replacement
+  repository with `credentials_ref` and delete the old one.
+  **A repository declared in the configuration file with credentials in its URL must be
+  fixed before the upgrade:** `config check` refuses it, and `serve --config` does not
+  start on a file that fails the check.
+
 ## Rolling back
 
 Every migration stays backward compatible for one release, so the previous

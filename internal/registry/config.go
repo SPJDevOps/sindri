@@ -350,11 +350,15 @@ func convergeRemote(ctx context.Context, q *db.Queries, id uuid.UUID, d DesiredR
 	current, err := q.GetRemote(ctx, id)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		fields = append(fields, FieldChange{Field: "upstream", Before: "", After: url})
+		fields = append(fields, FieldChange{Field: "upstream", Before: "", After: model.RedactUserinfo(url)})
 	case err != nil:
 		return nil, fmt.Errorf("reading remote of %s: %w", d.Name, err)
 	default:
-		fields = appendIfChanged(fields, "upstream.url", current.UpstreamUrl, url)
+		if current.UpstreamUrl != url {
+			// A stored row may still carry credentials from before they were refused.
+			fields = append(fields, FieldChange{Field: "upstream.url",
+				Before: model.RedactUserinfo(current.UpstreamUrl), After: model.RedactUserinfo(url)})
+		}
 		fields = appendIfChanged(fields, "upstream.credentials", current.CredentialsRef.String, cred.String)
 		fields = appendIfChanged(fields, "upstream.ttl", secondsString(current.TtlSeconds), secondsString(ttl))
 		fields = appendIfChanged(fields, "upstream.negativeTtl", secondsString(current.NegativeTtlSeconds), secondsString(neg))

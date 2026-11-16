@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"time"
 
 	"github.com/spj/sindri/internal/model"
@@ -38,7 +39,24 @@ func down(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, errRedirectRefused) {
 		return err
 	}
-	return fmt.Errorf("%w: %w", errUpstreamDown, err)
+	return fmt.Errorf("%w: %w", errUpstreamDown, scrubUserinfo(err))
+}
+
+// scrubUserinfo removes the user name from the URL a *url.Error carries.
+// net/http masks the password there but not the user name, and a stored
+// upstream URL from before credentials were refused (SIN-116) may hold a token
+// in it. The error is copied, so the cause still unwraps.
+func scrubUserinfo(err error) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	u, perr := url.Parse(ue.URL)
+	if perr != nil || u.User == nil {
+		return err
+	}
+	u.User = nil
+	return &url.Error{Op: ue.Op, URL: u.String(), Err: ue.Err}
 }
 
 // inBackoff reports whether a refresh of repo's documents failed recently.

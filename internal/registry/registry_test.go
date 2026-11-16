@@ -2,6 +2,7 @@ package registry
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/spj/sindri/internal/model"
@@ -94,6 +95,45 @@ func TestNormalizeName_NpmNamesDoNotCollide(t *testing.T) {
 			t.Parallel()
 			if got := NormalizeName(tc.protocol, tc.in); got != tc.want {
 				t.Fatalf("NormalizeName(%q, %q) = %q, want %q", tc.protocol, tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateCreateParams_ProxyUpstreamWithCredentialsIsRefused(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{name: "PlainURLIsAccepted", url: "https://registry.example.com"},
+		{name: "UserAndPasswordAreRefused", url: "https://alice:s3cret@registry.example.com", wantErr: true},
+		{name: "TokenAsUserIsRefused", url: "https://ghp_abc123@registry.example.com", wantErr: true},
+		{name: "EmptyUserWithPasswordIsRefused", url: "https://:s3cret@registry.example.com", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateCreateParams(CreateRepositoryParams{
+				Name: "p", Type: model.RepoTypeProxy, Protocol: model.ProtocolOCI, UpstreamURL: tc.url,
+			})
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("error = %v, want ErrInvalidInput", err)
+			}
+			for _, leak := range []string{"s3cret", "alice", "ghp_abc123", tc.url} {
+				if strings.Contains(err.Error(), leak) {
+					t.Errorf("error echoes %q: %v", leak, err)
+				}
+			}
+			if !strings.Contains(err.Error(), "credentials") {
+				t.Errorf("error does not point at credentials: %v", err)
 			}
 		})
 	}

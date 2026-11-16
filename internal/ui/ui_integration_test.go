@@ -18,6 +18,8 @@ import (
 	godigest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/cas"
 	"github.com/spj/sindri/internal/db"
@@ -40,13 +42,14 @@ var who = map[string]auth.Principal{
 }
 
 type env struct {
-	t   *testing.T
-	cas *cas.Store
-	h   *handler
-	reg *registry.Registry
-	lc  *lifecycle.Service
-	ev  *evidence.Service
-	srv http.Handler
+	t    *testing.T
+	cas  *cas.Store
+	h    *handler
+	reg  *registry.Registry
+	lc   *lifecycle.Service
+	ev   *evidence.Service
+	srv  http.Handler
+	pool *pgxpool.Pool
 }
 
 func newEnv(t *testing.T) *env {
@@ -68,7 +71,7 @@ func newEnv(t *testing.T) *env {
 		}
 		h.router.ServeHTTP(w, r)
 	}))
-	e := &env{t: t, cas: store, h: h, reg: reg, lc: lc, ev: ev, srv: root}
+	e := &env{t: t, cas: store, h: h, reg: reg, lc: lc, ev: ev, srv: root, pool: database.Pool()}
 
 	// The npm proxy's upstream fails the test on any request: the UI reads what
 	// is cached and never reaches out.
@@ -655,5 +658,37 @@ func TestUI_HeadIsServed(t *testing.T) {
 	}
 	if b, _ := io.ReadAll(res.Body); len(b) != 0 {
 		t.Fatal("HEAD returned a body")
+	}
+}
+
+// SIN-116: a row written before credentials were refused in upstream.url keeps
+// working, but no page renders the secret.
+func TestUI_UpstreamURLCredentialsAreNeverRendered(t *testing.T) {
+	e := newEnv(t)
+	_, err := e.reg.CreateRepository(t.Context(), registry.CreateRepositoryParams{
+		Name: "legacy", Type: model.RepoTypeProxy, Protocol: model.ProtocolOCI,
+		UpstreamURL: "https://registry.example.com", TTLSeconds: 60,
+		Access: model.Access{Read: []string{auth.Authenticated}},
+	})
+	if err != nil {
+		t.Fatalf("CreateRepository: %v", err)
+	}
+	if _, err := e.pool.Exec(t.Context(),
+		`UPDATE remotes SET upstream_url = 'https://alice:s3cret@registry.example.com' WHERE repo_id = (SELECT id FROM repositories WHERE name = 'legacy')`); err != nil {
+		t.Fatalf("seeding userinfo: %v", err)
+	}
+	for _, path := range []string{"/ui/", "/ui/r/legacy"} {
+		r := e.get("alice", path)
+		if r.status != http.StatusOK {
+			t.Fatalf("%s: status %d", path, r.status)
+		}
+		for _, leak := range []string{"s3cret", "alice:"} {
+			if strings.Contains(r.body, leak) {
+				t.Errorf("%s renders %q", path, leak)
+			}
+		}
+		if !strings.Contains(r.body, "registry.example.com") {
+			t.Errorf("%s no longer names the upstream host", path)
+		}
 	}
 }
