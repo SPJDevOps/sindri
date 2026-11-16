@@ -1,6 +1,7 @@
 # 23. Scanning runs as a queue job, and scanning is open source
 
-- **Status:** Accepted
+- **Status:** Accepted; the open-core line is superseded by
+  [ADR 33](0033-open-source-boundary-and-cncf.md)
 - **Date:** 2026-10-13
 - **Relates to:** [ADR 16](0016-lifecycle-gates-and-evidence-in-v1.md),
   [ADR 20](0020-queue-table-and-background-worker.md),

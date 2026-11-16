@@ -510,7 +510,8 @@ project either stays light for small teams or acquires the ceremony it was built
 - [x] Machine tokens for CI, scoped to a repository and a role
 
 **Out of scope.** Git polling; v1 reconciles on boot or from CI, and an operator can come
-later without changing the format. SAML and LDAP are commercial.
+later without changing the format. SAML and LDAP are not built in; an OIDC bridge covers them
+([ADR 33](docs/adr/0033-open-source-boundary-and-cncf.md)).
 
 **Watch out for.**
 
@@ -812,7 +813,8 @@ homegrown PyPI server. The goal is that such a team can retire all three. Kubern
 platform teams and security-first buyers come later.
 [ADR 22](docs/adr/0022-post-v1-direction-polyglot-teams-first.md) records why, and
 [ADR 23](docs/adr/0023-scanning-as-a-queue-job-and-the-open-core-line.md) records how
-scanning works and where the open-core line sits.
+scanning works. [ADR 33](docs/adr/0033-open-source-boundary-and-cncf.md) replaces its
+open-core line: what is open stays open.
 
 The order is v1.0.1, M9 npm, v1.1.1 hardening, M10 adoptable, M11a scan and gate, the public
 announcement, then M11b. npm comes before the docs site because without npm this audience
@@ -1158,7 +1160,7 @@ severity. This is what the announcement claims. M11 was split in two by
   full vulnerability view stays in M11b (SIN-35)
 
 **Out of scope.** Everything in M11b. Per-CVE waivers, licence policy, org-wide rules, and
-compliance reports: the paid policy layer. Signature verification. Scanners other than
+compliance reports: undecided until built (ADR 33). Signature verification. Scanners other than
 Trivy.
 
 **Watch out for.** A scan result is a claim about a point in time. The ledger and the
@@ -1380,10 +1382,19 @@ Nexus. Two alternatives to weigh against it:
 - **Helm's own repository format** (`index.yaml` and chart tarballs), only if OCI charts turn
   out not to be enough. Helm-over-OCI already works and is tested (v1.0.1).
 
-**Then the paid layer**, and only once there are production users to sell to (ADR 22,
-ADR 23): per-CVE waivers with expiry, licence policy, org-wide rules teams cannot override,
-compliance reports, SAML and LDAP, audit retention, multi-region replication, and managed
-hosting.
+**Then paid work, added beside the open code**
+([ADR 33](docs/adr/0033-open-source-boundary-and-cncf.md)), and only once there are
+production users to sell to. Sindri stays Apache 2.0, and nothing that is open today moves
+behind payment. First candidates: advanced auditing and compliance for regulated
+organisations, such as reports for the EU Cyber Resilience Act, NIS2, or DORA, audit
+retention with guarantees, delivery into air-gapped networks, and managed hosting.
+Undecided until each is built: per-CVE waivers with expiry, licence policy, org-wide rules
+teams cannot override, and multi-region replication. SAML and LDAP go through an OIDC
+bridge such as Dex or Keycloak.
+
+**The CNCF Sandbox, a goal and not yet a commitment.** Decided once Sindri has production
+users and its funding is known. It would need sign-off on commits (DCO), a governance
+document, a code of conduct, and a check of the CNCF's current requirements (ADR 33).
 
 **On request, not scheduled.** GCS and Azure Blob Storage, each a small backend behind the
 existing interface and the conformance suite.
@@ -1405,7 +1416,7 @@ shared look, UX, and size targets, and each ticket gets a milestone when it is p
 - **With a milestone above:** referrers and signature state with SIN-37 and M14 (SIN-110),
   protocol presenters before M15 (SIN-111), webhook deliveries with notifications in
   Sprint 14 (SIN-112), replicas and admission decisions with M13 and M14 (SIN-113),
-  printable report and waivers with the paid layer (SIN-114).
+  printable report and waivers when those are scheduled (SIN-114, ADR 33).
 - **One decision, after M12:** whether the browser may ever promote, revoke, or re-scan
   (SIN-115). Until that ADR exists, the gap below stands.
 

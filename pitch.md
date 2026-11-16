@@ -177,22 +177,26 @@ Storage-Layer von Anfang an abstrahiert (Filesystem lokal, S3/GCS in der Cloud) 
 
 ---
 
-## 6. Monetarisierung: Open Core
+## 6. Offen bleibt offen, Bezahltes kommt dazu
 
-**Faustregel:** Alles, was ein einzelnes Team zum produktiven Arbeiten braucht, ist frei. Alles, was eine Organisation zur Governance über viele Teams hinweg braucht, ist bezahlt.
+> Diese Sektion ersetzt die ursprüngliche Open-Core-Tabelle. Die Entscheidung steht in
+> [ADR 33](docs/adr/0033-open-source-boundary-and-cncf.md).
 
-| Open Source (Apache 2.0 / MIT) | Enterprise / Paid |
+**Faustregel:** Sindri ist und bleibt Apache 2.0. Was heute offen ist, wandert nie hinter eine Bezahlschranke. Bezahlte Produkte kommen später dazu und nehmen dem offenen Code nichts weg.
+
+| Offen, und das bleibt so | Bezahlt, kommt dazu |
 |---|---|
-| Alle Protokoll-Adapter (OCI, npm, PyPI, Maven, Helm) | SSO / SAML / LDAP |
-| Storage-Backends (Filesystem, S3) | Audit-Logging mit Aufbewahrungspflicht |
-| Basis-RBAC | Multi-Region / HA-Replikation |
-| Voller Single-Node-Betrieb inkl. Compose | Erweiterte Policy-Engine: Ausnahmen pro CVE mit Ablaufdatum, Lizenz-Policy, organisationsweite Regeln, Compliance-Reports |
-| Scanning beim Publish, SBOMs, Severity-Gate und Präsenz-Gates (z.B. „kein Prod-Promote ohne SBOM") | Managed Hosting / Cloud-Angebot |
+| Alle Protokoll-Adapter und Storage-Backends | Erweitertes Auditing und Compliance, z.B. Reports für Cyber Resilience Act, NIS2, DORA |
+| Anmeldung über OIDC, Rollen und Rechte | Audit-Aufbewahrung mit Garantien, signierte Audit-Exporte |
+| Audit-Ledger, Audit-API und Exporte | Lieferung in abgeschottete Netze (Air Gap) |
+| Scanning beim Publish, SBOMs, Severity-Gate und Präsenz-Gates | Managed Hosting und Support |
+| Hochverfügbarkeit (mehrere Replicas, offene Roadmap) | |
 
-**Warum diese Grenze funktioniert:**
-Sie ist fair und nachvollziehbar statt willkürlich — Community-Vertrauen bleibt erhalten (siehe Gegenbeispiele: HashiCorp/Elastic-Lizenzwechsel führten zu Forks wie OpenTofu/OpenSearch). Eine echte OSI-Lizenz für den Kern signalisiert Ernsthaftigkeit und beschleunigt Adoption; die kommerzielle Schicht bleibt trotzdem sauber getrennt.
+- **SAML und LDAP** laufen über eine OIDC-Brücke wie Dex oder Keycloak und sind nicht mehr als Bezahl-Feature reserviert.
+- **Noch nicht entschieden:** Ausnahmen pro CVE, Lizenz-Policy, organisationsweite Regeln und Multi-Region-Replikation. Das wird entschieden, wenn es gebaut wird.
+- **Warum so vorsichtig:** Das Versprechen ist klein genug, um es zu halten. Ein gebrochenes Versprechen kostet mehr Vertrauen als eines, das nie gegeben wurde (Gegenbeispiele: HashiCorp und Elastic, mit den Forks OpenTofu und OpenSearch).
 
-**Umsatztreiber in der Praxis meist:** nicht die Kernlizenz, sondern Managed Hosting und die Security/Policy-Schicht obendrauf.
+**Ziel CNCF:** Die CNCF Sandbox ist ein Ziel, noch keine Zusage. Entschieden wird, wenn es produktive Nutzer gibt und die Finanzierung klar ist, denn der Schritt lässt sich nicht zurücknehmen.
 
 ---
 
