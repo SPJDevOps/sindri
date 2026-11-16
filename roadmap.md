@@ -838,9 +838,9 @@ publish is scanned, and promotion is refused above a severity.
 | 11, Nov 12 | M11b re-scan ✅ | SIN-33, 35 | v1.4.0 |
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
 | 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 ✅ |
-| 14, Nov 23–29 | Notifications | SIN-117, 112 | v1.6.0 |
-| 15, Nov 30–Dec 6 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
-| 16–17, Dec 7–20 | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
+| 14, from Nov 17 | Notifications | SIN-117, 112 | v1.6.0 |
+| 15, after Sprint 14 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
+| 16–17, two weeks from the announcement | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
 week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9 and 10
@@ -859,9 +859,11 @@ Sprint 14 pulls notifications forward from M12, because a re-scan that finds a C
 something approved for prod and tells nobody is the weakest point of the security claim, and
 because doing it now keeps the feedback window free for what strangers report. Sprint 15
 finishes the pages a newcomer meets first, with the three foundation tickets the UI section
-below names first. **The announcement is not tied to a sprint:** it follows the person-run M10
-walkthrough, at the earliest after Sprint 13. If it comes sooner, the M12 window moves up and
-Sprints 14 and 15 follow it.
+below names first. The announcement was at first not tied to a sprint. **Since 2026-11-16 it
+waits for Sprints 14 and 15** as well as the person-run M10 walkthrough: the aim of the
+announcement is users, and the pages a newcomer meets first and a re-scan that tells
+somebody are what they will judge. Both sprints were pulled forward to start on Nov 17, and
+the M12 window starts with the announcement.
 
 Sprint 13 shipped all seven tickets as v1.5.1 on 2026-11-16, recorded under
 [v1.5.1 — Hardening](#v151--hardening-) below.
