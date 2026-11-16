@@ -53,9 +53,12 @@ type Options struct {
 	CacheDir string
 	// Timeout bounds each target's scan. Zero means no limit.
 	Timeout time.Duration
-	// JobTimeout bounds one whole scan job: staging, every target, and
-	// attaching. Zero means no limit. On expiry nothing is attached and the
-	// job fails, so the worker retries it with backoff.
+	// JobTimeout bounds staging and scanning; the SIN-84 staging sweep relies
+	// on it to bound how long a staging directory can live.
+	// It is checked once before attaching; attaching runs on the parent
+	// context, so an expiry never leaves a subject half attached. On expiry
+	// nothing is attached and the job fails, so the worker retries it with
+	// backoff. Zero means no limit here, but config maps 0 to its default.
 	JobTimeout time.Duration
 	// SkipDBUpdate passes --skip-db-update and --skip-java-db-update, so Trivy
 	// never downloads a database. The databases must already be in the cache,

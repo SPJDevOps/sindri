@@ -154,3 +154,13 @@ type oddError struct{ ue *url.Error }
 
 func (e oddError) Error() string { return "failed for user ghp_tok3n" }
 func (e oddError) Unwrap() error { return e.ue }
+
+func TestNPMTarballURL_ErrorsDoNotEchoTheURL(t *testing.T) {
+	_, err := npmTarballURL("http://alice:s3cret@exa mple.com/%zz", "pkg/-/pkg-1.0.0.tgz")
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if strings.Contains(err.Error(), "s3cret") || strings.Contains(err.Error(), "alice") {
+		t.Errorf("error echoes the URL: %v", err)
+	}
+}

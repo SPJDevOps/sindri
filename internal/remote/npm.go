@@ -364,7 +364,8 @@ func npmTarballURL(upstream, tarball string) (string, error) {
 	}
 	base, err := url.Parse(strings.TrimRight(upstream, "/") + "/")
 	if err != nil {
-		return "", fmt.Errorf("parsing upstream URL: %w", err)
+		// No error includes the URL: the stored upstream may carry credentials (SIN-116).
+		return "", errors.New("parsing upstream URL: not a valid URL")
 	}
 	link, err := url.Parse(tarball)
 	if err != nil {

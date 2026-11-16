@@ -87,7 +87,10 @@ image in the repository uses are unplaced with it. The repository then answers 4
 and never fetches it from upstream again. The same digest in another repository is
 unaffected. The bytes go at the next collection. `GET .../blocked` lists the blocks with
 who set them and why, and `DELETE .../blocked/{digest}` lifts one. In a virtual
-repository, a member that blocks a digest counts as a miss.
+repository, a member that blocks a digest counts as a miss, so the walk continues and
+another proxy member can still serve the same digest. To stop the image for clients
+pulling through a virtual repository, block the digest in every proxy member that can
+fetch it.
 
 ## Metrics and alerts
 

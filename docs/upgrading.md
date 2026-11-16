@@ -247,9 +247,10 @@ differently:
 - **Trivy no longer phones home when offline.** With `offlineScan` on, Trivy gets
   `--offline-scan`, `--skip-version-check` and `--disable-telemetry`. An existing server
   with `skipDBUpdate` set therefore stops making those requests on upgrade.
-- **Some scan outcomes that were skipped are now failed jobs.** An archive over the cap, an
-  unsafe path, too many platforms, a duplicate platform, an unsupported child and an index
-  with no platforms fail once, without retries, and count as `failed` in
+- **Some scan outcomes that were skipped or retried are now failed jobs.** Too many
+  platforms, a duplicate platform, an unsupported child and an index with no platforms were
+  counted as skipped before 1.5.1; an archive over the cap and an unsafe path were retried
+  until attempts ran out. All six now fail once, without retries, and count as `failed` in
   `sindri_scans_total`. Alerts on `failed` may fire for artifacts that were counted as
   skipped before.
 - **A hosted PyPI filename belongs to one version.** Publishing through the API a filename
