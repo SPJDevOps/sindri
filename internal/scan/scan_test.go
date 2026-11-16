@@ -859,7 +859,7 @@ func TestRun_PassesMirrorAndSkipUpdateFlags(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"--input ", "--format json", "--list-all-pkgs", "--scanners vuln", "--quiet",
-		"--cache-dir /cache", "--db-repository registry.example/trivy-db", "--java-db-repository registry.example/java-db", "--skip-db-update", "--skip-java-db-update", "--offline-scan", "--output "} {
+		"--cache-dir /cache", "--db-repository registry.example/trivy-db", "--java-db-repository registry.example/java-db", "--skip-db-update", "--skip-java-db-update", "--offline-scan", "--skip-version-check", "--disable-telemetry", "--output "} {
 		if !strings.Contains(image, want) {
 			t.Errorf("image args %q lack %q", image, want)
 		}
@@ -880,8 +880,10 @@ func TestRun_OmitsOfflineScanUnlessSet(t *testing.T) {
 	if _, err := s.Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if strings.Contains(string(readFile(t, argsFile)), "--offline-scan") {
-		t.Errorf("args carry --offline-scan without Options.OfflineScan: %s", readFile(t, argsFile))
+	for _, flag := range []string{"--offline-scan", "--skip-version-check", "--disable-telemetry"} {
+		if strings.Contains(string(readFile(t, argsFile)), flag) {
+			t.Errorf("args carry %s without Options.OfflineScan: %s", flag, readFile(t, argsFile))
+		}
 	}
 }
 

@@ -157,7 +157,9 @@ func (s *Scanner) scanTarget(ctx context.Context, t target, outDir string) (repo
 		args = append(args, "--skip-db-update", "--skip-java-db-update")
 	}
 	if s.opts.OfflineScan {
-		args = append(args, "--offline-scan")
+		// Trivy also contacts check.trivy.dev for a version notice and sends
+		// telemetry, neither of which --offline-scan covers.
+		args = append(args, "--offline-scan", "--skip-version-check", "--disable-telemetry")
 	}
 	args = append(args, "--output", report)
 	if _, err := s.run(ctx, outDir, args...); err != nil {

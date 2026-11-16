@@ -731,12 +731,13 @@ type Scanning struct {
 	// jar-containing subject fails to scan if the Java database is not in it.
 	// Cannot be combined with `dbRepository` or `javaDbRepository`.
 	SkipDBUpdate bool `yaml:"skipDBUpdate"`
-	// Pass `--offline-scan` to Trivy, so it makes no network request while
-	// scanning, such as a package lookup against Maven Central or a registry
-	// query for a base image. A server with a pre-seeded cache is offline, so
-	// this follows `skipDBUpdate`. Unlike `skipDBUpdate` it may be combined
-	// with `dbRepository` and `javaDbRepository`, for an air-gapped server that
-	// reaches only a mirror. Default `false`, or `true` when `skipDBUpdate` is set.
+	// Pass `--offline-scan`, `--skip-version-check` and `--disable-telemetry`
+	// to Trivy, so it makes no network request of its own while scanning: no
+	// package lookups, no check for a newer Trivy, no telemetry. A server with
+	// a pre-seeded cache is offline, so this follows `skipDBUpdate`. Unlike
+	// `skipDBUpdate` it may be combined with `dbRepository` and
+	// `javaDbRepository`, for an air-gapped server that reaches only a mirror.
+	// Default `false`, or `true` when `skipDBUpdate` is set.
 	OfflineScan bool `yaml:"offlineScan"`
 	// The most bytes unpacked from one wheel or tarball while scanning it, so
 	// that an archive bomb cannot fill the disk. At least 1048576 (1 MiB).
