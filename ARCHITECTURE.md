@@ -63,7 +63,7 @@ Nothing is moved, copied, retagged, or re-uploaded. Current state is a view over
 latest event per `(digest, repository, stage)`.
 
 Append-only gives the audit trail for free, makes "who promoted this and why" answerable
-forever, and turns the paid audit-retention feature into a query rather than a rewrite.
+forever, and turns audit retention into a query rather than a rewrite.
 
 ### I4. Only hosted repositories promote
 
@@ -762,17 +762,16 @@ replacing one binary.
 
 ---
 
-## 10. Open Core boundary
+## 10. Open source boundary
 
-Drawn deliberately, and drawn here so that the free and paid split never leaks into the
-core's structure: everything a single team needs to work productively is open source under
-Apache 2.0. Everything an organisation needs to govern many teams is commercial.
+This repository is Apache 2.0 and stays so, and nothing that is open today moves behind
+payment ([ADR 33](docs/adr/0033-open-source-boundary-and-cncf.md)). That includes every
+adapter, both storage backends, sign-in, the audit ledger, scanning, lifecycle, and
+evidence. High availability is on the open roadmap.
 
-Open: all protocol adapters, both storage backends, basic RBAC, full single-node
-operation, lifecycle and promotion, evidence.
+Paid work is added beside the open code and never taken from it. The first candidates are
+advanced auditing and compliance for regulated organisations, and delivery into air-gapped
+networks. Sindri keeps the complete record and every export of it.
 
-Commercial: SSO beyond basic OIDC (SAML, LDAP), audit logging with retention guarantees,
-multi-region replication, the advanced policy engine, managed hosting.
-
-No commercial feature may require a different core. If one does, the boundary is in the
-wrong place.
+No paid addition may require a different core. If one does, the boundary is in the wrong
+place.

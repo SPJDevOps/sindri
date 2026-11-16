@@ -510,7 +510,8 @@ project either stays light for small teams or acquires the ceremony it was built
 - [x] Machine tokens for CI, scoped to a repository and a role
 
 **Out of scope.** Git polling; v1 reconciles on boot or from CI, and an operator can come
-later without changing the format. SAML and LDAP are commercial.
+later without changing the format. SAML and LDAP are not built in; an OIDC bridge covers them
+([ADR 33](docs/adr/0033-open-source-boundary-and-cncf.md)).
 
 **Watch out for.**
 
@@ -812,13 +813,14 @@ homegrown PyPI server. The goal is that such a team can retire all three. Kubern
 platform teams and security-first buyers come later.
 [ADR 22](docs/adr/0022-post-v1-direction-polyglot-teams-first.md) records why, and
 [ADR 23](docs/adr/0023-scanning-as-a-queue-job-and-the-open-core-line.md) records how
-scanning works and where the open-core line sits.
+scanning works. [ADR 33](docs/adr/0033-open-source-boundary-and-cncf.md) replaces its
+open-core line: what is open stays open.
 
 The order is v1.0.1, M9 npm, v1.1.1 hardening, M10 adoptable, M11a scan and gate, the public
 announcement, then M11b. npm comes before the docs site because without npm this audience
 cannot drop Verdaccio, and docs would sell something they cannot fully use yet. On
-2026-11-12 M11b was started without waiting for the announcement. The announcement still
-waits only for the person-run M10 migration walkthrough, and it does not wait for M11b.
+2026-11-12 M11b was started without waiting for the announcement. Since 2026-11-16 the
+announcement waits for the person-run M10 migration walkthrough and for Sprints 14 and 15.
 
 **The announcement** follows v1.3.0 (M11a), and [ADR 25](docs/adr/0025-what-the-announcement-requires.md)
 records why. It requires OCI, PyPI, and npm, with other formats promised for later; the docs;
@@ -836,9 +838,9 @@ publish is scanned, and promotion is refused above a severity.
 | 11, Nov 12 | M11b re-scan ✅ | SIN-33, 35 | v1.4.0 |
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
 | 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 ✅ |
-| 14, Nov 23–29 | Notifications | SIN-117, 112 | v1.6.0 |
-| 15, Nov 30–Dec 6 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
-| 16–17, Dec 7–20 | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
+| 14, from Nov 17 | Notifications | SIN-117, 112 | v1.6.0 |
+| 15, after Sprint 14 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
+| 16–17, two weeks from the announcement | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
 week. Sprint 7 closed early on Nov 6, so Sprint 8 started on Nov 9 and Sprints 9 and 10
@@ -857,9 +859,11 @@ Sprint 14 pulls notifications forward from M12, because a re-scan that finds a C
 something approved for prod and tells nobody is the weakest point of the security claim, and
 because doing it now keeps the feedback window free for what strangers report. Sprint 15
 finishes the pages a newcomer meets first, with the three foundation tickets the UI section
-below names first. **The announcement is not tied to a sprint:** it follows the person-run M10
-walkthrough, at the earliest after Sprint 13. If it comes sooner, the M12 window moves up and
-Sprints 14 and 15 follow it.
+below names first. The announcement was at first not tied to a sprint. **Since 2026-11-16 it
+waits for Sprints 14 and 15** as well as the person-run M10 walkthrough: the aim of the
+announcement is users, and the pages a newcomer meets first and a re-scan that tells
+somebody are what they will judge. Both sprints were pulled forward to start on Nov 17, and
+the M12 window starts with the announcement.
 
 Sprint 13 shipped all seven tickets as v1.5.1 on 2026-11-16, recorded under
 [v1.5.1 — Hardening](#v151--hardening-) below.
@@ -1158,7 +1162,7 @@ severity. This is what the announcement claims. M11 was split in two by
   full vulnerability view stays in M11b (SIN-35)
 
 **Out of scope.** Everything in M11b. Per-CVE waivers, licence policy, org-wide rules, and
-compliance reports: the paid policy layer. Signature verification. Scanners other than
+compliance reports: undecided until built (ADR 33). Signature verification. Scanners other than
 Trivy.
 
 **Watch out for.** A scan result is a claim about a point in time. The ledger and the
@@ -1366,24 +1370,37 @@ approved for that environment. Gate: a `kind` cluster refuses an unapproved imag
 it after promotion, and a promotion gated on `signature` refuses an artifact whose signature
 does not verify.
 
-**M15, a fourth protocol, chosen by demand.** Each is a new adapter on the shared core plus a
-small additive migration for its protocol and subject kind, as npm needed (ADR 24). If the
-adopters from M12 have not said which, the default is **Maven**: hosted, proxy, and virtual,
-with `maven-metadata.xml` and checksum files, because it is the reason most teams stay on
-Nexus. Two alternatives to weigh against it:
+**M15, Hugging Face as the fourth protocol.** Committed on 2026-11-16: the Hub download
+protocol for models and datasets behind `HF_ENDPOINT`, hosted, proxy, and virtual, proxying
+huggingface.co with hosted names that proxies cannot shadow. An organisation can then keep
+models on its own infrastructure, air-gapped included, behind the same lifecycle gates and
+provenance as its code, which nobody offers today. It is a new adapter on the shared core
+plus a small additive migration for its protocol and subject kind, as npm needed (ADR 24).
+Watch out for file size: a model is many gigabytes, so uploads, the proxy cache, and garbage
+collection get their first real test at that scale.
+
+**M16, a fifth protocol, chosen by demand.** If adopters have not said which, the default is
+**Maven**: hosted, proxy, and virtual, with `maven-metadata.xml` and checksum files, because
+it is the reason most teams stay on Nexus. Two alternatives to weigh against it:
 - **Go modules**: the `GOPROXY` protocol (`list`, `.info`, `.mod`, `.zip`, `@latest`), plus
   a checksum-database story so `GONOSUMDB` is not the only way to use it. Cheap, and it
   matches the audience a Go project attracts.
-- **Hugging Face**: the Hub download protocol for models and datasets behind `HF_ENDPOINT`,
-  proxying huggingface.co with hosted names that proxies cannot shadow. The bet: nobody
-  offers lifecycle gates and provenance for models.
 - **Helm's own repository format** (`index.yaml` and chart tarballs), only if OCI charts turn
   out not to be enough. Helm-over-OCI already works and is tested (v1.0.1).
 
-**Then the paid layer**, and only once there are production users to sell to (ADR 22,
-ADR 23): per-CVE waivers with expiry, licence policy, org-wide rules teams cannot override,
-compliance reports, SAML and LDAP, audit retention, multi-region replication, and managed
-hosting.
+**Then paid work, added beside the open code**
+([ADR 33](docs/adr/0033-open-source-boundary-and-cncf.md)), and only once there are
+production users to sell to. Sindri stays Apache 2.0, and nothing that is open today moves
+behind payment. First candidates: advanced auditing and compliance for regulated
+organisations, such as reports for the EU Cyber Resilience Act, NIS2, or DORA, audit
+retention with guarantees, delivery into air-gapped networks, and managed hosting.
+Undecided until each is built: per-CVE waivers with expiry, licence policy, org-wide rules
+teams cannot override, and multi-region replication. SAML and LDAP go through an OIDC
+bridge such as Dex or Keycloak.
+
+**The CNCF Sandbox, a goal and not yet a commitment.** Decided once Sindri has production
+users and its funding is known. It would need sign-off on commits (DCO), a governance
+document, a code of conduct, and a check of the CNCF's current requirements (ADR 33).
 
 **On request, not scheduled.** GCS and Azure Blob Storage, each a small backend behind the
 existing interface and the conformance suite.
@@ -1405,7 +1422,7 @@ shared look, UX, and size targets, and each ticket gets a milestone when it is p
 - **With a milestone above:** referrers and signature state with SIN-37 and M14 (SIN-110),
   protocol presenters before M15 (SIN-111), webhook deliveries with notifications in
   Sprint 14 (SIN-112), replicas and admission decisions with M13 and M14 (SIN-113),
-  printable report and waivers with the paid layer (SIN-114).
+  printable report and waivers when those are scheduled (SIN-114, ADR 33).
 - **One decision, after M12:** whether the browser may ever promote, revoke, or re-scan
   (SIN-115). Until that ADR exists, the gap below stands.
 

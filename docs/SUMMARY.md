@@ -60,3 +60,4 @@
   - [30. The severity gate: a ceiling, read from worker metadata](adr/0030-severity-gate.md)
   - [31. Re-scanning approved subjects, and what a new finding does](adr/0031-rescan-approved-subjects.md)
   - [32. The OCI referrers API: a view over placed manifests](adr/0032-oci-referrers.md)
+  - [33. What is open stays open, paid work is added beside it, and the CNCF is a goal](adr/0033-open-source-boundary-and-cncf.md)
