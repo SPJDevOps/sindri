@@ -70,7 +70,11 @@ func TestWorkerLanes_GCCompletesWhileAScanJobIsRunning(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if j, _ := q.Get(ctx, scanJob.ID); j.State != "running" {
+	j, err := q.Get(ctx, scanJob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.State != "running" {
 		t.Errorf("scan job state = %s, want still running", j.State)
 	}
 	close(releaseScan)

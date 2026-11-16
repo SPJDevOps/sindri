@@ -41,6 +41,9 @@ type fakeAttacher struct {
 	attached []attachment
 	// previous is what NewestSindriScans returns, by platform.
 	previous map[string]json.RawMessage
+	// delay makes each Attach slow, and Attach then honours its context the
+	// way the real service does.
+	delay time.Duration
 }
 
 func (f *fakeAttacher) NewestSindriScans(context.Context, model.Digest) (map[string]json.RawMessage, error) {
@@ -52,7 +55,14 @@ type attachment struct {
 	body   []byte
 }
 
-func (f *fakeAttacher) Attach(_ context.Context, p evidence.AttachParams) (evidence.Evidence, error) {
+func (f *fakeAttacher) Attach(ctx context.Context, p evidence.AttachParams) (evidence.Evidence, error) {
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return evidence.Evidence{}, ctx.Err()
+		}
+	}
 	body, err := io.ReadAll(p.Body)
 	if err != nil {
 		return evidence.Evidence{}, err
@@ -798,6 +808,21 @@ func TestRun_JobDeadlineAttachesNothingAndNamesTheSetting(t *testing.T) {
 	}
 	if len(f.ev.attached) != 0 {
 		t.Fatalf("attached %d, want none", len(f.ev.attached))
+	}
+}
+
+func TestRun_JobDeadlineDoesNotInterruptAnAttachThatHasBegun(t *testing.T) {
+	f := newFixture(t)
+	f.ev.delay = 700 * time.Millisecond
+	digest := f.image(ocispec.MediaTypeImageManifest)
+	// Trivy runs twice at 0.2s, finishing inside the 1s deadline; the two
+	// attaches then run past it.
+	s := f.scannerEnv(Options{Trivy: stubPath(t), JobTimeout: time.Second}, "TRIVY_STUB_DELAY=0.2")
+	if _, err := s.Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(f.ev.attached) != 2 {
+		t.Fatalf("attached %d, want sbom and scan", len(f.ev.attached))
 	}
 }
 

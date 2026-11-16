@@ -7,7 +7,8 @@
 # in this directory; while it exists, image scans emit that fixture, which lets a
 # test simulate a newer vulnerability database between two scans.
 # TRIVY_STUB_SLEEP=<seconds> makes each scan (not the version probe) run that
-# long before it writes anything, to exercise deadlines.
+# long and never writes anything, to exercise deadlines. TRIVY_STUB_DELAY is
+# the same pause followed by a normal scan.
 dir=$(cd "$(dirname "$0")" && pwd)
 
 if [ -n "$TRIVY_STUB_ARGS" ]; then
@@ -33,6 +34,10 @@ fi
 
 if [ -n "$TRIVY_STUB_SLEEP" ]; then
 	exec sleep "$TRIVY_STUB_SLEEP"
+fi
+
+if [ -n "$TRIVY_STUB_DELAY" ]; then
+	sleep "$TRIVY_STUB_DELAY"
 fi
 
 out=""

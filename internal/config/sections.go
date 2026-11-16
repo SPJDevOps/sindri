@@ -722,7 +722,8 @@ type Scanning struct {
 	// How long one whole scan job may run, across every platform of an image
 	// index and the staging in front of them, before it is cancelled, attaches
 	// nothing, and is retried with backoff. Must be at least `timeout`.
-	// Default `1h`, or `timeout` when that is longer.
+	// Default `1h`, or `timeout` when that is longer; `0s` means the
+	// default, not no limit.
 	JobTimeout Duration `yaml:"jobTimeout"`
 	// Never download the vulnerability database, and scan with the one already
 	// in `cacheDir`, including the Java database that Trivy fetches separately
