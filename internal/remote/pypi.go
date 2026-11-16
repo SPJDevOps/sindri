@@ -360,16 +360,18 @@ func ResolveFileURL(upstreamBase, fileURL string) (string, error) {
 	if fileURL == "" {
 		return "", errors.New("empty file URL")
 	}
+	// No error below includes a URL: url.Parse quotes its input, and the
+	// stored upstream may still carry credentials (SIN-116).
 	u, err := url.Parse(fileURL)
 	if err != nil {
-		return "", fmt.Errorf("parsing file URL: %w", err)
+		return "", errors.New("parsing file URL: not a valid URL")
 	}
 	if u.IsAbs() {
 		return u.String(), nil
 	}
 	base, err := url.Parse(strings.TrimRight(upstreamBase, "/") + "/")
 	if err != nil {
-		return "", fmt.Errorf("parsing upstream URL: %w", err)
+		return "", errors.New("parsing upstream URL: not a valid URL")
 	}
 	return base.ResolveReference(u).String(), nil
 }

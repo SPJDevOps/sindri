@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/spj/sindri/internal/model"
@@ -34,21 +35,33 @@ var errUpstreamDown = errors.New("upstream not answering")
 var ErrFileGone = fmt.Errorf("%w: upstream no longer lists the file", ErrUpstreamNotFound)
 
 // down marks err as the upstream not answering, unless the caller or a
-// redirect rule ended the request: those say nothing about the upstream.
+// redirect rule ended the request: those say nothing about the upstream. The
+// user name of the URL in the error is removed first, on every path.
 func down(err error) error {
+	err = scrubUserinfo(err)
 	if errors.Is(err, context.Canceled) || errors.Is(err, errRedirectRefused) {
 		return err
 	}
-	return fmt.Errorf("%w: %w", errUpstreamDown, scrubUserinfo(err))
+	return fmt.Errorf("%w: %w", errUpstreamDown, err)
 }
+
+// scrubbedError prints the text of its cause with the user name taken out of
+// a URL, and unwraps to the cause, so errors.Is and errors.As behave as before.
+type scrubbedError struct {
+	text  string
+	cause error
+}
+
+func (e *scrubbedError) Error() string { return e.text }
+func (e *scrubbedError) Unwrap() error { return e.cause }
 
 // scrubUserinfo removes the user name from the URL a *url.Error carries.
 // net/http masks the password there but not the user name, and a stored
 // upstream URL from before credentials were refused (SIN-116) may hold a token
-// in it. The error is copied, so the cause still unwraps.
+// in it. Any wrapper text and sentinels around the *url.Error are kept.
 func scrubUserinfo(err error) error {
 	var ue *url.Error
-	if !errors.As(err, &ue) {
+	if err == nil || !errors.As(err, &ue) {
 		return err
 	}
 	u, perr := url.Parse(ue.URL)
@@ -56,7 +69,7 @@ func scrubUserinfo(err error) error {
 		return err
 	}
 	u.User = nil
-	return &url.Error{Op: ue.Op, URL: u.String(), Err: ue.Err}
+	return &scrubbedError{text: strings.ReplaceAll(err.Error(), ue.URL, u.String()), cause: err}
 }
 
 // inBackoff reports whether a refresh of repo's documents failed recently.

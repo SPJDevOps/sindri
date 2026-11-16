@@ -64,17 +64,57 @@ func TestNoteRefresh_ASuccessEndsTheBackoffAndTheWindowExpires(t *testing.T) {
 
 // SIN-116: net/http masks a URL's password in a *url.Error but prints its user
 // name, which is where a token is often written. A stored upstream URL that
-// predates the refusal must not leak that into an error or a log line.
+// predates the refusal must not leak that into an error or a log line, on any
+// path through down(), and the wrapping around it must survive.
 func TestDown_DoesNotCarryUpstreamUserinfo(t *testing.T) {
-	cause := &url.Error{Op: "Get", URL: "https://ghp_tok3n:***@registry.example.com/v2/x", Err: errors.New("connection refused")}
-	err := down(cause)
-	if !errors.Is(err, errUpstreamDown) {
-		t.Fatalf("error is not marked as an outage: %v", err)
+	sentinel := errors.New("sentinel")
+	tests := []struct {
+		name      string
+		cause     error
+		wantIs    error
+		wantDown  bool
+		wantInTxt string
+	}{
+		{"Outage", errors.New("connection refused"), nil, true, "connection refused"},
+		{"Canceled", context.Canceled, context.Canceled, false, "canceled"},
+		{"RedirectRefused", errRedirectRefused, errRedirectRefused, false, "redirect"},
+		{"WrappedSentinel", fmt.Errorf("%w: outer text", sentinel), sentinel, true, "outer text"},
 	}
-	if strings.Contains(err.Error(), "ghp_tok3n") {
-		t.Errorf("error carries the user name: %v", err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ue := &url.Error{Op: "Get", URL: "https://ghp_tok3n:***@registry.example.com/v2/x", Err: tc.cause}
+			err := down(fmt.Errorf("wrapper text: %w", ue))
+			if strings.Contains(err.Error(), "ghp_tok3n") {
+				t.Errorf("error carries the user name: %v", err)
+			}
+			for _, want := range []string{"registry.example.com", "wrapper text", tc.wantInTxt} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error lost %q: %v", want, err)
+				}
+			}
+			if got := errors.Is(err, errUpstreamDown); got != tc.wantDown {
+				t.Errorf("errors.Is(errUpstreamDown) = %v, want %v", got, tc.wantDown)
+			}
+			if tc.wantIs != nil && !errors.Is(err, tc.wantIs) {
+				t.Errorf("sentinel %v does not survive: %v", tc.wantIs, err)
+			}
+		})
 	}
-	if !strings.Contains(err.Error(), "registry.example.com") || !strings.Contains(err.Error(), "connection refused") {
-		t.Errorf("error lost its diagnosis: %v", err)
+}
+
+func TestResolveFileURL_ErrorsDoNotEchoTheURL(t *testing.T) {
+	for _, tc := range []struct{ name, base, file string }{
+		{"BadBase", "http://alice:s3cret@exa mple.com/%zz", "x.whl"},
+		{"BadFile", "https://registry.example.com", "http://alice:s3cret@host/%zz"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ResolveFileURL(tc.base, tc.file)
+			if err == nil {
+				t.Fatal("no error")
+			}
+			if strings.Contains(err.Error(), "s3cret") || strings.Contains(err.Error(), "alice") {
+				t.Errorf("error echoes the URL: %v", err)
+			}
+		})
 	}
 }
