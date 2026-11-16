@@ -838,7 +838,7 @@ publish is scanned, and promotion is refused above a severity.
 | 11, Nov 12 | M11b re-scan ✅ | SIN-33, 35 | v1.4.0 |
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
 | 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 ✅ |
-| 14, Nov 16–22 | Notifications | SIN-117, 112 | v1.6.0 |
+| 14, Nov 16–22 | Notifications ✅ | SIN-117, 112 | v1.6.0 ✅ |
 | 15, Nov 23–29 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
 | 16–17, two weeks from the announcement | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
 
@@ -868,7 +868,7 @@ the M12 window starts with the announcement.
 Sprint 13 shipped all seven tickets as v1.5.1 on 2026-11-16, recorded under
 [v1.5.1 — Hardening](#v151--hardening-) below. Sprint 14 started the same day, Nov 16–22,
 and Sprint 15 moved to Nov 23–29. Its work is recorded under
-[v1.6.0 — Notifications](#v160--notifications) below.
+[v1.6.0 — Notifications](#v160--notifications-) below.
 
 Not scheduled: SIN-56, 58, 65, 74, and 76 from the hardening epic, kept as filler for the
 M12 window. SIN-118, an optional `format: slack` on a webhook so a notification can post
@@ -1341,7 +1341,7 @@ the 1.5.1 and 1.5.1-trivy images (amd64 and arm64), the 1.5.1 chart, and the doc
 
 ---
 
-### v1.6.0 — Notifications
+### v1.6.0 — Notifications ✅
 
 **Goal.** A re-scan finding in something approved, or a promotion, tells someone without a
 person polling, and an administrator can see what was sent. Pulled forward from M12, because
@@ -1389,7 +1389,9 @@ signature the receiver verified; with the receiver down the delivery failed afte
 the error naming only the host, and the metric and the webhook's `failing` flag followed; a
 redelivery after recovery arrived signed and cleared `failing`; SIGHUP reloaded. Neither the
 URL's path and query nor the secret appeared in `config show` or the server log. The System page
-was checked by its integration tests, not in a browser. Built, not yet released.
+was checked by its integration tests, not in a browser. CI on main and the release workflow
+passed on 35c7556, and v1.6.0 is published with binaries, the 1.6.0 and 1.6.0-trivy images
+(amd64 and arm64), the 1.6.0 chart, and the docs site.
 
 ---
 
