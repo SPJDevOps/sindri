@@ -99,7 +99,8 @@ The full documentation is at **<https://spjdevops.github.io/sindri/>**.
 So that nothing is silently missing:
 
 - **Several replicas.** Sindri runs as one replica, because upload sessions live in memory.
-- **Other formats.** Maven, and Helm's own repository format. Helm charts as OCI artifacts
+- **Other formats.** Hugging Face models and datasets (planned next), Maven, and Helm's own
+  repository format. Helm charts as OCI artifacts
   work today.
 - **OCI:** cross-repository blob mounts.
 - **Storage:** native Google Cloud Storage and Azure Blob Storage.

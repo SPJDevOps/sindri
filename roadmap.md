@@ -1368,17 +1368,21 @@ approved for that environment. Gate: a `kind` cluster refuses an unapproved imag
 it after promotion, and a promotion gated on `signature` refuses an artifact whose signature
 does not verify.
 
-**M15, a fourth protocol, chosen by demand.** Each is a new adapter on the shared core plus a
-small additive migration for its protocol and subject kind, as npm needed (ADR 24). If the
-adopters from M12 have not said which, the default is **Maven**: hosted, proxy, and virtual,
-with `maven-metadata.xml` and checksum files, because it is the reason most teams stay on
-Nexus. Two alternatives to weigh against it:
+**M15, Hugging Face as the fourth protocol.** Committed on 2026-11-16: the Hub download
+protocol for models and datasets behind `HF_ENDPOINT`, hosted, proxy, and virtual, proxying
+huggingface.co with hosted names that proxies cannot shadow. An organisation can then keep
+models on its own infrastructure, air-gapped included, behind the same lifecycle gates and
+provenance as its code, which nobody offers today. It is a new adapter on the shared core
+plus a small additive migration for its protocol and subject kind, as npm needed (ADR 24).
+Watch out for file size: a model is many gigabytes, so uploads, the proxy cache, and garbage
+collection get their first real test at that scale.
+
+**M16, a fifth protocol, chosen by demand.** If adopters have not said which, the default is
+**Maven**: hosted, proxy, and virtual, with `maven-metadata.xml` and checksum files, because
+it is the reason most teams stay on Nexus. Two alternatives to weigh against it:
 - **Go modules**: the `GOPROXY` protocol (`list`, `.info`, `.mod`, `.zip`, `@latest`), plus
   a checksum-database story so `GONOSUMDB` is not the only way to use it. Cheap, and it
   matches the audience a Go project attracts.
-- **Hugging Face**: the Hub download protocol for models and datasets behind `HF_ENDPOINT`,
-  proxying huggingface.co with hosted names that proxies cannot shadow. The bet: nobody
-  offers lifecycle gates and provenance for models.
 - **Helm's own repository format** (`index.yaml` and chart tarballs), only if OCI charts turn
   out not to be enough. Helm-over-OCI already works and is tested (v1.0.1).
 
