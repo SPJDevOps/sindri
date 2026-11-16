@@ -3,7 +3,9 @@
 package evidence_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -68,4 +70,59 @@ func jsonEqual(a, b any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
+}
+
+func TestAttach_InTxErrorRollsBackTheEvidenceRow(t *testing.T) {
+	database := testsupport.MigratedDB(t)
+	store := cas.New(memstore.New(), cas.WithReserver(db.NewBlobReserver(database, "memory")))
+	svc := evidence.New(database, store, "memory")
+
+	subject := model.NewDigest(model.AlgorithmSHA256, []byte("0123456789abcdef0123456789abcdef"))
+	if _, err := database.Queries().UpsertBlob(t.Context(), db.UpsertBlobParams{
+		Digest: subject.String(), Size: 1, StorageBackend: "memory",
+	}); err != nil {
+		t.Fatalf("UpsertBlob: %v", err)
+	}
+	if err := database.Queries().UpsertSubject(t.Context(), db.UpsertSubjectParams{
+		Digest: subject.String(), Size: 1, Kind: string(model.SubjectKindFile),
+	}); err != nil {
+		t.Fatalf("UpsertSubject: %v", err)
+	}
+
+	boom := errors.New("hook failed")
+	var seen evidence.Evidence
+	_, err := svc.Attach(t.Context(), evidence.AttachParams{
+		Subject: subject, Type: model.EvidenceType("sbom"), Body: strings.NewReader("doc"),
+		Size: -1, Actor: "system:scanner",
+		InTx: func(_ context.Context, _ *db.Queries, ev evidence.Evidence) error {
+			seen = ev
+			return boom
+		},
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("Attach error = %v, want it to wrap the hook's error", err)
+	}
+	if seen.ID == "" {
+		t.Error("hook did not receive the inserted evidence")
+	}
+	list, err := svc.List(t.Context(), subject)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("evidence rows after a failed hook = %d, want 0", len(list))
+	}
+
+	var hooked bool
+	ev, err := svc.Attach(t.Context(), evidence.AttachParams{
+		Subject: subject, Type: model.EvidenceType("sbom"), Body: strings.NewReader("doc"),
+		Size: -1, Actor: "system:scanner",
+		InTx: func(_ context.Context, q *db.Queries, ev evidence.Evidence) error { hooked = true; return nil },
+	})
+	if err != nil || !hooked {
+		t.Fatalf("Attach with a passing hook: %v (hooked=%v)", err, hooked)
+	}
+	if list, _ = svc.List(t.Context(), subject); len(list) != 1 || list[0].ID != ev.ID {
+		t.Errorf("evidence rows after a passing hook = %d, want 1", len(list))
+	}
 }

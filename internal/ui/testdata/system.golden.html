@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
+<title>t · Sindri</title>
+<link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
+<script src="/ui/static/VERSION/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="site-header">
+  <div class="container">
+    <a class="wordmark" href="/ui/">Sindri</a>
+    <nav class="nav" aria-label="Main">
+      <a href="/ui/">Repositories</a>
+      <a href="/ui/system">System</a>
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>
+    </nav>
+  </div>
+</header>
+<main>
+  <div class="container">
+    
+    
+<h1 class="page-title">System</h1>
+<p class="lead">What this server sends out. Administrators only.</p>
+
+<p class="status-block"><a class="status-line bad" href="/ui/system/notifications?state=failed"><span class="dot bad" aria-hidden="true"></span>1 webhook failing</a></p>
+
+<section class="section">
+  <h2 class="section-title">Notifications</h2>
+  
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Webhook</th><th scope="col">Events</th><th scope="col">Target</th><th scope="col">Failed deliveries</th><th scope="col">Log</th></tr></thead>
+    <tbody>
+    
+      <tr><th scope="row" class="mono">chat</th><td class="mono">finding.new, lifecycle.promoted</td><td class="mono">https://hooks.example.com</td><td><span class="dot bad" aria-hidden="true"></span>1</td><td><a href="/ui/system/notifications?webhook=chat">deliveries</a></td></tr>
+    
+    </tbody>
+  </table>
+  </div>
+  <p class="hint">Only the scheme and host of a target are shown. The path, query, and signing secret are never displayed.</p>
+  
+</section>
+
+<section class="section">
+  <h2 class="section-title">Payloads</h2>
+  <p class="hint">One example per event. Every delivery is signed; see the notifications guide.</p>
+  
+  <h3 class="mono">finding.new</h3>
+  <pre class="document">{
+  &#34;id&#34;: &#34;1042&#34;,
+  &#34;event&#34;: &#34;finding.new&#34;,
+  &#34;occurredAt&#34;: &#34;2026-11-16T10:00:00Z&#34;,
+  &#34;sindri&#34;: {&#34;url&#34;: &#34;https://sindri.example&#34;, &#34;version&#34;: &#34;1.6.0&#34;},
+  &#34;subject&#34;: {&#34;digest&#34;: &#34;sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe&#34;, &#34;repository&#34;: &#34;docker&#34;},
+  &#34;data&#34;: {
+    &#34;newVulnerabilities&#34;: [&#34;CVE-2026-0001&#34;],
+    &#34;severityCounts&#34;: {&#34;CRITICAL&#34;: 1, &#34;HIGH&#34;: 0, &#34;MEDIUM&#34;: 2, &#34;LOW&#34;: 0, &#34;UNKNOWN&#34;: 0},
+    &#34;platform&#34;: &#34;linux/amd64&#34;,
+    &#34;approvedStages&#34;: [&#34;prod&#34;],
+    &#34;evidenceId&#34;: &#34;0b8e5f1c-5c1e-4a43-9a43-2a7a8a0f3d11&#34;
+  }
+}</pre>
+  
+  <h3 class="mono">lifecycle.promoted</h3>
+  <pre class="document">{
+  &#34;id&#34;: &#34;1043&#34;,
+  &#34;event&#34;: &#34;lifecycle.promoted&#34;,
+  &#34;occurredAt&#34;: &#34;2026-11-16T10:05:00Z&#34;,
+  &#34;sindri&#34;: {&#34;url&#34;: &#34;https://sindri.example&#34;, &#34;version&#34;: &#34;1.6.0&#34;},
+  &#34;subject&#34;: {&#34;digest&#34;: &#34;sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe&#34;, &#34;repository&#34;: &#34;docker&#34;, &#34;stage&#34;: &#34;prod&#34;},
+  &#34;data&#34;: {
+    &#34;actor&#34;: &#34;user:alice&#34;,
+    &#34;reason&#34;: &#34;release 2.4&#34;,
+    &#34;eventId&#34;: 317,
+    &#34;evidenceIds&#34;: [&#34;0b8e5f1c-5c1e-4a43-9a43-2a7a8a0f3d11&#34;]
+  }
+}</pre>
+  
+</section>
+
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <span>Sindri 0.0.0-test · read-only view</span>
+    <span>Changes go through configuration and the API, never this page.</span>
+  </div>
+</footer>
+</body>
+</html>

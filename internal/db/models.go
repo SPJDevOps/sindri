@@ -245,3 +245,21 @@ type Version struct {
 	Deprecated  pgtype.Text        `json:"deprecated"`
 	PublishedAt pgtype.Timestamptz `json:"published_at"`
 }
+
+type WebhookDelivery struct {
+	ID            int64              `json:"id"`
+	Webhook       string             `json:"webhook"`
+	Event         string             `json:"event"`
+	SubjectDigest string             `json:"subject_digest"`
+	Repository    string             `json:"repository"`
+	Payload       []byte             `json:"payload"`
+	DedupeKey     string             `json:"dedupe_key"`
+	JobID         pgtype.Int8        `json:"job_id"`
+	State         string             `json:"state"`
+	Attempts      int32              `json:"attempts"`
+	LastStatus    pgtype.Int4        `json:"last_status"`
+	LastError     pgtype.Text        `json:"last_error"`
+	CreatedAt     time.Time          `json:"created_at"`
+	DeliveredAt   pgtype.Timestamptz `json:"delivered_at"`
+	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
+}

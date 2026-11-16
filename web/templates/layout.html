@@ -16,6 +16,7 @@
     <a class="wordmark" href="/ui/">Sindri</a>
     <nav class="nav" aria-label="Main">
       <a href="/ui/">Repositories</a>
+      {{if .Admin}}<a href="/ui/system">System</a>{{end}}
       {{if .Who}}<span class="who" title="Signed in as {{.Who}}">{{.Who}}</span>{{end}}
       {{if .SignOut}}<button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>{{end}}
     </nav>

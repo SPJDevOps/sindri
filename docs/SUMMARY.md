@@ -9,6 +9,7 @@
 - [Using npm, pnpm, and yarn](clients/npm.md)
 - [Signatures and SBOMs with cosign and oras](clients/referrers.md)
 - [Scanning and the severity gate](scanning.md)
+- [Notifications](notifications.md)
 - [Configuration reference](configuration.md)
 - [Upgrading](upgrading.md)
 
@@ -61,3 +62,4 @@
   - [31. Re-scanning approved subjects, and what a new finding does](adr/0031-rescan-approved-subjects.md)
   - [32. The OCI referrers API: a view over placed manifests](adr/0032-oci-referrers.md)
   - [33. What is open stays open, paid work is added beside it, and the CNCF is a goal](adr/0033-open-source-boundary-and-cncf.md)
+  - [34. Webhook notifications on a new finding and on a promotion](adr/0034-webhook-notifications.md)

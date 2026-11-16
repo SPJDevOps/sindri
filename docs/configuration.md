@@ -46,7 +46,7 @@ it; where it does not, the key is unset.
 
 These keys configure the process. They have no manifest form: manifests describe
 repositories and lifecycle, so `listen`, `storage`, `database`, `log`, `auth`, `worker`,
-`scanning`, `credentials`, and `publicUrl` appear in `sindri.yaml` only.
+`scanning`, `notifications`, `credentials`, and `publicUrl` appear in `sindri.yaml` only.
 
 ### `listen`
 
@@ -261,6 +261,26 @@ Short form: `scanning: true` is the same as `scanning: {enabled: true}`.
 | `maxUnpackedBytes` | integer | The most bytes unpacked from one wheel or tarball while scanning it, so that an archive bomb cannot fill the disk. At least 1048576 (1 MiB). | `1073741824` |
 | `rescanInterval` | duration | How often every approved subject is scanned again, so a vulnerability published after approval is noticed (ADR 31). Default `24h`; `0s` disables the schedule, and the on-demand re-scan route still works. Otherwise at least `1m`. | `24h` |
 <!-- END GENERATED: scanning -->
+
+### `notifications`
+
+Webhooks tell a receiver about a new finding on an approved artifact and about a
+promotion. They are server-level settings with no manifest form. Each delivery is signed
+and goes through the job queue. See [ADR 34](adr/0034-webhook-notifications.md).
+
+<!-- BEGIN GENERATED: notifications -->
+<!-- Generated from internal/config by `make reference`. Edit the struct comments, not this table. -->
+
+| Key | Type | Meaning | Default |
+|---|---|---|---|
+| `webhooks[].name` | string | The webhook's name, which keys its delivery log. Lower-case letters, digits, and hyphens, at most 63 characters, and unique in the list. | unset |
+| `webhooks[].url` | string | Where deliveries are POSTed. https, or http for a loopback address, and without credentials in the URL. `config show`, the API, and the UI print only its scheme and host, because the path often carries a token. | unset |
+| `webhooks[].secret` | string | The key that signs each delivery with HMAC-SHA256. At least 32 bytes; use `${VAR}` to keep it out of the file. Redacted by `config show`. | unset |
+| `webhooks[].events` | list of strings | The events to send: `finding.new`, `lifecycle.promoted`, or both. At least one, with no repeats. | unset |
+| `webhooks[].repositories` | list of strings | Send only events for subjects in these repositories. Empty means every repository. | unset |
+| `webhooks[].timeout` | duration | How long one delivery attempt may take before it is cancelled and retried. More than 0 and at most `1m`. | `10s` |
+| `maxAttempts` | integer | How many times one delivery is attempted before it is recorded as failed, with the queue's exponential backoff between attempts. Between 1 and 50. | `8` |
+<!-- END GENERATED: notifications -->
 
 ## Repositories, lifecycle, and defaults
 

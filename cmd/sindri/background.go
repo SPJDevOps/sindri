@@ -12,6 +12,7 @@ import (
 
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/gc"
+	"github.com/spj/sindri/internal/notify"
 	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/scan"
 	"github.com/spj/sindri/internal/scanjob"
@@ -50,13 +51,23 @@ func (a *app) handlers(cfg config.Worker) map[string]worker.Handler {
 			if err != nil {
 				return nil, fmt.Errorf("purging staged uploads: %w", err)
 			}
+			// Before the jobs go: a delivery whose job ended without
+			// recording an outcome would otherwise read pending forever.
+			deliveries, err := notify.SweepOrphaned(ctx, a.db.Queries())
+			if err != nil {
+				return nil, err
+			}
 			jobs, err := a.queue.DeleteFinished(ctx, finishedJobRetention)
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(map[string]int64{"uploads": int64(uploads), "jobs": jobs})
+			return json.Marshal(map[string]int64{"uploads": int64(uploads), "jobs": jobs, "deliveries": deliveries})
 		},
 	}
+	// Webhook deliveries have a lane of their own (workerLanes): a slow
+	// receiver must not hold up gc, retention, or scans, and none of them may
+	// hold up a delivery.
+	h[notify.JobKind] = a.webhookMetrics.wrap(a.deliverer.Handle)
 	// Present only when scanning is enabled, so a worker without scanning
 	// never claims a scan job it cannot run.
 	if a.scanner != nil {
@@ -133,41 +144,59 @@ func (a *app) startBackground(parent context.Context, cfg *config.Config, bo bui
 
 // workerLanes splits opts into worker loops with disjoint handler sets, so a
 // scan that runs for an hour cannot hold up gc, retention, or uploads purging
-// (SIN-81). Scan kinds get their own loop, with its own lease owner; every
-// other kind stays in the first. Each schedule goes with its handler, so a
-// schedule is enqueued by one loop only (the queue's dedupe key would admit
-// one anyway). With no scan handler registered there is one loop, unchanged.
-// The lanes share a queue table, which keeps this within ADR 20.
+// (SIN-81), and a slow webhook receiver cannot hold up any of them, or be held
+// up by them. Scan kinds get one loop and webhook deliveries another, each with
+// its own lease owner; every other kind stays in the first. Each schedule goes
+// with its handler, so a schedule is enqueued by one loop only (the queue's
+// dedupe key would admit one anyway). A loop with no handler is not started,
+// and the first loop that is started keeps the original owner. The lanes share
+// a queue table, which keeps this within ADR 20.
 func workerLanes(opts worker.Options) []worker.Options {
-	scanLane := opts
-	scanLane.Owner = opts.Owner + "-scan"
-	scanLane.Handlers = map[string]worker.Handler{}
-	scanLane.Schedules = nil
-	rest := opts
-	rest.Handlers = map[string]worker.Handler{}
-	rest.Schedules = nil
-	for kind, h := range opts.Handlers {
-		if kind == scanjob.JobKind || kind == scanjob.RescanJobKind {
-			scanLane.Handlers[kind] = h
-		} else {
-			rest.Handlers[kind] = h
+	// laneOf names the loop a kind runs in; "" is the general one.
+	laneOf := func(kind string) string {
+		switch kind {
+		case scanjob.JobKind, scanjob.RescanJobKind:
+			return "-scan"
+		case notify.JobKind:
+			return "-notify"
+		default:
+			return ""
 		}
+	}
+	byLane := map[string]*worker.Options{}
+	for _, suffix := range []string{"", "-scan", "-notify"} {
+		l := opts
+		l.Owner = opts.Owner + suffix
+		l.Handlers = map[string]worker.Handler{}
+		l.Schedules = nil
+		byLane[suffix] = &l
+	}
+	for kind, h := range opts.Handlers {
+		byLane[laneOf(kind)].Handlers[kind] = h
 	}
 	for _, s := range opts.Schedules {
-		if _, ok := scanLane.Handlers[s.Kind]; ok {
-			scanLane.Schedules = append(scanLane.Schedules, s)
+		l := byLane[laneOf(s.Kind)]
+		if _, ok := l.Handlers[s.Kind]; ok {
+			l.Schedules = append(l.Schedules, s)
 		} else {
-			rest.Schedules = append(rest.Schedules, s)
+			// A schedule without a handler would make worker.Run fail; it
+			// stays with the general loop, as it did before lanes existed.
+			byLane[""].Schedules = append(byLane[""].Schedules, s)
 		}
 	}
-	switch {
-	case len(scanLane.Handlers) == 0:
-		return []worker.Options{opts}
-	case len(rest.Handlers) == 0:
-		scanLane.Owner = opts.Owner
-		return []worker.Options{scanLane}
+	var lanes []worker.Options
+	for _, suffix := range []string{"", "-scan", "-notify"} {
+		if l := byLane[suffix]; len(l.Handlers) > 0 {
+			lanes = append(lanes, *l)
+		}
 	}
-	return []worker.Options{rest, scanLane}
+	switch len(lanes) {
+	case 0:
+		return []worker.Options{opts}
+	default:
+		lanes[0].Owner = opts.Owner
+	}
+	return lanes
 }
 
 // expireUploads aborts upload sessions idle longer than maxIdle, checking a

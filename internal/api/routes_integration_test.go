@@ -21,6 +21,7 @@ import (
 	"github.com/spj/sindri/internal/gc"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/notify"
 	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/reconcile"
 	"github.com/spj/sindri/internal/registry"
@@ -98,6 +99,11 @@ func TestAPI_EveryRouteHasAnAuthorizationCase(t *testing.T) {
 		"GET /gc/candidates": {path: "/gc/candidates", as: "alice", status: http.StatusForbidden},
 		"POST /gc":           {path: "/gc", body: `{}`, as: "alice", status: http.StatusForbidden},
 		"GET /jobs/{id}":     {path: "/jobs/1", as: "alice", status: http.StatusForbidden},
+
+		"GET /notifications/webhooks":                   {path: "/notifications/webhooks", as: "alice", status: http.StatusForbidden},
+		"GET /notifications/deliveries":                 {path: "/notifications/deliveries", as: "alice", status: http.StatusForbidden},
+		"GET /notifications/deliveries/{id}":            {path: "/notifications/deliveries/1", as: "alice", status: http.StatusForbidden},
+		"POST /notifications/deliveries/{id}/redeliver": {path: "/notifications/deliveries/1/redeliver", as: "alice", status: http.StatusForbidden},
 	}
 
 	var routes []string
@@ -194,6 +200,8 @@ func newRouteEnvScanning(t *testing.T, scanEnabled bool) *routeEnv {
 		GC:          collector,
 		Queue:       queue.New(database),
 		ScanEnabled: scanEnabled,
+		Notifier:    notify.New(notify.Options{}),
+		NotifyDB:    database,
 	})
 	routes, ok := handler.(chi.Routes)
 	if !ok {

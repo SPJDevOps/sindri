@@ -161,8 +161,12 @@ func (a *app) reloadLoop(ctx context.Context, path string, running *config.Confi
 		// them, and a reload that adds a secret and a proxy using it is one
 		// change.
 		a.credentials.Swap(next.Credentials)
+		a.notifier.Swap(webhooksFromConfig(next.Notifications))
+		a.notifier.SetMaxAttempts(next.Notifications.MaxAttempts)
 		if err := a.reconcileFile(ctx, next); err != nil {
 			a.credentials.Swap(running.Credentials)
+			a.notifier.Swap(webhooksFromConfig(running.Notifications))
+			a.notifier.SetMaxAttempts(running.Notifications.MaxAttempts)
 			a.logger.ErrorContext(ctx, "reload failed; keeping the running configuration", "error", err)
 			continue
 		}

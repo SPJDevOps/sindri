@@ -20,6 +20,7 @@ import (
 
 	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/notify"
 )
 
 var (
@@ -139,7 +140,14 @@ const (
 type Service struct {
 	pool *pgxpool.Pool
 	q    *db.Queries
+	// notifier is optional; nil sends nothing.
+	notifier *notify.Notifier
 }
+
+// SetNotifier makes every promotion record its lifecycle.promoted webhook
+// deliveries in the promotion's own transaction (ADR 34). Call it before the
+// service takes requests. A nil notifier turns notifications off.
+func (s *Service) SetNotifier(n *notify.Notifier) { s.notifier = n }
 
 // New wires a Service onto the shared database.
 func New(database *db.DB) *Service {
@@ -242,6 +250,23 @@ func (s *Service) change(ctx context.Context, p ChangeParams, action Action) (Ev
 	})
 	if err != nil {
 		return Event{}, fmt.Errorf("appending %s event for %s: %w", action, p.Digest, err)
+	}
+	if action == ActionApprove && s.notifier != nil {
+		// Same transaction: a promotion commits with its notification rows or
+		// not at all, so a crash cannot lose the event (ADR 34).
+		if _, err := s.notifier.EmitTx(ctx, q, notify.Event{
+			Digest:     p.Digest,
+			Repository: repo.Name,
+			Stage:      stage.Name,
+			DedupeKey:  fmt.Sprintf("promoted:%d", row.ID),
+			OccurredAt: row.At,
+			Data: notify.PromotedData{
+				Actor: row.Actor, Reason: row.Reason, EventID: row.ID,
+				EvidenceIDs: uuidStrings(row.EvidenceIds),
+			},
+		}); err != nil {
+			return Event{}, fmt.Errorf("recording promotion notifications for %s: %w", p.Digest, err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Event{}, fmt.Errorf("committing %s: %w", action, err)

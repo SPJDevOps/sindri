@@ -105,6 +105,16 @@ var statedDefaultChecks = map[string]func(t *testing.T){
 			t.Errorf("an S3 storage section without endpoint gets %q, the page says unset", c.Storage.Endpoint)
 		}
 	},
+	// Checked by TestParse_NotificationsDefaults.
+	"Webhook.Timeout": func(t *testing.T) {
+		c, err := Parse([]byte("notifications: {webhooks: [{name: a, url: 'https://h.example', secret: '"+strings.Repeat("s", 32)+"', events: [finding.new]}]}\n"), "n.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.Notifications.Webhooks[0].Timeout.Duration(); got != 10*time.Second {
+			t.Errorf("a webhook without timeout gets %s, the page says 10s", got)
+		}
+	},
 	// Applied by internal/auth when the browser login starts; checked there by
 	// TestSession_LoginRequestsOpenIDProfileAndEmailByDefault.
 	"OIDC.Scopes": func(*testing.T) {},
@@ -295,6 +305,9 @@ func structRows(prefix string, t reflect.Type, v reflect.Value, docs map[string]
 		switch {
 		case f.Type == durationType:
 			out = append(out, leafRow(prefix+key, goField, f.Type, fv, docs))
+		case f.Type.Kind() == reflect.Slice && f.Type.Elem().Kind() == reflect.Struct:
+			// A list of mappings, documented as `list[].key`.
+			out = append(out, structRows(prefix+key+"[].", f.Type.Elem(), reflect.New(f.Type.Elem()).Elem(), docs)...)
 		case f.Type.Kind() == reflect.Struct,
 			f.Type.Kind() == reflect.Pointer && f.Type.Elem().Kind() == reflect.Struct,
 			f.Type.Kind() == reflect.Map:

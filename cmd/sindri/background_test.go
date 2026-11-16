@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/gc"
+	"github.com/spj/sindri/internal/notify"
 	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/scanjob"
 	"github.com/spj/sindri/internal/worker"
@@ -38,11 +40,11 @@ func TestSchedules_RescanOnlyWhenScanningIsOnAndTheIntervalIsPositive(t *testing
 	}
 }
 
-func TestWorkerLanes_ScanKindsRunInTheirOwnLoop(t *testing.T) {
+func TestWorkerLanes_ScansAndDeliveriesRunInTheirOwnLoops(t *testing.T) {
 	noop := func(context.Context, queue.Job) (json.RawMessage, error) { return nil, nil }
 	handlers := map[string]worker.Handler{
 		gc.JobKind: noop, jobEvictProxyCache: noop, jobPurgeUploads: noop,
-		scanjob.JobKind: noop, scanjob.RescanJobKind: noop,
+		scanjob.JobKind: noop, scanjob.RescanJobKind: noop, notify.JobKind: noop,
 	}
 	scheds := []worker.Schedule{
 		{Kind: jobEvictProxyCache, Interval: time.Hour},
@@ -52,8 +54,8 @@ func TestWorkerLanes_ScanKindsRunInTheirOwnLoop(t *testing.T) {
 	base := worker.Options{Owner: "host/1/ab", Handlers: handlers, Schedules: scheds}
 
 	lanes := workerLanes(base)
-	if len(lanes) != 2 {
-		t.Fatalf("lanes = %d, want 2", len(lanes))
+	if len(lanes) != 3 {
+		t.Fatalf("lanes = %d, want 3", len(lanes))
 	}
 	owners := map[string]bool{}
 	seenHandlers := map[string]int{}
@@ -70,8 +72,8 @@ func TestWorkerLanes_ScanKindsRunInTheirOwnLoop(t *testing.T) {
 			}
 		}
 	}
-	if len(owners) != 2 {
-		t.Errorf("owners = %v, want two distinct", owners)
+	if len(owners) != 3 {
+		t.Errorf("owners = %v, want three distinct", owners)
 	}
 	for k := range handlers {
 		if seenHandlers[k] != 1 {
@@ -86,14 +88,35 @@ func TestWorkerLanes_ScanKindsRunInTheirOwnLoop(t *testing.T) {
 	for _, l := range lanes {
 		_, scans := l.Handlers[scanjob.JobKind]
 		_, gcs := l.Handlers[gc.JobKind]
-		if scans == gcs {
-			t.Errorf("lane %s mixes scan and non-scan kinds", l.Owner)
+		_, hooks := l.Handlers[notify.JobKind]
+		if (scans && (gcs || hooks)) || (hooks && gcs) {
+			t.Errorf("lane %s mixes scan, delivery, and housekeeping kinds", l.Owner)
 		}
 	}
+}
 
-	delete(handlers, scanjob.JobKind)
-	delete(handlers, scanjob.RescanJobKind)
-	if got := workerLanes(worker.Options{Owner: "o", Handlers: handlers}); len(got) != 1 || got[0].Owner != "o" {
-		t.Errorf("without scanning: %d lanes, want one with the original owner", len(got))
+func TestWorkerLanes_AbsentKindsMakeNoEmptyLane(t *testing.T) {
+	noop := func(context.Context, queue.Job) (json.RawMessage, error) { return nil, nil }
+	tests := []struct {
+		name       string
+		handlers   map[string]worker.Handler
+		wantLanes  int
+		wantOwners []string
+	}{
+		{name: "WithoutScanningDeliveriesStillHaveALane", handlers: map[string]worker.Handler{gc.JobKind: noop, notify.JobKind: noop}, wantLanes: 2, wantOwners: []string{"o", "o-notify"}},
+		{name: "OnlyHousekeepingIsOneLane", handlers: map[string]worker.Handler{gc.JobKind: noop}, wantLanes: 1, wantOwners: []string{"o"}},
+		{name: "OnlyDeliveriesKeepTheOriginalOwner", handlers: map[string]worker.Handler{notify.JobKind: noop}, wantLanes: 1, wantOwners: []string{"o"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := workerLanes(worker.Options{Owner: "o", Handlers: tt.handlers})
+			var owners []string
+			for _, l := range got {
+				owners = append(owners, l.Owner)
+			}
+			if len(got) != tt.wantLanes || fmt.Sprint(owners) != fmt.Sprint(tt.wantOwners) {
+				t.Errorf("lanes owned by %v, want %v", owners, tt.wantOwners)
+			}
+		})
 	}
 }

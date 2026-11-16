@@ -74,6 +74,17 @@
 </section>
 {{end}}
 
+{{if .Deliveries}}
+<section class="section">
+  <h2 class="section-title">Notifications</h2>
+  <div class="rows">
+  {{range .Deliveries}}
+    <div class="row"><span class="primary"><span class="dot {{.Dot}}" aria-hidden="true"></span>Notification to <span class="mono">{{.Webhook}}</span>: <span class="mono">{{.Event}}</span>, {{.State}}{{if .Status}} ({{.Status}}){{end}}</span><span class="secondary" title="{{when .At}}">{{ago .At}}</span></div>
+  {{end}}
+  </div>
+</section>
+{{end}}
+
 <section class="section">
   <h2 class="section-title">Provenance</h2>
   <div class="rows">

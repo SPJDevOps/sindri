@@ -297,6 +297,10 @@ while scanning is on. An alert for the one that matters:
 
 The [operations guide](operations.md#metrics-and-alerts) carries it in its starting set.
 
+A gauge tells whoever looks at it. To have Sindri tell someone the moment a re-scan finds
+something new in an approved artifact, configure a `finding.new` webhook; see
+[Notifications](notifications.md).
+
 ## Size the cache
 
 Trivy keeps its vulnerability database in `scanning.cacheDir`. The `-trivy` image sets

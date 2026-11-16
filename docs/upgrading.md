@@ -262,6 +262,17 @@ differently:
   `PUT /api/v1/repositories/{name}/blocked/{digest}`; `DELETE` unblocks it, and `GET
   .../blocked` lists them.
 
+## Behaviour changes in 1.6
+
+- **Webhook notifications are new.** A `notifications:` section configures webhooks for
+  `finding.new` and `lifecycle.promoted`. Nothing is sent until you add one; see
+  [Notifications](notifications.md).
+- **Migration 00015 is additive.** It adds the `webhook_deliveries` table. A rollback to
+  1.5.1 needs no database restore; the older binary ignores the table.
+- **Administrators get a System page** in the UI, linked from the header, with the webhooks
+  and their delivery log. Other users do not see the link, and the page answers 404 for
+  them.
+
 ## Rolling back
 
 Every migration stays backward compatible for one release, so the previous
@@ -286,6 +297,11 @@ on the referrers route, so clients go back to the `sha256-<digest>` tags, which 
 written while 1.5 ran: attach signatures again if you stay rolled back. Its garbage
 collector also collects untagged referrers after the grace period again. The
 `manifest_subjects` table stays, unused.
+
+Rolling back from 1.6 to 1.5.1 needs the configuration file changed first. The 1.5.1
+binary does not know `notifications:`, so it refuses to start on a file that has it.
+Remove the section before starting it. Deliveries still queued are left in the queue table
+under a job kind 1.5.1 does not run, and are sent if you upgrade again.
 
 Rolling back further than one release is not supported without restoring the
 backup taken before the upgrade.

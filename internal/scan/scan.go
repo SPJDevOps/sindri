@@ -20,6 +20,7 @@ import (
 	"github.com/spj/sindri/internal/cas"
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/notify"
 )
 
 // Media types of the two documents one Trivy run produces.
@@ -103,10 +104,20 @@ type Scanner struct {
 	// use it to steer the stub; nothing in production sets it.
 	extraEnv []string
 
+	// notifier is optional; nil sends no finding.new webhooks.
+	notifier *notify.Notifier
+
 	versionMu sync.Mutex
 	// scannerVersion is the last Trivy version successfully read. The
 	// database timestamp is never cached: it is read for every job.
 	scannerVersion string
+}
+
+// SetNotifier makes the scanner send finding.new webhooks (ADR 34) for a new
+// vulnerability on a subject approved at some stage. Call it before the first
+// job runs. A nil notifier turns them off.
+func (s *Scanner) SetNotifier(n *notify.Notifier) {
+	s.notifier = n
 }
 
 // New returns a Scanner reading subject bytes from store and attaching

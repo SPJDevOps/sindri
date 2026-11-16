@@ -838,8 +838,8 @@ publish is scanned, and promotion is refused above a severity.
 | 11, Nov 12 | M11b re-scan ✅ | SIN-33, 35 | v1.4.0 |
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
 | 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 ✅ |
-| 14, from Nov 17 | Notifications | SIN-117, 112 | v1.6.0 |
-| 15, after Sprint 14 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
+| 14, Nov 16–22 | Notifications | SIN-117, 112 | v1.6.0 |
+| 15, Nov 23–29 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
 | 16–17, two weeks from the announcement | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
@@ -866,10 +866,14 @@ somebody are what they will judge. Both sprints were pulled forward to start on 
 the M12 window starts with the announcement.
 
 Sprint 13 shipped all seven tickets as v1.5.1 on 2026-11-16, recorded under
-[v1.5.1 — Hardening](#v151--hardening-) below.
+[v1.5.1 — Hardening](#v151--hardening-) below. Sprint 14 started the same day, Nov 16–22,
+and Sprint 15 moved to Nov 23–29. Its work is recorded under
+[v1.6.0 — Notifications](#v160--notifications) below.
 
 Not scheduled: SIN-56, 58, 65, 74, and 76 from the hardening epic, kept as filler for the
-M12 window. SIN-80 shipped in Sprint 10, SIN-83 and SIN-86 (the gate scripts' leaked
+M12 window. SIN-118, an optional `format: slack` on a webhook so a notification can post
+straight to a Slack incoming webhook, waits for what adopters ask for in that window; it
+needs its own ADR, because ADR 34 left Slack formatting out. SIN-80 shipped in Sprint 10, SIN-83 and SIN-86 (the gate scripts' leaked
 Docker volumes) in Sprint 12, and SIN-73, 75, 81, 82, 84, 85 and 116 shipped in Sprint 13 as v1.5.1.
 
 ---
@@ -1334,6 +1338,58 @@ online the version check and telemetry are skipped. The SIN-73 block is covered 
 tests against real Postgres and a fake upstream; it was not walked by hand with `docker pull`.
 CI on main and the release workflow passed on 54dc0e8, and v1.5.1 is published with binaries,
 the 1.5.1 and 1.5.1-trivy images (amd64 and arm64), the 1.5.1 chart, and the docs site.
+
+---
+
+### v1.6.0 — Notifications
+
+**Goal.** A re-scan finding in something approved, or a promotion, tells someone without a
+person polling, and an administrator can see what was sent. Pulled forward from M12, because
+a re-scan that finds a CVE in production and tells nobody is the weakest point of the
+security claim. Ships as a minor release: it adds a configuration section, routes, a page,
+and metrics.
+
+**Scope.**
+- [x] ADR 34: two events, `finding.new` (new findings on an approved subject) and
+  `lifecycle.promoted`; a signed JSON envelope (HMAC-SHA256 over timestamp and body);
+  delivery through the queue table; a server-level `notifications:` section (SIN-117)
+- [x] Migration 00015 adds `webhook_deliveries`. Each event inserts its delivery rows and
+  `deliver_webhook` jobs in the transaction of the change that caused it: the promotion's
+  ledger row, or the scan evidence row. A retried scan cannot send a finding twice (SIN-117)
+- [x] 2xx is delivered; 408, 429, 5xx and network errors retry with backoff up to
+  `notifications.maxAttempts`; anything else, a redirect included, fails at once. Errors
+  and logs name the webhook and host only (SIN-117)
+- [x] Admin API: list webhooks and deliveries, read one delivery, redeliver;
+  `sindri_webhook_deliveries_total{result}` and `sindri_webhook_delivery_duration_seconds`
+  (SIN-117)
+- [x] An admin-only System page with a failing-webhook status line, the webhooks (scheme and
+  host only), and the delivery log; an artifact page shows administrators the notifications
+  sent about it (SIN-112, the first slice of SIN-107)
+- [x] `docs/notifications.md`, with signature verification in shell and Go
+
+**Out of scope.** Revoke, publish, and first-scan events; email, Slack formatting, and
+per-user subscriptions; per-repository webhooks in manifests; the rest of the System page
+(queue, scanner, garbage collection, storage), which stays SIN-107.
+
+**Gate.**
+```bash
+make ci
+make test-integration        # includes the TestNotifications_* gate tests through serve
+go test -tags integration -run 'TestNotifications_|TestAPI_EveryRouteHasAnAuthorizationCase|TestUI_EveryRouteHasAnAuthorizationCase' ./...
+# by hand: make run, a local receiver, promote an artifact, check the signature, open /system
+git tag v1.6.0 && git push origin v1.6.0   # the release workflow is green
+```
+
+**Gate run, 2026-11-16.** On the branch: `make ci` and `make test-integration` passed, including
+the `TestNotifications_*` gate tests through `serve` (a promotion and a re-scan finding each
+deliver one signed webhook; a finding is sent once per approving repository; a receiver that is
+down gets retries and then a recorded failure; redelivery) and both route walks. Walked by hand
+against the development stack with a separate receiver: a promotion delivered one webhook whose
+signature the receiver verified; with the receiver down the delivery failed after its attempts,
+the error naming only the host, and the metric and the webhook's `failing` flag followed; a
+redelivery after recovery arrived signed and cleared `failing`; SIGHUP reloaded. Neither the
+URL's path and query nor the secret appeared in `config show` or the server log. The System page
+was checked by its integration tests, not in a browser. Built, not yet released.
 
 ---
 

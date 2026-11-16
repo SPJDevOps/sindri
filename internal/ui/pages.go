@@ -379,6 +379,8 @@ type artifactPage struct {
 	IsIndex     bool
 	Children    []childRow
 	Document    string
+	// Deliveries are the webhook deliveries about this digest, for administrators.
+	Deliveries []deliveryRow
 }
 
 // artifactPage shows one digest as placed in one repository: its identity,
@@ -428,6 +430,10 @@ func (h *handler) artifactPage(w http.ResponseWriter, r *http.Request, repo mode
 
 	if repo.Protocol == model.ProtocolOCI && data.Size <= maxDocument {
 		h.manifest(r, &data, repo.Name, image, digest)
+	}
+	if data.Deliveries, err = h.artifactDeliveries(r, digest); err != nil {
+		h.fail(w, r, err)
+		return
 	}
 	h.render(w, r, "artifact", "", http.StatusOK, data)
 }
