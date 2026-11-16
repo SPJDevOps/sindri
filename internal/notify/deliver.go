@@ -181,6 +181,11 @@ func (d *Deliverer) handle(ctx context.Context, id int64) (json.RawMessage, erro
 		return nil, ctx.Err()
 	}
 
+	// The receiver has answered, so the outcome is recorded even if the
+	// worker is stopping: a 2xx that is not written down would be sent again.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
 	outcome := Decide(status, reqErr)
 	var failure error
 	switch {

@@ -3,6 +3,7 @@
 package notify_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -385,6 +386,41 @@ func TestHandle_DatabaseErrorOnTheLastAttemptStillFailsTheDelivery(t *testing.T)
 				t.Errorf("state = %q, want %q", row.State, tc.wantState)
 			}
 		})
+	}
+}
+
+// cancelAfterResponse cancels a context once the receiver has answered, as a
+// shutdown arriving between the POST and the bookkeeping would.
+type cancelAfterResponse struct {
+	next   http.RoundTripper
+	cancel func()
+}
+
+func (c cancelAfterResponse) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := c.next.RoundTrip(r)
+	c.cancel()
+	return resp, err
+}
+
+func TestHandle_AnAcceptedDeliveryIsRecordedEvenWhileShuttingDown(t *testing.T) {
+	rcv := newReceiver(t, 200)
+	n, _, database, job, id := setup(t, hook(rcv.srv.URL))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	d := notify.NewDeliverer(notify.DelivererOptions{
+		Notifier: n, DB: database,
+		Client: &http.Client{Transport: cancelAfterResponse{next: http.DefaultTransport, cancel: cancel}},
+	})
+
+	if _, err := d.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	row, err := database.Queries().GetWebhookDelivery(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.State != "delivered" || row.Attempts != 1 {
+		t.Errorf("row = %+v, want delivered after 1 attempt", row)
 	}
 }
 
