@@ -21,6 +21,7 @@ import (
 	"github.com/spj/sindri/internal/gc"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/notify"
 	"github.com/spj/sindri/internal/proto/npm"
 	"github.com/spj/sindri/internal/proto/oci"
 	"github.com/spj/sindri/internal/proto/pypi"
@@ -33,6 +34,7 @@ import (
 	"github.com/spj/sindri/internal/server"
 	"github.com/spj/sindri/internal/storage"
 	"github.com/spj/sindri/internal/ui"
+	"github.com/spj/sindri/internal/version"
 	"github.com/spj/sindri/internal/worker"
 )
 
@@ -54,6 +56,11 @@ type app struct {
 	// scanner is nil unless scanning is enabled.
 	scanner     *scan.Scanner
 	scanMetrics *scanMetrics
+	// notifier holds the webhook set; reload swaps it. deliverer runs the
+	// deliver_webhook jobs.
+	notifier       *notify.Notifier
+	deliverer      *notify.Deliverer
+	webhookMetrics *webhookMetrics
 }
 
 // buildOptions carries what differs between `serve` and a test.
@@ -73,6 +80,9 @@ type buildOptions struct {
 	// ExtraHandlers adds job kinds to the worker; tests use it to hold a
 	// job running while the server stops.
 	ExtraHandlers map[string]worker.Handler
+	// WebhookClient sends webhook deliveries; tests pass the receiver's.
+	// Redirects are never followed whatever it says.
+	WebhookClient *http.Client
 }
 
 // build migrates the database and wires every component. close releases the
@@ -121,6 +131,20 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		return nil, nil, err
 	}
 	creds := config.NewCredentialStore(cfg.Credentials)
+	notifier := notify.New(notify.Options{
+		Webhooks:    notify.FromConfig(cfg.Notifications),
+		MaxAttempts: cfg.Notifications.MaxAttempts,
+		PublicURL:   cfg.PublicURL,
+		Version:     version.Version,
+	})
+	webhookMx, err := newWebhookMetrics(metricsReg)
+	if err != nil {
+		database.Close()
+		return nil, nil, err
+	}
+	deliverer := notify.NewDeliverer(notify.DelivererOptions{
+		Notifier: notifier, DB: database, Client: bo.WebhookClient, Logger: logger,
+	})
 
 	var scanner *scan.Scanner
 	var scanMx *scanMetrics
@@ -136,6 +160,9 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 			}
 		}
 		reg.SetScanOnPublish(true)
+	}
+	if scanner != nil {
+		scanner.SetNotifier(notifier, database)
 	}
 
 	remoteOpts := remote.Options{Registry: reg, Logger: logger, Credentials: creds}
@@ -181,6 +208,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 	})
 
 	lifecycleSvc := lifecycle.New(database)
+	lifecycleSvc.SetNotifier(notifier)
 	evidenceSvc := evidence.New(database, casStore, string(cfg.Storage.Backend))
 	signIn := cfg.Auth.OIDC != nil && cfg.Auth.OIDC.RedirectURL != ""
 	uiHandler, err := ui.Handler(ui.Options{
@@ -208,6 +236,8 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		GC:          collector,
 		Queue:       jobs,
 		ScanEnabled: cfg.Scanning.Enabled,
+		Notifier:    notifier,
+		NotifyDB:    database,
 	})
 	ociHandler := oci.Handler(oci.Options{
 		Resolver: resolver,
@@ -268,6 +298,10 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		collector:   collector,
 		scanner:     scanner,
 		scanMetrics: scanMx,
+
+		notifier:       notifier,
+		deliverer:      deliverer,
+		webhookMetrics: webhookMx,
 	}, database.Close, nil
 }
 

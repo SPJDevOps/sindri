@@ -104,6 +104,8 @@ internet. Sindri's own series:
 | `sindri_queue_jobs` | Background jobs by `state`: `queued`, `running`, `failed` |
 | `sindri_scans_total` | Scan job attempts by `result`: `succeeded`, `failed`, or `skipped` (nothing scannable). Present with value 0 only when scanning is enabled |
 | `sindri_scan_duration_seconds` | Duration of scan job attempts, in seconds |
+| `sindri_webhook_deliveries_total` | Webhook delivery attempts by `result`: `delivered`, `retried` (it will be tried again), or `failed` (no attempts left, or the receiver refused it for good). Always present |
+| `sindri_webhook_delivery_duration_seconds` | Duration of webhook delivery attempts, in seconds |
 | `sindri_approved_findings` | Approved subjects whose newest Sindri scan lists at least one finding of a `severity` (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `UNKNOWN`, all always present). Present only when scanning is enabled |
 | `sindri_build_info` | The running `version` and `commit`, always 1 |
 
@@ -145,6 +147,11 @@ groups:
       - alert: SindriApprovedCriticalFinding
         expr: sindri_approved_findings{severity="CRITICAL"} > 0
         for: 1h
+        labels: {severity: warning}
+      # A webhook delivery ran out of attempts, so a receiver missed an event.
+      # The delivery log shows which one; an administrator can redeliver it.
+      - alert: SindriWebhookDeliveryFailed
+        expr: increase(sindri_webhook_deliveries_total{result="failed"}[1h]) > 0
         labels: {severity: warning}
 ```
 <!-- /ops:alerts -->

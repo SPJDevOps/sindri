@@ -12,6 +12,7 @@ import (
 
 	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/gc"
+	"github.com/spj/sindri/internal/notify"
 	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/scan"
 	"github.com/spj/sindri/internal/scanjob"
@@ -57,6 +58,9 @@ func (a *app) handlers(cfg config.Worker) map[string]worker.Handler {
 			return json.Marshal(map[string]int64{"uploads": int64(uploads), "jobs": jobs})
 		},
 	}
+	// Webhook deliveries run on the general lane: a slow receiver must not
+	// wait behind a scan, and a scan must not wait behind a receiver.
+	h[notify.JobKind] = a.webhookMetrics.wrap(a.deliverer.Handle)
 	// Present only when scanning is enabled, so a worker without scanning
 	// never claims a scan job it cannot run.
 	if a.scanner != nil {
