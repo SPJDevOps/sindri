@@ -329,7 +329,8 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 		"cache_dir", cacheDir,
 		"db_mirror", sc.DBRepository != "", // the values may carry credentials
 		"java_db_mirror", sc.JavaDBRepository != "",
-		"skip_db_update", sc.SkipDBUpdate)
+		"skip_db_update", sc.SkipDBUpdate,
+		"offline_scan", sc.OfflineScan)
 	return scan.New(store, ev, placement, scan.Options{
 		Trivy:            sc.Trivy,
 		DBRepository:     sc.DBRepository,
@@ -339,6 +340,7 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 		Timeout:          sc.Timeout.Duration(),
 		JobTimeout:       sc.JobTimeout.Duration(),
 		SkipDBUpdate:     sc.SkipDBUpdate,
+		OfflineScan:      sc.OfflineScan,
 		MaxUnpackedBytes: sc.MaxUnpackedBytes,
 	}, logger), mx, nil
 }

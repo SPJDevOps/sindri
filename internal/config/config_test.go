@@ -543,6 +543,18 @@ func TestParse_Scanning(t *testing.T) {
 			s.Enabled, s.JobTimeout = true, config.Duration(2*time.Hour)
 			return s
 		}},
+		{name: "OfflineScanDefaultsToSkipDBUpdate", input: "scanning:\n  skipDBUpdate: true\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.SkipDBUpdate, s.OfflineScan = true, true, true
+			return s
+		}},
+		{name: "OfflineScanExplicitFalseBeatsSkipDBUpdate", input: "scanning:\n  skipDBUpdate: true\n  offlineScan: false\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.SkipDBUpdate = true, true
+			return s
+		}},
+		{name: "OfflineScanWithAMirrorIsAllowed", input: "scanning:\n  dbRepository: mirror.example.com/db\n  offlineScan: true\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.DBRepository, s.OfflineScan = true, "mirror.example.com/db", true
+			return s
+		}},
 		{name: "JobTimeoutFollowsALongerTimeout", input: "scanning:\n  timeout: 90m\n", want: func(s config.Scanning) config.Scanning {
 			s.Enabled, s.Timeout, s.JobTimeout = true, config.Duration(90*time.Minute), config.Duration(90*time.Minute)
 			return s

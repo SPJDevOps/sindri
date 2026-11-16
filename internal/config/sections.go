@@ -731,6 +731,13 @@ type Scanning struct {
 	// jar-containing subject fails to scan if the Java database is not in it.
 	// Cannot be combined with `dbRepository` or `javaDbRepository`.
 	SkipDBUpdate bool `yaml:"skipDBUpdate"`
+	// Pass `--offline-scan` to Trivy, so it makes no network request while
+	// scanning, such as a package lookup against Maven Central or a registry
+	// query for a base image. A server with a pre-seeded cache is offline, so
+	// this follows `skipDBUpdate`. Unlike `skipDBUpdate` it may be combined
+	// with `dbRepository` and `javaDbRepository`, for an air-gapped server that
+	// reaches only a mirror. Default `false`, or `true` when `skipDBUpdate` is set.
+	OfflineScan bool `yaml:"offlineScan"`
 	// The most bytes unpacked from one wheel or tarball while scanning it, so
 	// that an archive bomb cannot fill the disk. At least 1048576 (1 MiB).
 	MaxUnpackedBytes int64 `yaml:"maxUnpackedBytes"`
@@ -775,6 +782,9 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		JobTimeout       Duration `yaml:"jobTimeout"`
 		SkipDBUpdate     bool     `yaml:"skipDBUpdate"`
 		MaxUnpackedBytes int64    `yaml:"maxUnpackedBytes"`
+		// A pointer, because an absent value takes skipDBUpdate's value
+		// while an explicit false does not.
+		OfflineScan *bool `yaml:"offlineScan"`
 		// A pointer, because an explicit 0 disables the schedule while an
 		// absent value takes the default.
 		RescanInterval *Duration `yaml:"rescanInterval"`
@@ -786,6 +796,12 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 	if raw.RescanInterval != nil {
 		rescan = *raw.RescanInterval
 	}
+	// Resolved here, not in applyDefaults, because only here can an absent
+	// value be told from an explicit false. The loaded tree is explicit.
+	offline := raw.SkipDBUpdate
+	if raw.OfflineScan != nil {
+		offline = *raw.OfflineScan
+	}
 	*s = Scanning{
 		Enabled:          raw.Enabled == nil || *raw.Enabled,
 		Trivy:            raw.Trivy,
@@ -795,6 +811,7 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		Timeout:          raw.Timeout,
 		JobTimeout:       raw.JobTimeout,
 		SkipDBUpdate:     raw.SkipDBUpdate,
+		OfflineScan:      offline,
 		MaxUnpackedBytes: raw.MaxUnpackedBytes,
 		RescanInterval:   rescan,
 	}

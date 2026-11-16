@@ -843,7 +843,7 @@ func TestRun_PassesMirrorAndSkipUpdateFlags(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	f := newFixture(t)
 	digest := f.image(ocispec.MediaTypeImageManifest)
-	s := f.scannerEnv(Options{Trivy: stubPath(t), DBRepository: "registry.example/trivy-db", JavaDBRepository: "registry.example/java-db", CacheDir: "/cache", SkipDBUpdate: true},
+	s := f.scannerEnv(Options{Trivy: stubPath(t), DBRepository: "registry.example/trivy-db", JavaDBRepository: "registry.example/java-db", CacheDir: "/cache", SkipDBUpdate: true, OfflineScan: true},
 		"TRIVY_STUB_ARGS="+argsFile)
 	if _, err := s.Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -859,7 +859,7 @@ func TestRun_PassesMirrorAndSkipUpdateFlags(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"--input ", "--format json", "--list-all-pkgs", "--scanners vuln", "--quiet",
-		"--cache-dir /cache", "--db-repository registry.example/trivy-db", "--java-db-repository registry.example/java-db", "--skip-db-update", "--skip-java-db-update", "--output "} {
+		"--cache-dir /cache", "--db-repository registry.example/trivy-db", "--java-db-repository registry.example/java-db", "--skip-db-update", "--skip-java-db-update", "--offline-scan", "--output "} {
 		if !strings.Contains(image, want) {
 			t.Errorf("image args %q lack %q", image, want)
 		}
@@ -869,6 +869,19 @@ func TestRun_PassesMirrorAndSkipUpdateFlags(t *testing.T) {
 	}
 	if !strings.Contains(convert, "--format cyclonedx") {
 		t.Errorf("convert args = %q", convert)
+	}
+}
+
+func TestRun_OmitsOfflineScanUnlessSet(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	f := newFixture(t)
+	digest := f.image(ocispec.MediaTypeImageManifest)
+	s := f.scannerEnv(Options{Trivy: stubPath(t), SkipDBUpdate: true}, "TRIVY_STUB_ARGS="+argsFile)
+	if _, err := s.Handle(t.Context(), f.job(digest, "oci-manifest")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if strings.Contains(string(readFile(t, argsFile)), "--offline-scan") {
+		t.Errorf("args carry --offline-scan without Options.OfflineScan: %s", readFile(t, argsFile))
 	}
 }
 

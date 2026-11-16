@@ -62,6 +62,10 @@ type Options struct {
 	// and it cannot be combined with DBRepository or JavaDBRepository: a mirror
 	// is only ever contacted to download.
 	SkipDBUpdate bool
+	// OfflineScan passes --offline-scan, so Trivy makes no other network
+	// request while scanning, such as a Maven Central lookup for a jar. Unlike
+	// SkipDBUpdate it may be combined with a mirror.
+	OfflineScan bool
 	// MaxUnpackedBytes caps the bytes an archive may unpack to.
 	MaxUnpackedBytes int64
 	// TempDir is the parent of staging directories; empty means os.TempDir().

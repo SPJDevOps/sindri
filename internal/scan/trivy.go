@@ -156,6 +156,9 @@ func (s *Scanner) scanTarget(ctx context.Context, t target, outDir string) (repo
 		// would reach out for it. Trivy then needs it already in the cache.
 		args = append(args, "--skip-db-update", "--skip-java-db-update")
 	}
+	if s.opts.OfflineScan {
+		args = append(args, "--offline-scan")
+	}
 	args = append(args, "--output", report)
 	if _, err := s.run(ctx, outDir, args...); err != nil {
 		return "", "", err
