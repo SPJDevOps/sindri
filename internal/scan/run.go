@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/notify"
@@ -232,15 +233,14 @@ func (s *Scanner) handleScan(ctx, scanCtx context.Context, job queue.Job, attach
 		if err != nil {
 			return nil, fmt.Errorf("encoding evidence metadata: %w", err)
 		}
-		sbom, err := s.attachFile(ctx, digest, model.EvidenceSBOM, MediaTypeSBOM, d.sbom, sbomMeta)
+		sbom, err := s.attachFile(ctx, digest, model.EvidenceSBOM, MediaTypeSBOM, d.sbom, sbomMeta, nil)
 		if err != nil {
 			return nil, err
 		}
-		scan, err := s.attachFile(ctx, digest, model.EvidenceScan, MediaTypeScan, d.report, meta)
+		scan, err := s.attachFile(ctx, digest, model.EvidenceScan, MediaTypeScan, d.report, meta, s.findingHook(args.Repository, digest, d, base.NewVulnerabilities))
 		if err != nil {
 			return nil, err
 		}
-		s.notifyFinding(ctx, job, args.Repository, digest, d, base.NewVulnerabilities, scan.ID)
 		results = append(results, targetResult{Platform: d.t.platform, SBOMID: sbom.ID, ScanID: scan.ID, SeverityCounts: d.counts})
 		s.logger.InfoContext(ctx, "scan attached", "job", job.ID, "subject", digest.String(), "platform", d.t.platform)
 	}
@@ -253,26 +253,22 @@ func (s *Scanner) handleScan(ctx, scanCtx context.Context, job queue.Job, attach
 	return out, nil
 }
 
-// notifyFinding sends finding.new when a scan attached new vulnerabilities to
-// a subject that is approved at some stage (ADR 34). The dedupe key names the
-// subject, platform, and the set of new ids, not the evidence row, so the same
-// finding emitted twice is one delivery.
-//
-// A failure is logged and does not fail the job. A retry would re-scan against
-// its own attachment, find nothing new, and send nothing, so failing the job
-// would duplicate evidence and still lose the event. The scan evidence, which
-// is what a gate reads, is already attached.
-func (s *Scanner) notifyFinding(ctx context.Context, job queue.Job, repository string, digest model.Digest, d scanned, newVulns *[]string, evidenceID string) {
-	if s.notifier == nil || s.notifyDB == nil || newVulns == nil || len(*newVulns) == 0 {
-		return
+// findingHook returns the evidence.AttachParams.InTx hook that records
+// finding.new in the scan evidence's own transaction (ADR 34), or nil when
+// there is nothing to send. Either the evidence and its deliveries commit
+// together or neither does, so an emit failure fails the attach and the job
+// retries. The dedupe key names the subject, platform, and the set of new ids,
+// not the evidence row, so a retry that re-attaches sends nothing twice.
+func (s *Scanner) findingHook(repository string, digest model.Digest, d scanned, newVulns *[]string) func(context.Context, *db.Queries, evidence.Evidence) error {
+	if s.notifier == nil || newVulns == nil || len(*newVulns) == 0 {
+		return nil
 	}
-	if err := s.emitFinding(ctx, repository, digest, d, *newVulns, evidenceID); err != nil {
-		s.logger.ErrorContext(ctx, "finding.new notification was not recorded", "job", job.ID, "subject", digest.String(), "error", err.Error())
+	return func(ctx context.Context, q *db.Queries, ev evidence.Evidence) error {
+		return s.emitFinding(ctx, q, repository, digest, d, *newVulns, ev.ID)
 	}
 }
 
-func (s *Scanner) emitFinding(ctx context.Context, repository string, digest model.Digest, d scanned, newVulns []string, evidenceID string) error {
-	q := s.notifyDB.Queries()
+func (s *Scanner) emitFinding(ctx context.Context, q *db.Queries, repository string, digest model.Digest, d scanned, newVulns []string, evidenceID string) error {
 	approved, err := q.SubjectHasLiveApproval(ctx, digest.String())
 	if err != nil {
 		return fmt.Errorf("checking approvals of %s: %w", digest, err)
@@ -291,7 +287,7 @@ func (s *Scanner) emitFinding(ctx context.Context, repository string, digest mod
 	ids := slices.Clone(newVulns)
 	sort.Strings(ids)
 	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
-	_, err = s.notifier.Emit(ctx, s.notifyDB.Pool(), notify.Event{
+	_, err = s.notifier.EmitTx(ctx, q, notify.Event{
 		Digest:     digest,
 		Repository: repository,
 		DedupeKey:  fmt.Sprintf("finding:%s:%s:%s", digest, d.t.platform, hex.EncodeToString(sum[:])),
@@ -372,7 +368,7 @@ func readCounts(path string) (map[string]int, []vulnerability, error) {
 	return countSeverities(f)
 }
 
-func (s *Scanner) attachFile(ctx context.Context, subject model.Digest, typ model.EvidenceType, mediaType, path string, meta json.RawMessage) (evidence.Evidence, error) {
+func (s *Scanner) attachFile(ctx context.Context, subject model.Digest, typ model.EvidenceType, mediaType, path string, meta json.RawMessage, inTx func(context.Context, *db.Queries, evidence.Evidence) error) (evidence.Evidence, error) {
 	// #nosec G304 -- path is a file this process created inside its own staging directory.
 	f, err := os.Open(path)
 	if err != nil {
@@ -385,7 +381,7 @@ func (s *Scanner) attachFile(ctx context.Context, subject model.Digest, typ mode
 	}
 	ev, err := s.ev.Attach(ctx, evidence.AttachParams{
 		Subject: subject, Type: typ, MediaType: mediaType, Body: f, Size: info.Size(),
-		Actor: scanjob.Actor, Metadata: meta,
+		Actor: scanjob.Actor, Metadata: meta, InTx: inTx,
 	})
 	if err != nil {
 		return evidence.Evidence{}, fmt.Errorf("attaching %s to %s: %w", typ, subject, err)

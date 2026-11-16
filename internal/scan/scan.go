@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/spj/sindri/internal/cas"
-	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/notify"
@@ -105,9 +104,8 @@ type Scanner struct {
 	// use it to steer the stub; nothing in production sets it.
 	extraEnv []string
 
-	// notifier and notifyDB are optional; nil sends no finding.new webhooks.
+	// notifier is optional; nil sends no finding.new webhooks.
 	notifier *notify.Notifier
-	notifyDB *db.DB
 
 	versionMu sync.Mutex
 	// scannerVersion is the last Trivy version successfully read. The
@@ -118,8 +116,8 @@ type Scanner struct {
 // SetNotifier makes the scanner send finding.new webhooks (ADR 34) for a new
 // vulnerability on a subject approved at some stage. Call it before the first
 // job runs. A nil notifier turns them off.
-func (s *Scanner) SetNotifier(n *notify.Notifier, database *db.DB) {
-	s.notifier, s.notifyDB = n, database
+func (s *Scanner) SetNotifier(n *notify.Notifier) {
+	s.notifier = n
 }
 
 // New returns a Scanner reading subject bytes from store and attaching

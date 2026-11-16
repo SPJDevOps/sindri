@@ -85,6 +85,11 @@ type AttachParams struct {
 	Actor     string
 	// Metadata must be a JSON object; nil or empty means {}.
 	Metadata json.RawMessage
+	// InTx, if set, runs after the evidence row is inserted and before the
+	// transaction commits, on that transaction's queries. An error rolls the
+	// row back and fails the attach, so a caller can record work that must
+	// exist if and only if the evidence does.
+	InTx func(ctx context.Context, q *db.Queries, ev Evidence) error
 }
 
 // Attach stores the body in the CAS under its own digest and records it
@@ -156,11 +161,7 @@ func (s *Service) Attach(ctx context.Context, p AttachParams) (Evidence, error) 
 	if err != nil {
 		return Evidence{}, fmt.Errorf("recording %s evidence for %s: %w", p.Type, p.Subject, err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return Evidence{}, fmt.Errorf("committing evidence: %w", err)
-	}
-
-	return Evidence{
+	ev := Evidence{
 		ID:        row.ID.String(),
 		Subject:   p.Subject,
 		Type:      p.Type,
@@ -170,7 +171,16 @@ func (s *Service) Attach(ctx context.Context, p AttachParams) (Evidence, error) 
 		CreatedAt: row.CreatedAt,
 		CreatedBy: row.CreatedBy,
 		Metadata:  json.RawMessage(row.Metadata),
-	}, nil
+	}
+	if p.InTx != nil {
+		if err := p.InTx(ctx, q, ev); err != nil {
+			return Evidence{}, fmt.Errorf("recording work for %s evidence of %s: %w", p.Type, p.Subject, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Evidence{}, fmt.Errorf("committing evidence: %w", err)
+	}
+	return ev, nil
 }
 
 // List returns a subject's evidence, oldest first.

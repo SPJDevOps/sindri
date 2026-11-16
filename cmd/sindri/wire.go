@@ -162,7 +162,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		reg.SetScanOnPublish(true)
 	}
 	if scanner != nil {
-		scanner.SetNotifier(notifier, database)
+		scanner.SetNotifier(notifier)
 	}
 
 	remoteOpts := remote.Options{Registry: reg, Logger: logger, Credentials: creds}
