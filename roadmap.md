@@ -871,7 +871,9 @@ and Sprint 15 moved to Nov 23–29. Its work is recorded under
 [v1.6.0 — Notifications](#v160--notifications) below.
 
 Not scheduled: SIN-56, 58, 65, 74, and 76 from the hardening epic, kept as filler for the
-M12 window. SIN-80 shipped in Sprint 10, SIN-83 and SIN-86 (the gate scripts' leaked
+M12 window. SIN-118, an optional `format: slack` on a webhook so a notification can post
+straight to a Slack incoming webhook, waits for what adopters ask for in that window; it
+needs its own ADR, because ADR 34 left Slack formatting out. SIN-80 shipped in Sprint 10, SIN-83 and SIN-86 (the gate scripts' leaked
 Docker volumes) in Sprint 12, and SIN-73, 75, 81, 82, 84, 85 and 116 shipped in Sprint 13 as v1.5.1.
 
 ---
