@@ -17,9 +17,9 @@ import (
 // evicted from an OCI proxy repository and refuses to fetch again (SIN-73).
 type blockedResponse struct {
 	Digest    string    `json:"digest"`
-	BlockedBy string    `json:"blockedBy"`
+	BlockedBy string    `json:"blocked_by"`
 	Reason    string    `json:"reason"`
-	BlockedAt time.Time `json:"blockedAt"`
+	BlockedAt time.Time `json:"blocked_at"`
 }
 
 func blockedJSON(b registry.BlockedDigest) blockedResponse {
