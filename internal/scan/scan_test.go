@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	godigest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -780,6 +781,36 @@ func TestRun_TrivyFailureReturnsErrorAndAttachesNothing(t *testing.T) {
 	}
 	if len(f.ev.attached) != 0 {
 		t.Fatalf("attached %d, want none", len(f.ev.attached))
+	}
+}
+
+func TestRun_JobDeadlineAttachesNothingAndNamesTheSetting(t *testing.T) {
+	f := newFixture(t)
+	digest := f.image(ocispec.MediaTypeImageManifest)
+	s := f.scannerEnv(Options{Trivy: stubPath(t), JobTimeout: 300 * time.Millisecond}, "TRIVY_STUB_SLEEP=30")
+	start := time.Now()
+	_, err := s.Handle(t.Context(), f.job(digest, "oci-manifest"))
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "scanning.jobTimeout") {
+		t.Fatalf("Handle error = %v, want DeadlineExceeded naming scanning.jobTimeout", err)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatalf("Handle took %s; the deadline did not cancel the scan", time.Since(start))
+	}
+	if len(f.ev.attached) != 0 {
+		t.Fatalf("attached %d, want none", len(f.ev.attached))
+	}
+}
+
+func TestRun_LeaseLossIsNotReportedAsAJobTimeout(t *testing.T) {
+	f := newFixture(t)
+	digest := f.image(ocispec.MediaTypeImageManifest)
+	s := f.scannerEnv(Options{Trivy: stubPath(t), JobTimeout: time.Hour}, "TRIVY_STUB_SLEEP=30")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	lost := errors.New("lease lost")
+	time.AfterFunc(200*time.Millisecond, func() { cancel(lost) })
+	_, err := s.Handle(ctx, f.job(digest, "oci-manifest"))
+	if err == nil || strings.Contains(err.Error(), "scanning.jobTimeout") || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Handle error = %v, want a plain cancellation", err)
 	}
 }
 

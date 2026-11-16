@@ -539,6 +539,14 @@ func TestParse_Scanning(t *testing.T) {
 			s.Enabled, s.Timeout = true, config.Duration(5*time.Minute)
 			return s
 		}},
+		{name: "JobTimeoutIsKept", input: "scanning:\n  jobTimeout: 2h\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.JobTimeout = true, config.Duration(2*time.Hour)
+			return s
+		}},
+		{name: "JobTimeoutFollowsALongerTimeout", input: "scanning:\n  timeout: 90m\n", want: func(s config.Scanning) config.Scanning {
+			s.Enabled, s.Timeout, s.JobTimeout = true, config.Duration(90*time.Minute), config.Duration(90*time.Minute)
+			return s
+		}},
 		{name: "MappingWithEnabledFalseIsDisabled", input: "scanning:\n  enabled: false\n  trivy: /opt/trivy\n", want: func(s config.Scanning) config.Scanning {
 			s.Trivy = "/opt/trivy"
 			return s
@@ -628,6 +636,7 @@ func TestParse_RejectsScanning(t *testing.T) {
 		{name: "RescanIntervalNegative", input: "scanning:\n  rescanInterval: -1h\n", want: "must not be negative"},
 		{name: "RescanIntervalZeroNeedsAUnit", input: "scanning:\n  rescanInterval: 0\n", want: "needs a unit"},
 		{name: "BadValueWhileDisabled", input: "scanning:\n  enabled: false\n  timeout: 1s\n", want: "scanning.timeout"},
+		{name: "JobTimeoutBelowTimeout", input: "scanning:\n  timeout: 20m\n  jobTimeout: 10m\n", want: "scanning.jobTimeout"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

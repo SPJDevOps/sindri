@@ -337,6 +337,7 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 		CacheDir:         cacheDir,
 		TempDir:          filepath.Join(cacheDir, "sindri-staging"),
 		Timeout:          sc.Timeout.Duration(),
+		JobTimeout:       sc.JobTimeout.Duration(),
 		SkipDBUpdate:     sc.SkipDBUpdate,
 		MaxUnpackedBytes: sc.MaxUnpackedBytes,
 	}, logger), mx, nil

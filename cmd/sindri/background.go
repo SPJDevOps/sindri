@@ -114,11 +114,13 @@ func (a *app) startBackground(parent context.Context, cfg *config.Config, bo bui
 			Schedules: schedules(cfg.Worker, cfg.Scanning),
 			Logger:    a.logger,
 		}
-		wg.Go(func() {
-			if err := worker.Run(ctx, opts); err != nil {
-				a.logger.ErrorContext(ctx, "the worker did not start", "error", err.Error())
-			}
-		})
+		for _, lane := range workerLanes(opts) {
+			wg.Go(func() {
+				if err := worker.Run(ctx, lane); err != nil {
+					a.logger.ErrorContext(ctx, "the worker did not start", "owner", lane.Owner, "error", err.Error())
+				}
+			})
+		}
 	} else {
 		a.logger.InfoContext(ctx, "worker disabled; queued jobs wait for a worker elsewhere")
 	}
@@ -127,6 +129,45 @@ func (a *app) startBackground(parent context.Context, cfg *config.Config, bo bui
 		cancel()
 		wg.Wait()
 	}
+}
+
+// workerLanes splits opts into worker loops with disjoint handler sets, so a
+// scan that runs for an hour cannot hold up gc, retention, or uploads purging
+// (SIN-81). Scan kinds get their own loop, with its own lease owner; every
+// other kind stays in the first. Each schedule goes with its handler, so a
+// schedule is enqueued by one loop only (the queue's dedupe key would admit
+// one anyway). With no scan handler registered there is one loop, unchanged.
+// The lanes share a queue table, which keeps this within ADR 20.
+func workerLanes(opts worker.Options) []worker.Options {
+	scanLane := opts
+	scanLane.Owner = opts.Owner + "-scan"
+	scanLane.Handlers = map[string]worker.Handler{}
+	scanLane.Schedules = nil
+	rest := opts
+	rest.Handlers = map[string]worker.Handler{}
+	rest.Schedules = nil
+	for kind, h := range opts.Handlers {
+		if kind == scanjob.JobKind || kind == scanjob.RescanJobKind {
+			scanLane.Handlers[kind] = h
+		} else {
+			rest.Handlers[kind] = h
+		}
+	}
+	for _, s := range opts.Schedules {
+		if _, ok := scanLane.Handlers[s.Kind]; ok {
+			scanLane.Schedules = append(scanLane.Schedules, s)
+		} else {
+			rest.Schedules = append(rest.Schedules, s)
+		}
+	}
+	switch {
+	case len(scanLane.Handlers) == 0:
+		return []worker.Options{opts}
+	case len(rest.Handlers) == 0:
+		scanLane.Owner = opts.Owner
+		return []worker.Options{scanLane}
+	}
+	return []worker.Options{rest, scanLane}
 }
 
 // expireUploads aborts upload sessions idle longer than maxIdle, checking a

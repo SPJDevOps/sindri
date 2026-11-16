@@ -57,9 +57,30 @@ type scanned struct {
 	vulns  []vulnerability
 }
 
-// Handle runs one scan job; it matches worker.Handler. Args are
-// {"digest": ..., "kind": ...}.
+// errJobDeadline is the cancellation cause of a job that ran past
+// Options.JobTimeout, which tells it apart from a lease loss or a shutdown
+// cancelling the parent context.
+var errJobDeadline = errors.New("scan job deadline exceeded")
+
+// Handle runs one scan job under Options.JobTimeout; it matches
+// worker.Handler. Args are {"digest": ..., "kind": ...}.
 func (s *Scanner) Handle(ctx context.Context, job queue.Job) (json.RawMessage, error) {
+	if s.opts.JobTimeout <= 0 {
+		return s.handle(ctx, job)
+	}
+	jobCtx, cancel := context.WithTimeoutCause(ctx, s.opts.JobTimeout, errJobDeadline)
+	defer cancel()
+	res, err := s.handle(jobCtx, job)
+	if err != nil && errors.Is(context.Cause(jobCtx), errJobDeadline) {
+		// Evidence is attached only after every target is scanned, and a
+		// cancelled attach is an error here too, so nothing partial is kept.
+		return nil, fmt.Errorf("scan job %d ran longer than scanning.jobTimeout (%s); raise it for larger subjects: %w: %w",
+			job.ID, s.opts.JobTimeout, context.DeadlineExceeded, err)
+	}
+	return res, err
+}
+
+func (s *Scanner) handle(ctx context.Context, job queue.Job) (json.RawMessage, error) {
 	var args scanjob.Args
 	if err := json.Unmarshal(job.Args, &args); err != nil {
 		return nil, fmt.Errorf("decoding scan job %d args: %w", job.ID, err)

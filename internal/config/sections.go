@@ -719,6 +719,11 @@ type Scanning struct {
 	// How long one scan may run before it is cancelled and retried. At least
 	// `1m`.
 	Timeout Duration `yaml:"timeout"`
+	// How long one whole scan job may run, across every platform of an image
+	// index and the staging in front of them, before it is cancelled, attaches
+	// nothing, and is retried with backoff. Must be at least `timeout`.
+	// Default `1h`, or `timeout` when that is longer.
+	JobTimeout Duration `yaml:"jobTimeout"`
 	// Never download the vulnerability database, and scan with the one already
 	// in `cacheDir`, including the Java database that Trivy fetches separately
 	// when it finds a jar. For an air-gapped server with a pre-seeded cache; a
@@ -741,6 +746,7 @@ func defaultScanning() Scanning {
 	return Scanning{
 		Trivy:            "trivy",
 		Timeout:          Duration(10 * time.Minute),
+		JobTimeout:       Duration(time.Hour),
 		MaxUnpackedBytes: 1 << 30,
 		RescanInterval:   Duration(24 * time.Hour),
 	}
@@ -765,6 +771,7 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		JavaDBRepository string   `yaml:"javaDbRepository"`
 		CacheDir         string   `yaml:"cacheDir"`
 		Timeout          Duration `yaml:"timeout"`
+		JobTimeout       Duration `yaml:"jobTimeout"`
 		SkipDBUpdate     bool     `yaml:"skipDBUpdate"`
 		MaxUnpackedBytes int64    `yaml:"maxUnpackedBytes"`
 		// A pointer, because an explicit 0 disables the schedule while an
@@ -785,6 +792,7 @@ func (s *Scanning) UnmarshalYAML(node *yaml.Node) error {
 		JavaDBRepository: raw.JavaDBRepository,
 		CacheDir:         raw.CacheDir,
 		Timeout:          raw.Timeout,
+		JobTimeout:       raw.JobTimeout,
 		SkipDBUpdate:     raw.SkipDBUpdate,
 		MaxUnpackedBytes: raw.MaxUnpackedBytes,
 		RescanInterval:   rescan,
@@ -799,6 +807,9 @@ func (s *Scanning) applyDefaults() {
 	}
 	if s.Timeout == 0 {
 		s.Timeout = d.Timeout
+	}
+	if s.JobTimeout == 0 {
+		s.JobTimeout = max(d.JobTimeout, s.Timeout)
 	}
 	if s.MaxUnpackedBytes == 0 {
 		s.MaxUnpackedBytes = d.MaxUnpackedBytes
@@ -824,6 +835,9 @@ func (s Scanning) ResolvedCacheDir() (string, error) {
 func (s *Scanning) validate() error {
 	if s.Timeout.Duration() < time.Minute {
 		return fmt.Errorf("scanning.timeout: %s would cancel scans that are still working; use at least 1m", s.Timeout)
+	}
+	if s.JobTimeout < s.Timeout {
+		return fmt.Errorf("scanning.jobTimeout: %s is shorter than scanning.timeout (%s), so a single target could never finish; use at least %s", s.JobTimeout, s.Timeout, s.Timeout)
 	}
 	if s.RescanInterval < 0 {
 		return fmt.Errorf("scanning.rescanInterval: %s is negative; use 0s to disable the schedule", s.RescanInterval)

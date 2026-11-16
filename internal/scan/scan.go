@@ -53,6 +53,10 @@ type Options struct {
 	CacheDir string
 	// Timeout bounds each target's scan. Zero means no limit.
 	Timeout time.Duration
+	// JobTimeout bounds one whole scan job: staging, every target, and
+	// attaching. Zero means no limit. On expiry nothing is attached and the
+	// job fails, so the worker retries it with backoff.
+	JobTimeout time.Duration
 	// SkipDBUpdate passes --skip-db-update and --skip-java-db-update, so Trivy
 	// never downloads a database. The databases must already be in the cache,
 	// and it cannot be combined with DBRepository or JavaDBRepository: a mirror
