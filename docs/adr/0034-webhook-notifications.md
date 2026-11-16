@@ -50,9 +50,12 @@ start from it. Both need to leave Sindri without a person polling.
 4. **Delivery is a queue job.** Emitting an event inserts one row per matching webhook
    into `webhook_deliveries` and enqueues a `deliver_webhook` job, in the same
    transaction as the change where there is one (the promotion's). Nothing is sent on the
-   request path (ADR 20). A delivery's dedupe key (`finding:<evidence id>`,
-   `promoted:<ledger id>`) is unique per webhook, so a retried scan job cannot send
-   twice.
+   request path (ADR 20). A delivery's dedupe key is unique per webhook:
+   `promoted:<ledger id>`, and for a finding `finding:<digest>:<platform>:<hash of the
+   sorted new ids>`. A re-attached scan gets a new evidence id, so the key names the
+   finding, not the row, and the same finding emitted twice sends once. A finding
+   emit that fails is logged and does not fail the scan job: a retry would compare
+   against the evidence its first attempt attached, find nothing new, and send nothing.
 5. **Outcomes.** A 2xx response is delivered. 408, 429, 5xx, and network errors are
    retried with the queue's exponential backoff, up to `notifications.maxAttempts`
    (default 8). Any other response, or a webhook removed from the configuration, fails

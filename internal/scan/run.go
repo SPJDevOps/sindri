@@ -2,15 +2,20 @@ package scan
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/notify"
 	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/scanjob"
 	"github.com/spj/sindri/internal/worker"
@@ -235,6 +240,7 @@ func (s *Scanner) handleScan(ctx, scanCtx context.Context, job queue.Job, attach
 		if err != nil {
 			return nil, err
 		}
+		s.notifyFinding(ctx, job, args.Repository, digest, d, base.NewVulnerabilities, scan.ID)
 		results = append(results, targetResult{Platform: d.t.platform, SBOMID: sbom.ID, ScanID: scan.ID, SeverityCounts: d.counts})
 		s.logger.InfoContext(ctx, "scan attached", "job", job.ID, "subject", digest.String(), "platform", d.t.platform)
 	}
@@ -245,6 +251,62 @@ func (s *Scanner) handleScan(ctx, scanCtx context.Context, job queue.Job, attach
 		return nil, fmt.Errorf("encoding scan result: %w", err)
 	}
 	return out, nil
+}
+
+// notifyFinding sends finding.new when a scan attached new vulnerabilities to
+// a subject that is approved at some stage (ADR 34). The dedupe key names the
+// subject, platform, and the set of new ids, not the evidence row, so the same
+// finding emitted twice is one delivery.
+//
+// A failure is logged and does not fail the job. A retry would re-scan against
+// its own attachment, find nothing new, and send nothing, so failing the job
+// would duplicate evidence and still lose the event. The scan evidence, which
+// is what a gate reads, is already attached.
+func (s *Scanner) notifyFinding(ctx context.Context, job queue.Job, repository string, digest model.Digest, d scanned, newVulns *[]string, evidenceID string) {
+	if s.notifier == nil || s.notifyDB == nil || newVulns == nil || len(*newVulns) == 0 {
+		return
+	}
+	if err := s.emitFinding(ctx, repository, digest, d, *newVulns, evidenceID); err != nil {
+		s.logger.ErrorContext(ctx, "finding.new notification was not recorded", "job", job.ID, "subject", digest.String(), "error", err.Error())
+	}
+}
+
+func (s *Scanner) emitFinding(ctx context.Context, repository string, digest model.Digest, d scanned, newVulns []string, evidenceID string) error {
+	q := s.notifyDB.Queries()
+	approved, err := q.SubjectHasLiveApproval(ctx, digest.String())
+	if err != nil {
+		return fmt.Errorf("checking approvals of %s: %w", digest, err)
+	}
+	if !approved {
+		return nil
+	}
+	stages, err := q.ListApprovedStages(ctx, digest.String())
+	if err != nil {
+		return fmt.Errorf("listing approved stages of %s: %w", digest, err)
+	}
+	names := make([]string, 0, len(stages))
+	for _, st := range stages {
+		names = append(names, st.Name)
+	}
+	ids := slices.Clone(newVulns)
+	sort.Strings(ids)
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
+	_, err = s.notifier.Emit(ctx, s.notifyDB.Pool(), notify.Event{
+		Digest:     digest,
+		Repository: repository,
+		DedupeKey:  fmt.Sprintf("finding:%s:%s:%s", digest, d.t.platform, hex.EncodeToString(sum[:])),
+		Data: notify.FindingData{
+			NewVulnerabilities: ids,
+			SeverityCounts:     d.counts,
+			Platform:           d.t.platform,
+			ApprovedStages:     names,
+			EvidenceID:         evidenceID,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("emitting finding.new for %s: %w", digest, err)
+	}
+	return nil
 }
 
 // newVulnerabilities returns the ids in current that the previous scan's
