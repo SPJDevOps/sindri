@@ -1348,22 +1348,22 @@ security claim. Ships as a minor release: it adds a configuration section, route
 and metrics.
 
 **Scope.**
-- [ ] ADR 34: two events, `finding.new` (new findings on an approved subject) and
+- [x] ADR 34: two events, `finding.new` (new findings on an approved subject) and
   `lifecycle.promoted`; a signed JSON envelope (HMAC-SHA256 over timestamp and body);
   delivery through the queue table; a server-level `notifications:` section (SIN-117)
-- [ ] Migration 00015 adds `webhook_deliveries`. Each event inserts its delivery rows and
+- [x] Migration 00015 adds `webhook_deliveries`. Each event inserts its delivery rows and
   `deliver_webhook` jobs in the transaction of the change that caused it: the promotion's
   ledger row, or the scan evidence row. A retried scan cannot send a finding twice (SIN-117)
-- [ ] 2xx is delivered; 408, 429, 5xx and network errors retry with backoff up to
+- [x] 2xx is delivered; 408, 429, 5xx and network errors retry with backoff up to
   `notifications.maxAttempts`; anything else, a redirect included, fails at once. Errors
   and logs name the webhook and host only (SIN-117)
-- [ ] Admin API: list webhooks and deliveries, read one delivery, redeliver;
+- [x] Admin API: list webhooks and deliveries, read one delivery, redeliver;
   `sindri_webhook_deliveries_total{result}` and `sindri_webhook_delivery_duration_seconds`
   (SIN-117)
-- [ ] An admin-only System page with a failing-webhook status line, the webhooks (scheme and
+- [x] An admin-only System page with a failing-webhook status line, the webhooks (scheme and
   host only), and the delivery log; an artifact page shows administrators the notifications
   sent about it (SIN-112, the first slice of SIN-107)
-- [ ] `docs/notifications.md`, with signature verification in shell and Go
+- [x] `docs/notifications.md`, with signature verification in shell and Go
 
 **Out of scope.** Revoke, publish, and first-scan events; email, Slack formatting, and
 per-user subscriptions; per-repository webhooks in manifests; the rest of the System page
@@ -1377,6 +1377,17 @@ go test -tags integration -run 'TestNotifications_|TestAPI_EveryRouteHasAnAuthor
 # by hand: make run, a local receiver, promote an artifact, check the signature, open /system
 git tag v1.6.0 && git push origin v1.6.0   # the release workflow is green
 ```
+
+**Gate run, 2026-11-16.** On the branch: `make ci` and `make test-integration` passed, including
+the `TestNotifications_*` gate tests through `serve` (a promotion and a re-scan finding each
+deliver one signed webhook; a finding is sent once per approving repository; a receiver that is
+down gets retries and then a recorded failure; redelivery) and both route walks. Walked by hand
+against the development stack with a separate receiver: a promotion delivered one webhook whose
+signature the receiver verified; with the receiver down the delivery failed after its attempts,
+the error naming only the host, and the metric and the webhook's `failing` flag followed; a
+redelivery after recovery arrived signed and cleared `failing`; SIGHUP reloaded. Neither the
+URL's path and query nor the secret appeared in `config show` or the server log. The System page
+was checked by its integration tests, not in a browser. Built, not yet released.
 
 ---
 
