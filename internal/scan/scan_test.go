@@ -33,6 +33,7 @@ import (
 	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/scanjob"
 	"github.com/spj/sindri/internal/storage/memstore"
+	"github.com/spj/sindri/internal/worker"
 )
 
 // fakeAttacher records attachments, reading each body as the real service does.
@@ -1047,7 +1048,7 @@ func TestStage_IndexListingOneChildRepeatedlyStagesItOnce(t *testing.T) {
 	}
 }
 
-func TestRun_IndexWithTooManyPlatformsIsSkippedWithNoEvidence(t *testing.T) {
+func TestRun_IndexWithTooManyPlatformsFailsPermanentlyWithNoEvidence(t *testing.T) {
 	f := newFixture(t)
 	var descs []ocispec.Descriptor
 	for i := 0; i < maxPlatforms+1; i++ {
@@ -1055,15 +1056,12 @@ func TestRun_IndexWithTooManyPlatformsIsSkippedWithNoEvidence(t *testing.T) {
 		descs = append(descs, ocispec.Descriptor{MediaType: ocispec.MediaTypeImageManifest, Digest: godigest.Digest(d.String())})
 	}
 	res, err := f.scanner(Options{Trivy: "/nonexistent"}).Handle(t.Context(), f.job(f.index(descs...), "oci-index"))
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if string(res) != `{"skipped":"too many platforms"}` || len(f.ev.attached) != 0 {
-		t.Fatalf("result = %s, attached = %d", res, len(f.ev.attached))
+	if !errors.Is(err, worker.ErrPermanent) || !errors.Is(err, errTooManyPlatforms) || len(f.ev.attached) != 0 {
+		t.Fatalf("result = %s, err = %v, attached = %d, want a permanent too-many-platforms error", res, err, len(f.ev.attached))
 	}
 }
 
-func TestRun_IndexWithNoScannablePlatformsIsSkippedWithNoEvidence(t *testing.T) {
+func TestRun_IndexWithNoScannablePlatformsFailsPermanentlyWithNoEvidence(t *testing.T) {
 	f := newFixture(t)
 	idx := f.index(ocispec.Descriptor{
 		MediaType: ocispec.MediaTypeImageManifest, Digest: godigest.Digest(f.image(ocispec.MediaTypeImageManifest).String()),
@@ -1071,11 +1069,8 @@ func TestRun_IndexWithNoScannablePlatformsIsSkippedWithNoEvidence(t *testing.T) 
 		Platform:    &ocispec.Platform{OS: "unknown", Architecture: "unknown"},
 	})
 	res, err := f.scanner(Options{Trivy: "/nonexistent"}).Handle(t.Context(), f.job(idx, "oci-index"))
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if string(res) != `{"skipped":"no scannable platforms"}` || len(f.ev.attached) != 0 {
-		t.Fatalf("result = %s, attached = %d", res, len(f.ev.attached))
+	if !errors.Is(err, worker.ErrPermanent) || !errors.Is(err, errNoPlatforms) || len(f.ev.attached) != 0 {
+		t.Fatalf("result = %s, err = %v, attached = %d, want a permanent no-platforms error", res, err, len(f.ev.attached))
 	}
 }
 
@@ -1106,8 +1101,11 @@ func TestRun_StagingDirectoryIsRemovedOnFailure(t *testing.T) {
 		tmp := t.TempDir()
 		digest := f.put(zipOf(t, map[string]string{"big": strings.Repeat("a", 4096)}))
 		_, err := f.scanner(Options{Trivy: "/nonexistent", TempDir: tmp, MaxUnpackedBytes: 1000}).Handle(t.Context(), f.job(digest, "pypi-dist"))
-		if !errors.Is(err, ErrArchiveTooLarge) {
-			t.Fatalf("Handle error = %v, want ErrArchiveTooLarge", err)
+		if !errors.Is(err, ErrArchiveTooLarge) || !errors.Is(err, worker.ErrPermanent) {
+			t.Fatalf("Handle error = %v, want a permanent ErrArchiveTooLarge", err)
+		}
+		if !strings.Contains(err.Error(), "scanning.maxUnpackedBytes (1000)") {
+			t.Fatalf("Handle error = %q, want it to name scanning.maxUnpackedBytes and its value", err)
 		}
 		if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
 			t.Errorf("%d staging entries left", len(entries))
@@ -1309,11 +1307,39 @@ func TestRun_JobWithoutRepositoryIsSkippedWithNoEvidence(t *testing.T) {
 	}
 }
 
+func TestRun_UndecodableArgsAndMalformedDigestFailPermanently(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+	}{
+		{name: "ArgsAreNotJSON", args: `not json`},
+		{name: "DigestIsMalformed", args: `{"digest":"sha256:xyz","kind":"oci-manifest","repository":"repo"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			_, err := f.scanner(Options{Trivy: "/nonexistent"}).Handle(t.Context(), queue.Job{ID: 7, Kind: scanjob.JobKind, Args: json.RawMessage(tt.args)})
+			if !errors.Is(err, worker.ErrPermanent) {
+				t.Fatalf("Handle error = %v, want a permanent failure", err)
+			}
+		})
+	}
+}
+
+func TestRun_UnsafeArchivePathFailsPermanently(t *testing.T) {
+	f := newFixture(t)
+	digest := f.put(zipOf(t, map[string]string{"../escape": "x"}))
+	_, err := f.scanner(Options{Trivy: "/nonexistent", MaxUnpackedBytes: 1 << 20}).Handle(t.Context(), f.job(digest, "pypi-dist"))
+	if !errors.Is(err, ErrUnsafePath) || !errors.Is(err, worker.ErrPermanent) {
+		t.Fatalf("Handle error = %v, want a permanent ErrUnsafePath", err)
+	}
+}
+
 func TestRun_IndexChildRules(t *testing.T) {
 	tests := []struct {
 		name        string
 		child       func(real model.Digest) ocispec.Descriptor
-		wantSkipped string
+		wantFailure bool
 		wantTargets int
 	}{
 		{name: "AttestationLabelOnARealPlatformIsScanned", wantTargets: 2,
@@ -1322,11 +1348,11 @@ func TestRun_IndexChildRules(t *testing.T) {
 				d.Annotations = map[string]string{annotationReferenceType: attestationManifest}
 				return d
 			}},
-		{name: "NestedIndexSkipsTheWholeJob", wantSkipped: `{"skipped":"unsupported child","digest":"%s","mediaType":"application/vnd.oci.image.index.v1+json"}`,
+		{name: "NestedIndexFailsTheWholeJob", wantFailure: true,
 			child: func(real model.Digest) ocispec.Descriptor {
 				return ocispec.Descriptor{MediaType: ocispec.MediaTypeImageIndex, Digest: godigest.Digest(real.String())}
 			}},
-		{name: "UnknownMediaTypeSkipsTheWholeJob", wantSkipped: `{"skipped":"unsupported child","digest":"%s","mediaType":"application/x-weird"}`,
+		{name: "UnknownMediaTypeFailsTheWholeJob", wantFailure: true,
 			child: func(real model.Digest) ocispec.Descriptor {
 				return ocispec.Descriptor{MediaType: "application/x-weird", Digest: godigest.Digest(real.String())}
 			}},
@@ -1343,13 +1369,10 @@ func TestRun_IndexChildRules(t *testing.T) {
 			amd := f.imageN(ocispec.MediaTypeImageManifest, 1)
 			other := f.imageN(ocispec.MediaTypeImageManifest, 2)
 			idx := f.index(manifestDesc(amd, "linux", "amd64"), tt.child(other))
-			if tt.wantSkipped != "" {
+			if tt.wantFailure {
 				res, err := f.scanner(Options{Trivy: "/nonexistent"}).Handle(t.Context(), f.job(idx, "oci-index"))
-				if err != nil {
-					t.Fatalf("Handle: %v", err)
-				}
-				if want := strings.Replace(tt.wantSkipped, "%s", other.String(), 1); string(res) != want || len(f.ev.attached) != 0 {
-					t.Fatalf("result = %s (attached %d), want %s", res, len(f.ev.attached), want)
+				if !errors.Is(err, worker.ErrPermanent) || !strings.Contains(fmt.Sprint(err), other.String()) || len(f.ev.attached) != 0 {
+					t.Fatalf("result = %s, err = %v (attached %d), want a permanent error naming %s", res, err, len(f.ev.attached), other)
 				}
 				return
 			}
@@ -1391,17 +1414,14 @@ func TestStage_IndexPlatformsSharingALayerStageItOnce(t *testing.T) {
 	}
 }
 
-func TestRun_IndexWithTwoChildrenOnOnePlatformIsSkippedWithNoEvidence(t *testing.T) {
+func TestRun_IndexWithTwoChildrenOnOnePlatformFailsPermanentlyWithNoEvidence(t *testing.T) {
 	f := newFixture(t)
 	a := f.imageN(ocispec.MediaTypeImageManifest, 1)
 	b := f.imageN(ocispec.MediaTypeImageManifest, 2)
 	idx := f.index(manifestDesc(a, "linux", "amd64"), manifestDesc(b, "linux", "amd64"))
 	res, err := f.scanner(Options{Trivy: "/nonexistent"}).Handle(t.Context(), f.job(idx, "oci-index"))
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if want := `{"skipped":"duplicate platform","platform":"linux/amd64"}`; string(res) != want || len(f.ev.attached) != 0 {
-		t.Fatalf("result = %s (attached %d), want %s", res, len(f.ev.attached), want)
+	if !errors.Is(err, worker.ErrPermanent) || !strings.Contains(fmt.Sprint(err), "linux/amd64") || len(f.ev.attached) != 0 {
+		t.Fatalf("result = %s, err = %v (attached %d), want a permanent error naming linux/amd64", res, err, len(f.ev.attached))
 	}
 }
 
@@ -1425,18 +1445,14 @@ func TestStage_WindowsChildrenDifferingByOSVersionAreBothStaged(t *testing.T) {
 	}
 }
 
-func TestRun_ChildDescribedAsManifestButAnIndexIsSkippedWithNoEvidence(t *testing.T) {
+func TestRun_ChildDescribedAsManifestButAnIndexFailsPermanentlyWithNoEvidence(t *testing.T) {
 	f := newFixture(t)
 	// A manifest-shaped body declaring an index media type.
 	raw, _ := json.Marshal(ocispec.Manifest{MediaType: ocispec.MediaTypeImageIndex})
 	liar := f.put(raw)
 	idx := f.index(manifestDesc(liar, "linux", "amd64"))
 	res, err := f.scanner(Options{Trivy: "/nonexistent"}).Handle(t.Context(), f.job(idx, "oci-index"))
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	want := `{"skipped":"unsupported child","digest":"` + liar.String() + `","mediaType":"application/vnd.oci.image.index.v1+json"}`
-	if string(res) != want || len(f.ev.attached) != 0 {
-		t.Fatalf("result = %s (attached %d), want %s", res, len(f.ev.attached), want)
+	if !errors.Is(err, worker.ErrPermanent) || !strings.Contains(fmt.Sprint(err), liar.String()) || len(f.ev.attached) != 0 {
+		t.Fatalf("result = %s, err = %v (attached %d), want a permanent error naming %s", res, err, len(f.ev.attached), liar)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -101,6 +102,58 @@ func TestWorker_FailedHandlerRecordsTheErrorForRetry(t *testing.T) {
 	got := jobState(t, q, job.ID)
 	if got.State != queue.StateQueued || got.LastError != "upstream timed out" || got.Attempts != 1 {
 		t.Fatalf("job = %+v, want queued for retry with the error", got)
+	}
+}
+
+func TestWorker_TransientErrorRetriesLater(t *testing.T) {
+	q, _ := setup(t)
+	job, _, _ := q.Enqueue(t.Context(), queue.EnqueueParams{Kind: "flaky", CreatedBy: "t"})
+
+	start(t, worker.Options{Queue: q, Owner: "w", Backoff: time.Hour, Handlers: map[string]worker.Handler{
+		"flaky": func(context.Context, queue.Job) (json.RawMessage, error) {
+			return nil, errors.New("upstream timed out")
+		},
+	}})
+
+	waitFor(t, "the failure to be recorded", func() bool { return jobState(t, q, job.ID).LastError != "" })
+	got := jobState(t, q, job.ID)
+	if got.State != queue.StateQueued || got.FinishedAt != nil {
+		t.Fatalf("job = %+v, want queued and unfinished", got)
+	}
+}
+
+func TestWorker_PermanentErrorFailsTheJobAfterOneAttempt(t *testing.T) {
+	q, _ := setup(t)
+	job, _, _ := q.Enqueue(t.Context(), queue.EnqueueParams{Kind: "doomed", MaxAttempts: 5, CreatedBy: "t"})
+	cause := errors.New("archive is 4096 bytes, over the 1000 byte limit")
+
+	start(t, worker.Options{Queue: q, Owner: "w", Backoff: time.Millisecond, Handlers: map[string]worker.Handler{
+		"doomed": func(context.Context, queue.Job) (json.RawMessage, error) {
+			return nil, fmt.Errorf("staging: %w", worker.Permanent(cause))
+		},
+	}})
+
+	waitFor(t, "the job to fail", func() bool { return jobState(t, q, job.ID).Done() })
+	got := jobState(t, q, job.ID)
+	if got.State != queue.StateFailed || got.Attempts != 1 || got.FinishedAt == nil {
+		t.Fatalf("job = %+v, want failed after one attempt with a finish time", got)
+	}
+	if want := "staging: " + cause.Error(); got.LastError != want {
+		t.Fatalf("last_error = %q, want %q", got.LastError, want)
+	}
+}
+
+func TestPermanent_MatchesBothTheSentinelAndTheCause(t *testing.T) {
+	cause := errors.New("cause")
+	err := fmt.Errorf("wrapped: %w", worker.Permanent(cause))
+	if !errors.Is(err, worker.ErrPermanent) || !errors.Is(err, cause) {
+		t.Fatalf("errors.Is(%v) lost the sentinel or the cause", err)
+	}
+	if err.Error() != "wrapped: cause" {
+		t.Fatalf("message = %q, want the cause unchanged", err.Error())
+	}
+	if worker.Permanent(nil) != nil {
+		t.Fatal("Permanent(nil) must be nil")
 	}
 }
 

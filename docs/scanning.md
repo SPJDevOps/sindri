@@ -32,7 +32,12 @@ Each hosted publish then queues a scan job. The worker unpacks the image or pack
 runs Trivy, and attaches two documents to the artifact as evidence: a CycloneDX `sbom`
 and a Trivy `scan` report. The queue is the same one the garbage collector uses (see
 [ADR 20](adr/0020-queue-table-and-background-worker.md)), so a scan that fails is retried
-with backoff. Every key under `scanning` is in the
+with backoff. A scan that can never succeed is not retried: an archive over
+`scanning.maxUnpackedBytes` or with an unsafe path, an index with too many, no scannable, or
+duplicate platforms, an index child of an unsupported type, and malformed job arguments all
+fail on the first attempt, and `last_error` names the cause. Only two outcomes are skipped
+rather than failed, because they are expected: a subject kind with nothing to scan, and a blob
+the publishing repository does not hold. Every key under `scanning` is in the
 [configuration reference](configuration.md#scanning).
 
 Turning scanning on does not scan what was published earlier. Those artifacts have no
@@ -208,7 +213,8 @@ of a scan and says how many it left out; the full report is the evidence documen
 Prometheus series describe the worker (see [Operating Sindri](operations.md#metrics-and-alerts)):
 `sindri_scans_total{result}` counts scan job attempts as `succeeded`, `failed`, or
 `skipped`, and `sindri_scan_duration_seconds` times them. Both exist only while scanning
-is on. `sindri_queue_jobs{state="failed"}` rises when a scan has used up its retries.
+is on. `sindri_queue_jobs{state="failed"}` rises when a scan has used up its retries or failed
+permanently.
 That artifact then has no Sindri scan and a severity gate refuses it.
 
 ## Re-scanning

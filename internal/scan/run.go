@@ -13,6 +13,7 @@ import (
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/queue"
 	"github.com/spj/sindri/internal/scanjob"
+	"github.com/spj/sindri/internal/worker"
 )
 
 // evidenceMetadata is what the worker writes on Sindri's own evidence. Only
@@ -95,11 +96,11 @@ func (s *Scanner) handle(ctx, scanCtx context.Context, job queue.Job) (res json.
 func (s *Scanner) handleScan(ctx, scanCtx context.Context, job queue.Job, attaching *bool) (json.RawMessage, error) {
 	var args scanjob.Args
 	if err := json.Unmarshal(job.Args, &args); err != nil {
-		return nil, fmt.Errorf("decoding scan job %d args: %w", job.ID, err)
+		return nil, worker.Permanent(fmt.Errorf("decoding scan job %d args: %w", job.ID, err))
 	}
 	digest, err := model.ParseDigest(args.Digest)
 	if err != nil {
-		return nil, fmt.Errorf("scan job %d: %w", job.ID, err)
+		return nil, worker.Permanent(fmt.Errorf("scan job %d: %w", job.ID, err))
 	}
 	kind := model.SubjectKind(args.Kind)
 	if kind == model.SubjectKindFile {
@@ -134,32 +135,23 @@ func (s *Scanner) handleScan(ctx, scanCtx context.Context, job queue.Job, attach
 	if errors.As(err, &notIn) {
 		return s.skippedNotInRepository(ctx, job, notIn.digest)
 	}
+	// Everything below fails the job for good: the subject itself is what is
+	// wrong, so a retry would stage the same bytes and fail the same way.
+	// Nothing is attached, so a severity gate refuses the subject (fail
+	// closed), and last_error says why.
 	var dup *duplicatePlatformError
 	if errors.As(err, &dup) {
-		s.logger.WarnContext(ctx, "scan skipped: duplicate platform", "job", job.ID, "platform", dup.platform)
-		return skipResult(struct {
-			Skipped  string `json:"skipped"`
-			Platform string `json:"platform"`
-		}{"duplicate platform", dup.platform})
+		return nil, worker.Permanent(fmt.Errorf("staging %s: %w", digest, err))
 	}
 	var unsupported *unsupportedChildError
 	if errors.As(err, &unsupported) {
-		s.logger.WarnContext(ctx, "scan skipped: unsupported index child", "job", job.ID, "digest", unsupported.digest.String(), "media_type", unsupported.mediaType)
-		return skipResult(struct {
-			Skipped   string `json:"skipped"`
-			Digest    string `json:"digest"`
-			MediaType string `json:"mediaType"`
-		}{"unsupported child", unsupported.digest.String(), unsupported.mediaType})
+		return nil, worker.Permanent(fmt.Errorf("staging %s: %w", digest, err))
 	}
-	if errors.Is(err, errTooManyPlatforms) || errors.Is(err, errNoPlatforms) {
-		// Partial or empty scans are never attached, so a severity gate
-		// refuses the subject (fail closed). Retrying would not change it.
-		reason := "no scannable platforms"
-		if errors.Is(err, errTooManyPlatforms) {
-			reason = "too many platforms"
-		}
-		s.logger.WarnContext(ctx, "scan skipped", "job", job.ID, "subject", digest.String(), "reason", reason)
-		return json.RawMessage(`{"skipped":"` + reason + `"}`), nil
+	if errors.Is(err, errTooManyPlatforms) || errors.Is(err, errNoPlatforms) || errors.Is(err, ErrUnsafePath) {
+		return nil, worker.Permanent(fmt.Errorf("staging %s: %w", digest, err))
+	}
+	if errors.Is(err, ErrArchiveTooLarge) {
+		return nil, worker.Permanent(fmt.Errorf("staging %s: %w (scanning.maxUnpackedBytes (%d); raise it for larger archives)", digest, err, s.opts.MaxUnpackedBytes))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("staging %s: %w", digest, err)
