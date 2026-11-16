@@ -260,7 +260,7 @@ func (s *Scanner) handleScan(ctx, scanCtx context.Context, job queue.Job, attach
 // retries. The dedupe key names the subject, repository, platform, and the set of new ids,
 // not the evidence row, so a retry that re-attaches sends nothing twice.
 func (s *Scanner) findingHook(digest model.Digest, d scanned, newVulns *[]string) func(context.Context, *db.Queries, evidence.Evidence) error {
-	if s.notifier == nil || newVulns == nil || len(*newVulns) == 0 {
+	if s.notifier == nil || newVulns == nil || len(*newVulns) == 0 || !s.notifier.Wants(notify.EventFindingNew) {
 		return nil
 	}
 	return func(ctx context.Context, q *db.Queries, ev evidence.Evidence) error {

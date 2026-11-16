@@ -220,6 +220,17 @@ func (n *Notifier) SetMaxAttempts(v int) {
 // Webhooks returns the current set. The slice is the caller's to keep.
 func (n *Notifier) Webhooks() []Webhook { return slices.Clone(*n.webhooks.Load()) }
 
+// Wants reports whether any configured webhook subscribes to the event, in any
+// repository. A caller whose event costs queries to build checks it first.
+func (n *Notifier) Wants(event string) bool {
+	for _, w := range *n.webhooks.Load() {
+		if slices.Contains(w.Events, event) {
+			return true
+		}
+	}
+	return false
+}
+
 // Webhook finds a configured webhook by name.
 func (n *Notifier) Webhook(name string) (Webhook, bool) {
 	for _, w := range *n.webhooks.Load() {

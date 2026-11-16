@@ -114,3 +114,14 @@ func TestEnvelope_MarshalsEmptyListsNotNull(t *testing.T) {
 		}
 	}
 }
+
+func TestNotifier_WantsAnEventOnlyWhileAWebhookSubscribes(t *testing.T) {
+	n := notify.New(notify.Options{Webhooks: []notify.Webhook{{Name: "a", Events: []string{notify.EventPromoted}}}})
+	if n.Wants(notify.EventFindingNew) || !n.Wants(notify.EventPromoted) {
+		t.Error("Wants disagrees with the subscriptions")
+	}
+	n.Swap([]notify.Webhook{{Name: "a", Events: []string{notify.EventFindingNew}}})
+	if !n.Wants(notify.EventFindingNew) {
+		t.Error("Wants did not follow Swap")
+	}
+}
