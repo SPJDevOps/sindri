@@ -1,0 +1,75 @@
+-- name: InsertWebhookDelivery :one
+-- Inserts a delivery unless this webhook already has one with the dedupe key,
+-- in which case no row comes back: the event was already emitted.
+INSERT INTO webhook_deliveries (webhook, event, subject_digest, repository, payload, dedupe_key)
+VALUES (
+    sqlc.arg('webhook'), sqlc.arg('event'), sqlc.arg('subject_digest'),
+    sqlc.arg('repository'), sqlc.arg('payload'), sqlc.arg('dedupe_key')
+)
+ON CONFLICT (webhook, dedupe_key) DO NOTHING
+RETURNING *;
+
+-- name: SetWebhookDeliveryPayload :exec
+-- The payload carries the delivery's own id, which exists only after the
+-- insert.
+UPDATE webhook_deliveries SET payload = sqlc.arg('payload') WHERE id = sqlc.arg('id');
+
+-- name: SetWebhookDeliveryJob :exec
+UPDATE webhook_deliveries SET job_id = sqlc.arg('job_id') WHERE id = sqlc.arg('id');
+
+-- name: GetWebhookDelivery :one
+-- job_run_after is when the delivery's job next runs. It is the next retry
+-- only while state is pending; it is null once the job is gone.
+SELECT d.*, j.run_after AS job_run_after
+FROM webhook_deliveries d
+LEFT JOIN jobs j ON j.id = d.job_id
+WHERE d.id = $1;
+
+-- name: ListWebhookDeliveries :many
+SELECT d.*, j.run_after AS job_run_after
+FROM webhook_deliveries d
+LEFT JOIN jobs j ON j.id = d.job_id
+WHERE (sqlc.narg('webhook')::text IS NULL OR d.webhook = sqlc.narg('webhook'))
+  AND (sqlc.narg('state')::text IS NULL OR d.state = sqlc.narg('state'))
+  AND (sqlc.narg('subject_digest')::text IS NULL OR d.subject_digest = sqlc.narg('subject_digest'))
+ORDER BY d.created_at DESC, d.id DESC
+LIMIT sqlc.arg('row_limit');
+
+-- name: RecordWebhookAttempt :exec
+UPDATE webhook_deliveries
+SET attempts = attempts + 1,
+    last_status = sqlc.narg('last_status'),
+    last_error = sqlc.narg('last_error')
+WHERE id = sqlc.arg('id');
+
+-- name: MarkWebhookDelivered :exec
+UPDATE webhook_deliveries
+SET state = 'delivered', delivered_at = now(), finished_at = now(), last_error = NULL
+WHERE id = $1;
+
+-- name: MarkWebhookFailed :exec
+UPDATE webhook_deliveries
+SET state = 'failed', finished_at = now(), last_error = sqlc.arg('last_error')::text
+WHERE id = sqlc.arg('id');
+
+-- name: CountFailedWebhookDeliveriesByWebhook :many
+SELECT webhook, count(*)::bigint AS failed
+FROM webhook_deliveries
+WHERE state = 'failed'
+GROUP BY webhook;
+
+-- name: SubjectHasLiveApproval :one
+-- Is this digest approved, at any stage in any repository? A finding on a
+-- subject nobody approved is not sent (ADR 34).
+SELECT EXISTS (
+    SELECT 1 FROM lifecycle_current
+    WHERE subject_digest = $1 AND action = 'approve'
+) AS approved;
+
+-- name: ListApprovedStages :many
+-- The names of the stages this digest is currently approved for.
+SELECT DISTINCT s.name, s.position
+FROM lifecycle_current c
+JOIN lifecycle_stages s ON s.id = c.stage_id
+WHERE c.subject_digest = $1 AND c.action = 'approve'
+ORDER BY s.position;
