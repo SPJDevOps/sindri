@@ -835,7 +835,7 @@ publish is scanned, and promotion is refused above a severity.
 | 10, Nov 11–29 | M11a gate | SIN-34, 38, 39, 72, 80 | v1.3.0 ✅ |
 | 11, Nov 12 | M11b re-scan ✅ | SIN-33, 35 | v1.4.0 |
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
-| 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 |
+| 13, Nov 16–22 | Pre-announcement hardening | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 |
 | 14, Nov 23–29 | Notifications | SIN-117, 112 | v1.6.0 |
 | 15, Nov 30–Dec 6 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
 | 16–17, Dec 7–20 | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
@@ -861,12 +861,12 @@ below names first. **The announcement is not tied to a sprint:** it follows the 
 walkthrough, at the earliest after Sprint 13. If it comes sooner, the M12 window moves up and
 Sprints 14 and 15 follow it.
 
-Sprint 13 shipped all seven tickets as v1.5.1, recorded under
+Sprint 13 built all seven tickets for v1.5.1, recorded under
 [v1.5.1 — Hardening](#v151--hardening) below.
 
 Not scheduled: SIN-56, 58, 65, 74, and 76 from the hardening epic, kept as filler for the
 M12 window. SIN-80 shipped in Sprint 10, SIN-83 and SIN-86 (the gate scripts' leaked
-Docker volumes) in Sprint 12, and SIN-73, 75, 81, 82, 84, 85 and 116 in Sprint 13.
+Docker volumes) in Sprint 12, and SIN-73, 75, 81, 82, 84, 85 and 116 were built in Sprint 13 for v1.5.1.
 
 ---
 
@@ -1024,7 +1024,7 @@ and installs a proxied package. v1.1.1 is published, with binaries and
 otherwise fail cold reads across its repository. Only connection failures and timeouts do.
 
 **Follow-ups.** SIN-73 (evict one digest from an OCI proxy) and SIN-75 (a PyPI filename retired
-under one version and placed under another) shipped in v1.5.1. SIN-74 (memory when parsing whole
+under one version and placed under another) were built for v1.5.1. SIN-74 (memory when parsing whole
 packuments) and SIN-76 (the Compose stack and MinIO's setup instance) stay unscheduled.
 
 ---
