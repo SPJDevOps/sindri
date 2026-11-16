@@ -819,8 +819,8 @@ open-core line: what is open stays open.
 The order is v1.0.1, M9 npm, v1.1.1 hardening, M10 adoptable, M11a scan and gate, the public
 announcement, then M11b. npm comes before the docs site because without npm this audience
 cannot drop Verdaccio, and docs would sell something they cannot fully use yet. On
-2026-11-12 M11b was started without waiting for the announcement. The announcement still
-waits only for the person-run M10 migration walkthrough, and it does not wait for M11b.
+2026-11-12 M11b was started without waiting for the announcement. Since 2026-11-16 the
+announcement waits for the person-run M10 migration walkthrough and for Sprints 14 and 15.
 
 **The announcement** follows v1.3.0 (M11a), and [ADR 25](docs/adr/0025-what-the-announcement-requires.md)
 records why. It requires OCI, PyPI, and npm, with other formats promised for later; the docs;
