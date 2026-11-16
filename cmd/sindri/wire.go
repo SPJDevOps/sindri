@@ -314,6 +314,7 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 	if err := scan.PrepareCacheDir(cacheDir); err != nil {
 		return nil, nil, fmt.Errorf("scanning.cacheDir: %w", err)
 	}
+	sweepStaging(ctx, logger, filepath.Join(cacheDir, "sindri-staging"), sc.JobTimeout.Duration())
 	mx, err := newScanMetrics(reg)
 	if err != nil {
 		return nil, nil, err
@@ -343,6 +344,27 @@ func buildScanner(ctx context.Context, sc config.Scanning, logger *slog.Logger, 
 		OfflineScan:      sc.OfflineScan,
 		MaxUnpackedBytes: sc.MaxUnpackedBytes,
 	}, logger), mx, nil
+}
+
+// stagingSweepMargin keeps clock and mtime coarseness from ever making a
+// live job's staging directory look stale.
+const stagingSweepMargin = 10 * time.Minute
+
+// sweepStaging removes staging directories a killed process left behind. The
+// job deadline bounds a live job, so anything older than it plus a margin is
+// abandoned. With no deadline configured nothing can be proven stale, so it
+// does nothing. A failure is logged and never stops startup.
+func sweepStaging(ctx context.Context, logger *slog.Logger, dir string, jobTimeout time.Duration) {
+	if jobTimeout <= 0 || logger == nil {
+		return
+	}
+	res, err := scan.SweepStaging(dir, jobTimeout+stagingSweepMargin)
+	if err != nil {
+		logger.WarnContext(ctx, "sweeping stale scan staging directories failed; continuing", "dir", dir, "error", err)
+	}
+	if res.Removed > 0 {
+		logger.InfoContext(ctx, "removed stale scan staging directories", "count", res.Removed, "bytes", res.Bytes)
+	}
 }
 
 // approvedFindingCounts reads sindri_approved_findings: the approved subjects

@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -86,4 +89,29 @@ func mkdirMode(dir string, mode os.FileMode) error {
 		return err
 	}
 	return os.Chmod(dir, mode) //nolint:gosec // the test needs a loose directory to prove it is refused
+}
+
+func TestBuildScanner_SweepsStaleStagingDirectories(t *testing.T) {
+	dir := t.TempDir() + "/cache"
+	staging := dir + "/sindri-staging"
+	stale, fresh := staging+"/sindri-scan-old", staging+"/sindri-scan-new"
+	for _, p := range []string{stale, fresh} {
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if _, _, err := buildScanner(t.Context(), scanningWithCache(dir), logger, nil, nil, nil, prometheus.NewRegistry()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale staging directory still exists: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("fresh staging directory was removed: %v", err)
+	}
 }
