@@ -132,7 +132,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 	}
 	creds := config.NewCredentialStore(cfg.Credentials)
 	notifier := notify.New(notify.Options{
-		Webhooks:    notify.FromConfig(cfg.Notifications),
+		Webhooks:    webhooksFromConfig(cfg.Notifications),
 		MaxAttempts: cfg.Notifications.MaxAttempts,
 		PublicURL:   cfg.PublicURL,
 		Version:     version.Version,

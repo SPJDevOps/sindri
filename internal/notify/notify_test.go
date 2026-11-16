@@ -5,9 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/notify"
 )
 
@@ -82,17 +80,6 @@ func TestWebhook_SubscribesByEventAndRepository(t *testing.T) {
 				t.Errorf("Subscribes(%q, %q) = %t, want %t", tc.event, tc.repo, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestFromConfig_CopiesEveryField(t *testing.T) {
-	got := notify.FromConfig(config.Notifications{Webhooks: []config.Webhook{{
-		Name: "a", URL: "https://h.example/x", Secret: "s", Events: []string{"finding.new"},
-		Repositories: []string{"docker"}, Timeout: config.Duration(5 * time.Second),
-	}}})
-	if len(got) != 1 || got[0].Name != "a" || got[0].URL != "https://h.example/x" || string(got[0].Secret) != "s" ||
-		got[0].Timeout != 5*time.Second || got[0].Repositories[0] != "docker" || got[0].Events[0] != "finding.new" {
-		t.Errorf("FromConfig = %+v", got)
 	}
 }
 

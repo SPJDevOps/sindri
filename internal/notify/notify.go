@@ -6,7 +6,7 @@
 // handler: it signs, POSTs, records the outcome, and decides whether the queue
 // retries.
 //
-// The package depends on db, queue, model, config, and worker, so lifecycle
+// The package depends on db, queue, model, version, and worker, so lifecycle
 // and scan can call it without a cycle.
 package notify
 
@@ -23,7 +23,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/queue"
@@ -31,8 +30,8 @@ import (
 
 // The event names, as they appear in configuration and in payloads.
 const (
-	EventFindingNew = config.EventFindingNew
-	EventPromoted   = config.EventPromoted
+	EventFindingNew = "finding.new"
+	EventPromoted   = "lifecycle.promoted"
 )
 
 // JobKind is the queue kind of one delivery.
@@ -62,22 +61,6 @@ func (w Webhook) Subscribes(event, repository string) bool {
 		return false
 	}
 	return len(w.Repositories) == 0 || slices.Contains(w.Repositories, repository)
-}
-
-// FromConfig builds the webhook set from the notifications section.
-func FromConfig(c config.Notifications) []Webhook {
-	out := make([]Webhook, 0, len(c.Webhooks))
-	for _, w := range c.Webhooks {
-		out = append(out, Webhook{
-			Name:         w.Name,
-			URL:          w.URL,
-			Secret:       []byte(w.Secret),
-			Events:       slices.Clone(w.Events),
-			Repositories: slices.Clone(w.Repositories),
-			Timeout:      w.Timeout.Duration(),
-		})
-	}
-	return out
 }
 
 // EventData is the typed `data` of one event kind.

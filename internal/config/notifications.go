@@ -11,7 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The events a webhook may subscribe to (ADR 34).
+// The events a webhook may subscribe to (ADR 34). internal/notify owns the
+// same names and must not import this package; a test keeps the two in step.
 const (
 	// EventFindingNew is a new vulnerability found on a subject approved at
 	// some stage.

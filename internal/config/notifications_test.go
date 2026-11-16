@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/spj/sindri/internal/config"
+	"github.com/spj/sindri/internal/notify"
 )
 
 const goodSecret = "0123456789abcdef0123456789abcdef"
@@ -91,5 +93,14 @@ func TestParse_NotificationsAcceptsLoopbackHTTPAndFilters(t *testing.T) {
 	w := cfg.Notifications.Webhooks[0]
 	if cfg.Notifications.MaxAttempts != 3 || w.Timeout.Duration() != 30*time.Second || len(w.Repositories) != 2 || len(w.Events) != 2 {
 		t.Errorf("unexpected notifications: %+v", cfg.Notifications)
+	}
+}
+
+// notify must not import config (dependency direction, ADR 34), and config does
+// not import notify, so each keeps its own event list; this keeps them in step.
+func TestWebhookEvents_MatchTheEventsNotifySends(t *testing.T) {
+	want := []string{notify.EventFindingNew, notify.EventPromoted}
+	if !slices.Equal(config.WebhookEvents, want) {
+		t.Errorf("config.WebhookEvents = %v, notify sends %v", config.WebhookEvents, want)
 	}
 }
