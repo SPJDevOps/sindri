@@ -91,9 +91,9 @@ type deliveryItem struct {
 	Digest      string          `json:"digest"`
 	State       string          `json:"state"`
 	Attempts    int             `json:"attempts"`
-	LastStatus  *int            `json:"lastStatus"`
-	LastError   *string         `json:"lastError"`
-	NextRetryAt *string         `json:"nextRetryAt"`
+	LastStatus  *int            `json:"last_status"`
+	LastError   *string         `json:"last_error"`
+	NextRetryAt *string         `json:"next_retry_at"`
 	Payload     json.RawMessage `json:"payload"`
 }
 
@@ -103,11 +103,13 @@ func (s *stack) deliveries(query string) []deliveryItem {
 	if r.status != http.StatusOK {
 		s.t.Fatalf("list deliveries: %d %s", r.status, r.body)
 	}
-	var out []deliveryItem
+	var out struct {
+		Items []deliveryItem `json:"items"`
+	}
 	if err := json.Unmarshal(r.body, &out); err != nil {
 		s.t.Fatalf("deliveries: %v\n%s", err, r.body)
 	}
-	return out
+	return out.Items
 }
 
 func (s *stack) metric(line string) bool {
@@ -267,16 +269,18 @@ func TestNotifications_ReceiverDownRetriesThenRecordsFailure(t *testing.T) {
 	})
 
 	r := s.request(http.MethodGet, "/api/v1/notifications/webhooks", nil, bearer(bootstrapToken))
-	var hooks []struct {
-		Name             string `json:"name"`
-		Target           string `json:"target"`
-		FailedDeliveries int    `json:"failedDeliveries"`
+	var list struct {
+		Items []struct {
+			Name             string `json:"name"`
+			Target           string `json:"target"`
+			FailedDeliveries int    `json:"failed_deliveries"`
+		} `json:"items"`
 	}
-	if err := json.Unmarshal(r.body, &hooks); err != nil || len(hooks) != 1 {
+	if err := json.Unmarshal(r.body, &list); err != nil || len(list.Items) != 1 {
 		t.Fatalf("webhooks: %v %s", err, r.body)
 	}
-	if hooks[0].FailedDeliveries != 1 || hooks[0].Target != rc.srv.URL {
-		t.Errorf("webhook = %+v, want 1 failed and target %s", hooks[0], rc.srv.URL)
+	if list.Items[0].FailedDeliveries != 1 || list.Items[0].Target != rc.srv.URL {
+		t.Errorf("webhook = %+v, want 1 failed and target %s", list.Items[0], rc.srv.URL)
 	}
 	for _, leak := range []string{hookPath, "t0ken", hookSecret} {
 		if strings.Contains(string(r.body), leak) || strings.Contains(d.stringified(), leak) {

@@ -28,7 +28,7 @@ type webhookResponse struct {
 	Events           []string `json:"events"`
 	Repositories     []string `json:"repositories"`
 	Target           string   `json:"target"`
-	FailedDeliveries int64    `json:"failedDeliveries"`
+	FailedDeliveries int64    `json:"failed_deliveries"`
 }
 
 // deliveryResponse is one delivery. Payload is set on the single GET only.
@@ -40,13 +40,13 @@ type deliveryResponse struct {
 	Repository  string  `json:"repository"`
 	State       string  `json:"state"`
 	Attempts    int32   `json:"attempts"`
-	LastStatus  *int32  `json:"lastStatus"`
-	LastError   *string `json:"lastError"`
-	CreatedAt   string  `json:"createdAt"`
-	DeliveredAt *string `json:"deliveredAt"`
-	FinishedAt  *string `json:"finishedAt"`
+	LastStatus  *int32  `json:"last_status"`
+	LastError   *string `json:"last_error"`
+	CreatedAt   string  `json:"created_at"`
+	DeliveredAt *string `json:"delivered_at"`
+	FinishedAt  *string `json:"finished_at"`
 	// NextRetryAt is set only while the delivery is pending.
-	NextRetryAt *string `json:"nextRetryAt"`
+	NextRetryAt *string `json:"next_retry_at"`
 }
 
 // deliveryDetail adds the exact JSON body sent, which lists omit.
@@ -130,7 +130,7 @@ func (a *api) listWebhooks(w http.ResponseWriter, r *http.Request) {
 			FailedDeliveries: counts[h.Name],
 		})
 	}
-	a.writeJSON(w, r, http.StatusOK, out)
+	a.writeJSON(w, r, http.StatusOK, listResponse[webhookResponse]{Items: out})
 }
 
 func nonNil(s []string) []string {
@@ -185,7 +185,7 @@ func (a *api) listDeliveries(w http.ResponseWriter, r *http.Request) {
 			row.Attempts, row.LastStatus, row.LastError,
 			pgtype.Timestamptz{Time: row.CreatedAt, Valid: true}, row.DeliveredAt, row.FinishedAt, row.JobRunAfter))
 	}
-	a.writeJSON(w, r, http.StatusOK, out)
+	a.writeJSON(w, r, http.StatusOK, listResponse[deliveryResponse]{Items: out})
 }
 
 func deliveryID(r *http.Request) (int64, bool) {
