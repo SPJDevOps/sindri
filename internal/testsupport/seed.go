@@ -149,7 +149,6 @@ type seedRepo struct {
 type seeder struct {
 	now    time.Time
 	stages []stage
-	newStg []stage // stages this seed created, empty when some existed
 	info   SeedInfo
 
 	repos      [][]any
