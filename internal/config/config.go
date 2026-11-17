@@ -42,6 +42,7 @@ type Config struct {
 	Worker        Worker        `yaml:"worker"`
 	Scanning      Scanning      `yaml:"scanning"`
 	Notifications Notifications `yaml:"notifications"`
+	UI            UI            `yaml:"ui"`
 
 	// The origin clients reach this server at, for example
 	// `https://sindri.example.com`. Required when the file declares any npm
@@ -76,6 +77,7 @@ func Default() Config {
 		Worker:        defaultWorker(),
 		Scanning:      defaultScanning(),
 		Notifications: defaultNotifications(),
+		UI:            defaultUI(),
 	}
 }
 
@@ -199,6 +201,7 @@ func (c *Config) applyDefaults() {
 	c.Worker.applyDefaults()
 	c.Scanning.applyDefaults()
 	c.Notifications.applyDefaults()
+	c.UI.applyDefaults()
 }
 
 // Validate reports the first configuration error, naming the field.
@@ -213,6 +216,7 @@ func (c *Config) Validate() error {
 		c.Worker.validate,
 		c.Scanning.validate,
 		c.Notifications.validate,
+		c.UI.validate,
 		c.Credentials.validate,
 	} {
 		if err := check(); err != nil {

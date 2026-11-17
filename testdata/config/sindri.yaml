@@ -36,6 +36,11 @@ notifications:
       repositories: [docker]
       timeout: 15s
 
+# The web interface's "Docs" link. The default is the public documentation;
+# an air-gapped install points it at its own copy.
+ui:
+  docsUrl: https://docs.example.invalid/sindri/
+
 # Used only by pypi-mirror below, which exists so that the golden tests cover
 # upstream.credentials. Its upstream is under .invalid (RFC 2606), so this
 # value is never sent anywhere.

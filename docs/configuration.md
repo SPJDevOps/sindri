@@ -46,7 +46,7 @@ it; where it does not, the key is unset.
 
 These keys configure the process. They have no manifest form: manifests describe
 repositories and lifecycle, so `listen`, `storage`, `database`, `log`, `auth`, `worker`,
-`scanning`, `notifications`, `credentials`, and `publicUrl` appear in `sindri.yaml` only.
+`scanning`, `notifications`, `ui`, `credentials`, and `publicUrl` appear in `sindri.yaml` only.
 
 ### `listen`
 
@@ -281,6 +281,19 @@ and goes through the job queue. See [ADR 34](adr/0034-webhook-notifications.md).
 | `webhooks[].timeout` | duration | How long one delivery attempt may take before it is cancelled and retried. More than 0 and at most `1m`. | `10s` |
 | `maxAttempts` | integer | How many times one delivery is attempted before it is recorded as failed, with the queue's exponential backoff between attempts. Between 1 and 50. | `8` |
 <!-- END GENERATED: notifications -->
+
+### `ui`
+
+The read-only web interface under `/ui`. It is a server-level setting with no manifest
+form. Restart the server to change it.
+
+<!-- BEGIN GENERATED: ui -->
+<!-- Generated from internal/config by `make reference`. Edit the struct comments, not this table. -->
+
+| Key | Type | Meaning | Default |
+|---|---|---|---|
+| `docsUrl` | string | Where the "Docs" link in the web interface footer, and the sign-in help, point. Set it to an internal copy of the documentation in an air-gapped install. An absolute `http` or `https` URL without credentials. | `https://spjdevops.github.io/sindri/` |
+<!-- END GENERATED: ui -->
 
 ## Repositories, lifecycle, and defaults
 

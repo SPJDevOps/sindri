@@ -196,6 +196,9 @@ func restartSections(before, after *config.Config) []string {
 	if before.Log != after.Log {
 		out = append(out, "log")
 	}
+	if before.UI != after.UI {
+		out = append(out, "ui")
+	}
 	if before.Worker != after.Worker {
 		out = append(out, "worker")
 	}
