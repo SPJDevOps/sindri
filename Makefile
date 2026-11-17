@@ -127,6 +127,11 @@ docs-links-external: docs
 run: build
 	$(BIN_DIR)/$(BINARY) serve --config deploy/compose/sindri.yaml
 
+## ui-preview: Serve the UI's golden pages with the real stylesheet at http://127.0.0.1:8089.
+.PHONY: ui-preview
+ui-preview:
+	go run ./internal/ui/preview
+
 ## up: Start local Postgres, MinIO, and Dex for development.
 .PHONY: up
 up:
