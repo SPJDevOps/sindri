@@ -71,6 +71,43 @@ func TestTemplates_NoInlineScriptOrStyleOrHandlers(t *testing.T) {
 	}
 }
 
+// The Content-Security-Policy lets a form submit to this server (form-action
+// 'self'). That is safe only while every form is a GET: the UI has no write
+// path, and the session cookie is honoured on GET and HEAD alone. A form with
+// no method counts as a GET to a browser, but the template must say so, so
+// that a change to POST is a visible edit and not a missing attribute (ADR 21).
+// The form must be a GET, or a dialog form, which never submits.
+func TestTemplates_EveryFormIsAnExplicitGET(t *testing.T) {
+	form := regexp.MustCompile(`(?is)<form\b[^>]*>`)
+	// method="dialog" closes the <dialog> it sits in and sends nothing, so it
+	// needs no form-action; it is the only other method a template may use.
+	method := regexp.MustCompile(`(?i)\smethod="(?:get|dialog)"`)
+	forms := 0
+	err := fs.WalkDir(web.Templates(), ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(web.Templates(), path)
+		if err != nil {
+			return err
+		}
+		for _, loc := range form.FindAllIndex(b, -1) {
+			forms++
+			if tag := b[loc[0]:loc[1]]; !method.Match(tag) {
+				line := bytes.Count(b[:loc[0]], []byte("\n")) + 1
+				t.Errorf("%s:%d: a <form> must say method=\"get\" (or \"dialog\", which sends nothing): %s", path, line, tag)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forms == 0 {
+		t.Error("no <form> found in any template; the test measures nothing")
+	}
+}
+
 // Golden renders of every page, from fixed data. They are what a reviewer
 // reads to see a template change, and they fail on an accidental one. Run
 // `go test ./internal/ui -run TestTemplates_Golden -update` to accept a
@@ -101,18 +138,44 @@ func TestTemplates_Golden(t *testing.T) {
 		page string
 		data any
 	}{
-		"repos": {"repos", struct {
-			chrome
-			Repos []tile
-		}{base, []tile{
-			{repoView: team},
-			{repoView: repoView{Name: "hub", Type: "proxy", Protocol: "oci", Upstream: true, Href: "/ui/r/hub"}, Detail: "caches https://registry-1.docker.io"},
-			{repoView: repoView{Name: "python", Type: "virtual", Protocol: "pypi", Href: "/ui/r/python"}, Detail: "resolves internal-py → pypi"},
-		}}},
-		"repos-empty": {"repos", struct {
-			chrome
-			Repos []tile
-		}{base, nil}},
+		"repos": {"repos", reposPage{chrome: base, Total: 3, Matching: 3, From: 1, To: 3,
+			Table: false, Types: options(repoTypes, ""), Protos: options(repoProtocols, ""),
+			TableHref: "/ui/?view=table", TilesHref: "/ui/?view=tiles", ClearHref: "/ui/",
+			Groups: []repoGroup{
+				{Rows: []repoRow{
+					{repoView: repoView{Name: "hub", Type: "proxy", Protocol: "oci", Upstream: true, Href: "/ui/r/hub"}, Detail: "caches registry-1.docker.io",
+						Stats: &rowStats{Packages: 4, Stored: 5 << 20, LastPublished: long}},
+					{repoView: repoView{Name: "python", Type: "virtual", Protocol: "pypi", Href: "/ui/r/python"}, Detail: "resolves 2 members"},
+				}},
+				{Label: "team", Rows: []repoRow{{repoView: team, Stats: &rowStats{Packages: 1, Stored: 1234}}}},
+			}}},
+		"repos-table": {"repos", reposPage{chrome: base, Total: 500, Matching: 500, From: 1, To: 200,
+			Table: true, Types: options(repoTypes, ""), Protos: options(repoProtocols, ""),
+			TableHref: "/ui/?view=table", TilesHref: "/ui/?view=tiles", ClearHref: "/ui/",
+			Pager: &pagerView{Page: 1, Pages: 3, Next: "/ui/?page=2"},
+			Groups: []repoGroup{
+				{Rows: []repoRow{
+					{repoView: repoView{Name: "hub", Type: "proxy", Protocol: "oci", ManagedBy: "config", Upstream: true, Href: "/ui/r/hub"}, Detail: "caches registry-1.docker.io",
+						Stats: &rowStats{Packages: 4, Stored: 5 << 20, LastPublished: long}},
+					{repoView: repoView{Name: "python", Type: "virtual", Protocol: "pypi", ManagedBy: "config", Href: "/ui/r/python"}, Detail: "resolves 2 members"},
+				}},
+				{Label: "team", Rows: []repoRow{
+					{repoView: repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}, Stats: &rowStats{Packages: 12, Stored: 3 << 30, LastPublished: long}},
+					{repoView: repoView{Name: "team/lib", Type: "hosted", Protocol: "pypi", ManagedBy: "api", Locked: true, Href: "/ui/r/team/lib"}, Stats: &rowStats{}},
+				}},
+			}}},
+		"repos-filtered": {"repos", reposPage{chrome: base, Total: 500, Matching: 2, From: 1, To: 2,
+			Filter: repoFilter{Q: "team", Type: "hosted", View: "table"}, Table: true,
+			Types: options(repoTypes, "hosted"), Protos: options(repoProtocols, ""),
+			TableHref: "/ui/?q=team&type=hosted&view=table", TilesHref: "/ui/?q=team&type=hosted&view=tiles", ClearHref: "/ui/?view=table",
+			Groups: []repoGroup{{Label: "team", Rows: []repoRow{
+				{repoView: repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}, Stats: &rowStats{Packages: 12, Stored: 3 << 30, LastPublished: long}},
+				{repoView: repoView{Name: "team/lib", Type: "hosted", Protocol: "pypi", ManagedBy: "api", Href: "/ui/r/team/lib"}, Stats: &rowStats{}},
+			}}}}},
+		"repos-nomatch": {"repos", reposPage{chrome: base, Total: 500, Matching: 0,
+			Filter: repoFilter{Q: "zzz"}, Types: options(repoTypes, ""), Protos: options(repoProtocols, ""),
+			ClearHref: "/ui/"}},
+		"repos-empty": {"repos", reposPage{chrome: base}},
 		"repo": {"repo", repoPage{chrome: base, Repo: team,
 			Packages: []link{{Name: "web", Href: "/ui/r/team/app/-/package?name=web"}},
 			More:     "/ui/r/team/app?cursor=web"}},

@@ -46,13 +46,10 @@ func viewRepo(repo model.Repository) repoView {
 	}
 }
 
-type tile struct {
-	repoView
-	Detail string
-}
-
-// repositories is the home page: every repository the caller may read.
+// repositories is the home page: the repositories the caller may read, filtered
+// and paged by the URL.
 func (h *handler) repositories(w http.ResponseWriter, r *http.Request) {
+	filter := parseRepoFilter(r.URL.Query())
 	all, err := h.opts.Registry.AllRepositories(r.Context())
 	if err != nil {
 		h.fail(w, r, err)
@@ -74,38 +71,97 @@ func (h *handler) repositories(w http.ResponseWriter, r *http.Request) {
 	for _, repo := range all {
 		byName[repo.Name] = repo
 	}
-	var tiles []tile
+	// The readability filter comes first: every count below is of what the
+	// caller may read and nothing else.
+	var visible, matching []model.Repository
 	for _, repo := range all {
 		if !readable(r, repo) {
 			continue
 		}
-		t := tile{repoView: viewRepo(repo)}
+		visible = append(visible, repo)
+		if filter.matches(repo) {
+			matching = append(matching, repo)
+		}
+	}
+	sortRepos(matching)
+	page, pages, from, to := paginate(len(matching), filter.Page, repoPageSize)
+	shown := matching[from:to]
+
+	names := make([]string, 0, len(shown))
+	for _, repo := range shown {
+		if repo.Type != model.RepoTypeVirtual {
+			names = append(names, repo.Name)
+		}
+	}
+	stats, err := h.opts.Registry.StatsFor(r.Context(), names)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	rows := make([]repoRow, 0, len(shown))
+	for _, repo := range shown {
+		row := repoRow{repoView: viewRepo(repo)}
 		switch repo.Type {
 		case model.RepoTypeProxy:
-			if upstream, ok := upstreams[repo.Name]; ok {
-				t.Detail = "caches " + model.RedactUserinfo(upstream)
-			}
+			row.Detail = upstreamDetail(upstreamHost(upstreams[repo.Name]))
 		case model.RepoTypeVirtual:
 			// A virtual repository answers only from members the caller
-			// may read, so the page names only those.
-			var names []string
+			// may read, so the page counts only those.
+			n := 0
 			for _, name := range members[repo.Name] {
 				if m, ok := byName[name]; ok && readable(r, m) {
-					names = append(names, name)
+					n++
 				}
 			}
-			if len(names) > 0 {
-				t.Detail = "resolves " + strings.Join(names, " → ")
-			}
+			row.Detail = memberDetail(n)
 		case model.RepoTypeHosted:
 		}
-		tiles = append(tiles, t)
+		if repo.Type != model.RepoTypeVirtual {
+			row.Stats = statsView(stats[repo.Name])
+		}
+		rows = append(rows, row)
 	}
-	slices.SortFunc(tiles, func(a, b tile) int { return strings.Compare(a.Name, b.Name) })
-	h.render(w, r, "repos", "", http.StatusOK, struct {
-		chrome
-		Repos []tile
-	}{h.chrome(r, "Repositories"), tiles})
+
+	table := useTable(len(matching), filter.View)
+	filter.Page = page
+	data := reposPage{
+		chrome:   h.chrome(r, "Repositories"),
+		Total:    len(visible),
+		Matching: len(matching),
+		Filter:   filter,
+		Table:    table,
+		Groups:   groupRows(rows),
+		Types:    options(repoTypes, filter.Type),
+		Protos:   options(repoProtocols, filter.Protocol),
+	}
+	if len(matching) > 0 {
+		data.From, data.To = from+1, to
+	}
+	with := func(f repoFilter, view string) string { f.View = view; return f.href() }
+	data.TableHref, data.TilesHref = with(filter, viewTable), with(filter, viewTiles)
+	cleared := repoFilter{View: filter.View}
+	data.ClearHref = cleared.href()
+	if pages > 1 {
+		pv := &pagerView{Page: page, Pages: pages}
+		if page > 1 {
+			prev := filter
+			prev.Page = page - 1
+			pv.Prev = prev.href()
+		}
+		if page < pages {
+			next := filter
+			next.Page = page + 1
+			pv.Next = next.href()
+		}
+		data.Pager = pv
+	}
+	// A history restore asks for the whole page even though htmx sent it.
+	partial := "results"
+	if r.Header.Get("HX-History-Restore-Request") == "true" {
+		partial = ""
+	}
+	h.render(w, r, "repos", partial, http.StatusOK, data)
 }
 
 // readableMembers lists a virtual repository's members the caller may read.

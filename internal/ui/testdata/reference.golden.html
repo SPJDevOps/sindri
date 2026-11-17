@@ -115,6 +115,41 @@
   <p class="filters" aria-label="Filter by state"><span class="filter active">all</span><a class="filter" href="#filters">failed</a><a class="filter" href="#filters">pending</a></p>
 </section>
 
+<section class="section" id="filter-form">
+  <h2 class="section-title">Filter form</h2>
+  <p class="hint">A plain GET form: it works without a script, and htmx only swaps the results beneath it. States: empty, with text, with a select chosen.</p>
+  <form class="filter-form" method="get" action="#filter-form" role="search" aria-label="Example filter">
+    <input type="search" name="q" value="" placeholder="Filter by name" aria-label="Filter by name" autocomplete="off">
+    <select name="type" aria-label="Type"><option value="">All types</option><option value="hosted" selected>hosted</option></select>
+    <button type="submit">Filter</button>
+  </form>
+</section>
+
+<section class="section">
+  <h2 class="section-title">Group</h2>
+  <p class="hint">A collapsible namespace of a list: a native details element, open by default, with the count in a pill. States: open, closed.</p>
+  <details class="group" open><summary><span class="mono">team</span> <span class="pill">2</span></summary>
+    <div class="rows"><div class="row"><a class="primary mono" href="#group">team/app</a></div><div class="row"><a class="primary mono" href="#group">team/lib</a></div></div>
+  </details>
+  <details class="group"><summary><span class="mono">tools</span> <span class="pill">1</span></summary>
+    <div class="rows"><div class="row"><a class="primary mono" href="#group">tools/cli</a></div></div>
+  </details>
+</section>
+
+<section class="section">
+  <h2 class="section-title">Repository table</h2>
+  <p class="hint">The data table with right-aligned numeric columns (<code>.num</code>). A proxy's row (<code>tr.upstream</code>) keeps the upstream accent; the name cell may carry a <code>.by</code> line.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col" class="num">Packages</th><th scope="col" class="num">Stored</th></tr></thead>
+    <tbody>
+      <tr><td><a class="mono" href="#group">team/app</a></td><td><span class="pill">hosted</span></td><td class="num">12</td><td class="num">3.0 GiB</td></tr>
+      <tr class="upstream"><td><a class="mono" href="#group">hub</a><span class="by">caches registry-1.docker.io</span></td><td><span class="pill upstream">proxy</span></td><td class="num">4</td><td class="num">5.0 MiB</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
 <section class="section">
   <h2 class="section-title">Command block</h2>
   <p class="hint">Mono, scrolls sideways, never wraps. The copy button is hidden until a script sets html.js-enhanced on the page.</p>

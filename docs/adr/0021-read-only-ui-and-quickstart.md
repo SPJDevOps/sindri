@@ -67,10 +67,24 @@ inline stylesheet, admitted by its sha256 hash in that page's own policy
 the hash. The alternative, an unauthenticated stylesheet route, was rejected:
 it would be an anonymous path, which ADR 18 refuses.
 
+*Amended 2026-11-17 (SIN-96).* The UI policy's `form-action` is now `'self'`
+instead of `'none'`, so the repository list's filter can be a plain
+`<form method="get" action="/ui/">`. Every form in a template must be a GET
+with the method written out, and a test fails any that is not. This is safe
+because the UI still has no write path: the session cookie is honoured only on
+GET and HEAD, so a form that posted would be answered 405 and do nothing, and
+a GET form can only reach the same read-only pages a link reaches. The sign-in
+help page's policy in `internal/auth` stays at `form-action 'none'`. The
+alternative, links and htmx only, was rejected: the text box would not work
+without JavaScript, and the filter state would not be a URL a browser can
+submit by itself. Global search (SIN-101) reuses the same form-and-GET
+pattern and needs no further change to the policy.
+
 **Sign-in.**
 
 - Browsers sign in through ADR 18's authorization code flow. The session
-  cookie is honoured only on GET and HEAD, and the UI has no forms.
+  cookie is honoured only on GET and HEAD, and the UI's only forms are GET forms
+  (the filter), which cannot change anything.
 - Sign-out is an htmx POST to `/auth/logout`, which answers with
   `HX-Redirect`.
 - Without `auth.oidc`, the guard answers a browser with a page explaining how
@@ -106,8 +120,10 @@ The gate runs `docs/quickstart.md`, read from the document itself, in a fresh
 
 - The UI adds about 220 KB of assets to the binary, mostly fonts.
 - Every page costs a few queries per repository it shows. A registry has tens
-  or hundreds of repositories, so the home page lists them all, unpaged, and
-  per-page listings page by 50.
+  or hundreds of repositories, so the home page filters and groups them by
+  namespace, pages them 200 at a time, and reads their figures (packages, size,
+  last publish) in one aggregate query for the page, never one per row. Other
+  listings page by 50.
 - Signing out from the UI ends the Sindri session but not the identity
   provider's own. A provider with a live session signs the user straight back
   in, which is normal for OIDC relying parties.

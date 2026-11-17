@@ -47,10 +47,13 @@ const Prefix = "/ui"
 const pageSize = 50
 
 // contentSecurityPolicy allows nothing but this server's own files: no inline
-// script or style, no third-party origin, no forms, no framing. The templates
-// are tested to contain nothing that would need more.
+// script or style, no third-party origin, no framing, and forms only to this
+// server. The one form is a GET (the repository filter); the UI has no write
+// path, because the session cookie is honoured on GET and HEAD only, and a test
+// fails on any template form that is not a GET (ADR 21). The templates are
+// tested to contain nothing that would need more.
 const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; " +
-	"img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+	"img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
 // Options wires the UI to the services it reads.
 type Options struct {

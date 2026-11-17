@@ -1,19 +1,68 @@
 {{define "content"}}
 <h1 class="page-title">Repositories</h1>
 <p class="lead">Every repository you may read. Hosted repositories hold your own artifacts; proxies cache an upstream; virtual repositories resolve across members, hosted first.</p>
-<section class="section">
-{{if .Repos}}
-  <div class="tiles">
-  {{range .Repos}}
-    <a class="tile{{if .Upstream}} upstream{{end}}" href="{{.Href}}">
-      <div class="name">{{.Name}}</div>
-      <div class="meta"><span class="pill{{if .Upstream}} upstream{{end}}">{{.Type}}</span><span class="pill">{{.Protocol}}</span>{{if .Locked}}<span class="pill">locked</span>{{end}}</div>
-      {{if .Detail}}<div class="detail">{{.Detail}}</div>{{end}}
-    </a>
-  {{end}}
-  </div>
-{{else}}
-  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No repository you may read. Repositories are declared in sindri.yaml or created through the API.</p></div></div>
+{{if .Total}}
+<form class="filter-form" method="get" action="/ui/" role="search" aria-label="Filter repositories"
+      hx-get="/ui/" hx-target="#repo-results" hx-swap="innerHTML" hx-push-url="true" hx-sync="this:replace"
+      hx-trigger="input changed delay:200ms from:#repo-q, change, search, submit">
+  <input type="search" id="repo-q" name="q" value="{{.Filter.Q}}" maxlength="100" placeholder="Filter by name" aria-label="Filter by name" autocomplete="off">
+  <select name="type" aria-label="Type"><option value="">All types</option>{{range .Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+  <select name="protocol" aria-label="Protocol"><option value="">All protocols</option>{{range .Protos}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+  {{if .Filter.View}}<input type="hidden" name="view" value="{{.Filter.View}}">{{end}}
+  <button type="submit">Filter</button>
+</form>
 {{end}}
+<section class="section" id="repo-results">
+{{template "results" .}}
 </section>
+{{end}}
+
+{{define "results"}}
+{{if not .Total}}
+  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No repository you may read. Repositories are declared in sindri.yaml or created through the API.</p></div></div>
+{{else if not .Matching}}
+  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No repository matches this filter. <a href="{{.ClearHref}}">Clear the filter</a></p></div></div>
+{{else}}
+  <div class="list-bar">
+    <p class="hint" role="status">{{if .Filter.Active}}{{.Matching}} of {{.Total}} repositories match{{else}}{{.Total}} repositories{{end}}{{if .Pager}}; showing {{.From}} to {{.To}}{{end}}</p>
+    <p class="filters" aria-label="View">{{if .Table}}<a class="filter" href="{{.TilesHref}}">Tiles</a><span class="filter active">Table</span>{{else}}<span class="filter active">Tiles</span><a class="filter" href="{{.TableHref}}">Table</a>{{end}}</p>
+  </div>
+  {{$groups := .Groups}}{{$table := .Table}}
+  {{range $groups}}
+    {{if or .Label (gt (len $groups) 1)}}<details class="group" open><summary>{{if .Label}}<span class="mono">{{.Label}}</span>{{else}}Top level{{end}} <span class="pill">{{len .Rows}}</span></summary>{{end}}
+    {{if $table}}
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Protocol</th><th scope="col" class="num">Packages</th><th scope="col" class="num">Stored</th><th scope="col">Last publish</th><th scope="col">Managed by</th></tr></thead>
+      <tbody>
+      {{range .Rows}}
+        <tr{{if .Upstream}} class="upstream"{{end}}>
+          <td><a class="mono" href="{{.Href}}">{{.Name}}</a>{{if .Detail}}<span class="by">{{.Detail}}</span>{{end}}</td>
+          <td><span class="pill{{if .Upstream}} upstream{{end}}">{{.Type}}</span>{{if .Locked}} <span class="pill">locked</span>{{end}}</td>
+          <td><span class="pill">{{.Protocol}}</span></td>
+          {{if .Stats}}<td class="num">{{.Stats.Packages}}</td><td class="num">{{bytes .Stats.Stored}}</td><td>{{if .Stats.LastPublished.IsZero}}-{{else}}{{ago .Stats.LastPublished}}{{end}}</td>{{else}}<td class="num">-</td><td class="num">-</td><td>-</td>{{end}}
+          <td>{{.ManagedBy}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+    {{else}}
+    <div class="tiles">
+    {{range .Rows}}
+      <a class="tile{{if .Upstream}} upstream{{end}}" href="{{.Href}}">
+        <div class="name">{{.Name}}</div>
+        <div class="meta"><span class="pill{{if .Upstream}} upstream{{end}}">{{.Type}}</span><span class="pill">{{.Protocol}}</span>{{if .Locked}}<span class="pill">locked</span>{{end}}</div>
+        {{if .Detail}}<div class="detail">{{.Detail}}</div>{{end}}
+        {{if .Stats}}<div class="detail">{{.Stats.Packages}} {{if eq .Stats.Packages 1}}package{{else}}packages{{end}} · {{bytes .Stats.Stored}}{{if not .Stats.LastPublished.IsZero}} · {{ago .Stats.LastPublished}}{{end}}</div>{{end}}
+      </a>
+    {{end}}
+    </div>
+    {{end}}
+    {{if or .Label (gt (len $groups) 1)}}</details>{{end}}
+  {{end}}
+  {{with .Pager}}
+  <nav class="pager" aria-label="Pages">{{if .Prev}}<a href="{{.Prev}}" rel="prev">Previous</a>{{else}}<span class="off" aria-disabled="true">Previous</span>{{end}}<span class="where">Page {{.Page}} of {{.Pages}}</span>{{if .Next}}<a href="{{.Next}}" rel="next">Next</a>{{else}}<span class="off" aria-disabled="true">Next</span>{{end}}</nav>
+  {{end}}
+{{end}}
 {{end}}

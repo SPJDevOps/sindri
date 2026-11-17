@@ -497,3 +497,35 @@ pre.document {
 .filter { display: inline-flex; align-items: center; min-height: var(--target); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 0 10px; font-size: var(--text-sm); color: var(--text-muted); }
 .filter.active { color: var(--text); border-color: var(--accent); }
 code.command { display: inline-block; margin-top: var(--space-1); overflow-wrap: anywhere; user-select: all; }
+
+/* Filter form: a plain GET form. The text box, the selects, and the button
+ * share the 24px target and the filter chip's border; htmx only swaps the
+ * results beneath it. */
+.filter-form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-6); }
+.filter-form :is(input, select, button) {
+  min-height: var(--row-h-dense);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: 0 var(--space-3);
+}
+.filter-form input[type="search"] { flex: 1 1 16em; min-width: 0; }
+.filter-form button { cursor: pointer; color: var(--text-muted); }
+.filter-form button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* The list's status line and view switch share one row. */
+.list-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.list-bar .filters { margin-top: 0; }
+.list-bar + .group, .list-bar + .tiles, .list-bar + .table-wrap { margin-top: var(--space-3); }
+
+/* Group: a collapsible namespace of the repository list. */
+.group + .group, .group + .pager, .tiles + .group { margin-top: var(--space-4); }
+.group > summary { display: flex; align-items: center; gap: var(--space-2); min-height: var(--target); margin-bottom: var(--space-2); color: var(--text-muted); cursor: pointer; }
+.group[open] > summary { color: var(--text); }
+
+/* Numeric columns align right; a proxy's row keeps the upstream accent. */
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.upstream td:first-child { box-shadow: inset 2px 0 0 var(--upstream); }
