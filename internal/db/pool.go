@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -24,6 +25,9 @@ type Options struct {
 	MaxConns       int32
 	MinConns       int32
 	ConnectTimeout time.Duration
+	// Tracer, when set, sees every query on the pool. It exists for tests
+	// that count queries; the server never sets it.
+	Tracer pgx.QueryTracer
 }
 
 // DB is a Postgres connection pool.
@@ -55,6 +59,10 @@ func Open(ctx context.Context, opts Options) (*DB, error) {
 	}
 	if opts.ConnectTimeout > 0 {
 		cfg.ConnConfig.ConnectTimeout = opts.ConnectTimeout
+	}
+
+	if opts.Tracer != nil {
+		cfg.ConnConfig.Tracer = opts.Tracer
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)

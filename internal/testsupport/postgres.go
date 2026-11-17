@@ -82,6 +82,13 @@ var shared struct {
 // binary and reaped by testcontainers when the process exits.
 func MigratedDB(t *testing.T) *db.DB {
 	t.Helper()
+	return MigratedDBTraced(t, nil)
+}
+
+// MigratedDBTraced is MigratedDB with tracer seeing every query on the
+// returned pool, for tests that count queries. Migrations run untraced.
+func MigratedDBTraced(t *testing.T, tracer pgx.QueryTracer) *db.DB {
+	t.Helper()
 	opts := DBOptions(DatabaseURL(t))
 	// The concurrency suites hold a transaction open while another writer
 	// runs, so they need more than the default handful of connections.
@@ -89,6 +96,7 @@ func MigratedDB(t *testing.T) *db.DB {
 	if err := db.Migrate(t.Context(), opts, nil); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
+	opts.Tracer = tracer
 	database, err := db.Open(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
