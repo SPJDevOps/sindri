@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -63,6 +64,16 @@ func scalePages(info testsupport.SeedInfo) []scalePage {
 		{"oci artifact", "admin", artifact(info.HostedOCI, info.OCIImage, info.OCIDigest), 22},
 		{"pypi artifact", "admin", artifact(info.PyPIRepo, info.PyPIPackage, info.PyPIDigest), 19},
 		{"npm artifact", "admin", artifact(info.NPMRepo, info.NPMPackage, info.NPMDigest), 21},
+		// A caller who is not an administrator goes through the readability
+		// filters, which an administrator skips: alice reads every seeded
+		// repository but the restricted ones, and seeder may also write.
+		{"repositories, filtered", "alice", "/ui/", 5},
+		{"hosted repository, filtered", "alice", "/ui/r/" + info.HostedOCI, 5},
+		{"virtual repository, filtered", "alice", "/ui/r/" + info.VirtualOCI, 4},
+		{"oci package, filtered", "alice", pkg(info.HostedOCI, info.OCIImage), 5},
+		{"oci artifact, filtered", "alice", artifact(info.HostedOCI, info.OCIImage, info.OCIDigest), 21},
+		{"oci artifact, writer", "seeder", artifact(info.HostedOCI, info.OCIImage, info.OCIDigest), 21},
+		{"pypi artifact, writer", "seeder", artifact(info.PyPIRepo, info.PyPIPackage, info.PyPIDigest), 20},
 		{"system", "admin", "/ui/system", 3},
 		{"notifications", "admin", "/ui/system/notifications", 3},
 	}
@@ -124,5 +135,26 @@ func TestScale_QueryCountDoesNotGrowWithRows(t *testing.T) {
 				t.Errorf("%s made %d queries, ceiling %d: a page's queries must not grow with the rows it lists", pg.path, got, pg.maxQueries)
 			}
 		})
+	}
+}
+
+// The non-administrator rows above only measure the filtered paths if the
+// filters are really in play: alice must not see a restricted repository,
+// and seeder must be offered the Manage commands a writer gets.
+func TestScale_NonAdminRowsExerciseTheFilters(t *testing.T) {
+	e, _, info := seededEnv(t)
+	restricted := "seed/oci-0005" // hosted, and every fifth hosted repository is restricted
+	if r := e.get("admin", "/ui/"); !strings.Contains(r.body, restricted) {
+		t.Fatalf("admin's list does not name %s; the seed's restricted repositories moved", restricted)
+	}
+	if r := e.get("alice", "/ui/"); strings.Contains(r.body, restricted) {
+		t.Errorf("alice's list names the restricted repository %s", restricted)
+	}
+	page := "/ui/r/" + info.HostedOCI + "/-/artifact?" + url.Values{"digest": {info.OCIDigest}, "image": {info.OCIImage}}.Encode()
+	if r := e.get("seeder", page); !strings.Contains(r.body, "/promote") && !strings.Contains(r.body, "/revoke") {
+		t.Error("seeder's artifact page offers no promote or revoke command")
+	}
+	if r := e.get("alice", page); strings.Contains(r.body, "/promote") || strings.Contains(r.body, "/revoke") {
+		t.Error("alice, who may not write, is offered a promote or revoke command")
 	}
 }

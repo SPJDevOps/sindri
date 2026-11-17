@@ -40,6 +40,10 @@ var who = map[string]auth.Principal{
 	"alice": {Subject: "user:alice", Kind: auth.KindUser, Groups: []string{"team:a"}},
 	"bob":   {Subject: "user:bob", Kind: auth.KindUser, Groups: []string{"team:b"}},
 	"admin": {Subject: "user:admin", Kind: auth.KindUser, Admin: true},
+	// seeder may write every repository testsupport.SeedLarge creates, and
+	// read all but the restricted ones, so it sees the filtered list and the
+	// Manage commands.
+	"seeder": {Subject: "user:seeder", Kind: auth.KindUser, Groups: []string{"team:seed"}},
 }
 
 type env struct {
