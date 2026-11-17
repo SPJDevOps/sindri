@@ -211,7 +211,7 @@ func TestStylesheet_IsSmallAndEveryClassIsUsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Set on <html> by the script a later ticket adds.
+	// Set on <html> by sindri.js.
 	used["js-enhanced"] = true
 	// Set by htmx on the element that is fetching.
 	used["htmx-request"] = true

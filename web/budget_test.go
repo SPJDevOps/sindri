@@ -38,7 +38,9 @@ func TestOwnScripts_StayUnderBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walking the embedded assets: %v", err)
 	}
+	// sindri.js exists, so finding nothing means the walk is wrong, not that
+	// there is nothing to measure.
 	if checked == 0 {
-		t.Skip("no scripts of our own yet; the budget applies to each one added")
+		t.Fatal("found no scripts of our own under web/static; sindri.js at least should be measured")
 	}
 }
