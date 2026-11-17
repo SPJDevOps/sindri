@@ -200,6 +200,23 @@ func TestUI_RepositoryListShowsOnlyReadable(t *testing.T) {
 	}
 }
 
+// The list reads every virtual repository's members in one query, so the
+// readability filter is the page's own: a tile names only members the caller
+// may read, as the virtual repository's page does.
+func TestUI_RepositoryListNamesOnlyReadableVirtualMembers(t *testing.T) {
+	e := newEnv(t)
+	r := e.get("alice", "/ui/")
+	if r.status != http.StatusOK {
+		t.Fatalf("GET /ui/: %d", r.status)
+	}
+	if !strings.Contains(r.body, "resolves team-a → hub") {
+		t.Errorf("the virtual tile does not name alice's readable members:\n%s", r.body)
+	}
+	if strings.Contains(r.body, "team-b") {
+		t.Errorf("the repository list names team-b to alice:\n%s", r.body)
+	}
+}
+
 func TestUI_UnreadableRepositoryPagesAre404(t *testing.T) {
 	e := newEnv(t)
 	d := e.push("team-b", "app", "1.0", "b")
