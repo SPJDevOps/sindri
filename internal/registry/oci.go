@@ -789,6 +789,17 @@ func (r *Registry) ListReferrers(ctx context.Context, repoName string, subject m
 	return page, nil
 }
 
+// ResolveTag returns the digest a tag of an image currently names, or
+// ErrNotFound. It reads one row and no bytes; it does not check placement,
+// so a caller that shows the digest must have checked it already.
+func (r *Registry) ResolveTag(ctx context.Context, repoName, image, tag string) (model.Digest, error) {
+	if strings.Contains(tag, ":") {
+		// resolveManifestDigest would take this for a digest reference.
+		return model.Digest{}, ErrNotFound
+	}
+	return r.resolveManifestDigest(ctx, repoName, image, tag)
+}
+
 func nonNilAnnotations(a map[string]string) map[string]string {
 	if a == nil {
 		return map[string]string{}
