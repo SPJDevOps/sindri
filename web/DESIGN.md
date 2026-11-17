@@ -82,6 +82,7 @@ Each is shown, in every state below, on the reference page.
 | Tabs | `.tabs` | default; hover; `aria-current` on the current link |
 | Filter bar | `.filters` `.filter` | link; `.active` (a span) |
 | Command block | `.cmd` `pre` `.copy` | the copy button is hidden unless `html.js-enhanced` is set |
+| Use panel | `.use` `.tabs` `.step` `.cmd` | one client tab current; a step with and without a caption; notes; the publicUrl fallback hint |
 | Stat tile | `.stats` `.stat` `.stat-label` `.stat-value` | neutral; `.approve`; `.revoke`; `.upstream`; link (`a.stat`) |
 | Empty state | `.empty-state`; or `.row.empty` | full (also the 404 and 500 pages, the latter with a request id in `.cmd.error-id`); inline |
 | Pagination | `.pager` `.where` `.off`; `.more` | both links; first page (`.off`); load more; load more fetching (`.htmx-request`) |

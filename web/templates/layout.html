@@ -61,3 +61,17 @@
       <summary>Menu</summary>
       <nav class="menu-panel" aria-label="Menu">{{template "navlinks" .}}</nav>
     </details>{{end}}
+
+
+{{define "use"}}<section class="section use" aria-labelledby="use-title">
+  <h2 class="section-title" id="use-title">{{.Title}}</h2>
+  <nav class="tabs" aria-label="Client">{{range .Tabs}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>
+  {{template "commands" .Steps}}
+  {{range .Notes}}<p class="hint">{{.}}</p>{{end}}
+  {{if .Fallback}}<p class="hint">publicUrl is not set; commands use the address this page was loaded from.</p>{{end}}
+</section>{{end}}
+
+{{define "commands"}}{{range .}}
+  {{if .Caption}}<p class="hint step">{{.Caption}}</p>{{end}}
+  <div class="cmd"><pre><code>{{.Text}}</code></pre><button class="copy" type="button" data-copy="{{.Text}}" aria-label="Copy command">Copy</button></div>
+{{end}}{{end}}

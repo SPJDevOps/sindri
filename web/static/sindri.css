@@ -399,6 +399,15 @@ th[aria-sort] .sort { color: var(--text); }
 html.js-enhanced .cmd .copy { display: inline-flex; }
 .cmd .copy:hover { color: var(--accent); }
 
+/* The "Use this" panel sits under the page header, so it sits closer than a section. */
+
+.use { margin-top: var(--space-6); }
+.use .tabs { margin-bottom: var(--space-1); }
+.step { margin-top: var(--space-3); margin-bottom: var(--space-1); }
+.cmd + .cmd { margin-top: var(--space-2); }
+.use .hint { margin-top: var(--space-2); }
+.use .step { margin-top: var(--space-3); }
+
 /* Inline copy buttons: quiet text, shown on hover and focus, always shown on
  * touch screens, and absent entirely without the script. */
 

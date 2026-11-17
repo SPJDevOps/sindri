@@ -39,6 +39,19 @@
     
 <h1 class="page-title mono" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe">sha256:4b825dc642cb</h1>
 <div class="pills"><span class="pill">oci-manifest</span></div>
+<section class="section use" aria-labelledby="use-title">
+  <h2 class="section-title" id="use-title">Pull</h2>
+  <nav class="tabs" aria-label="Client"><a href="/ui/r/team/app/-/artifact?client=docker" aria-current="page">docker</a><a href="/ui/r/team/app/-/artifact?client=podman">podman</a><a href="/ui/r/team/app/-/artifact?client=crane">crane</a></nav>
+  
+  
+  <div class="cmd"><pre><code>docker pull sindri.example.test/team/app/web@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</code></pre><button class="copy" type="button" data-copy="docker pull sindri.example.test/team/app/web@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy command">Copy</button></div>
+
+  <p class="hint step">Or by tag, which can move</p>
+  <div class="cmd"><pre><code>docker pull sindri.example.test/team/app/web:1.0</code></pre><button class="copy" type="button" data-copy="docker pull sindri.example.test/team/app/web:1.0" aria-label="Copy command">Copy</button></div>
+
+  
+  
+</section>
 
 <section class="section">
   <dl class="facts">
@@ -70,6 +83,21 @@
   </table>
   </div>
   
+</section>
+
+<section class="section">
+  <h2 class="section-title">Manage</h2>
+  <p class="hint">The page is read-only. These calls change state through the management API with your own token; <a href="https://docs.example.test/sindri/quickstart.html" rel="noreferrer noopener">how tokens work</a>.</p>
+  
+  <p class="hint step">Promote into a stage, which runs its gates</p>
+  <div class="cmd"><pre><code>curl -fsS -X POST https://sindri.example.test/api/v1/subjects/sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe/promote -H &#34;Authorization: Bearer $SINDRI_TOKEN&#34; -H &#34;Content-Type: application/json&#34; -d &#39;{&#34;repository&#34;:&#34;team/app&#34;,&#34;stage&#34;:&#34;prod&#34;,&#34;reason&#34;:&#34;from the web interface&#34;}&#39;</code></pre><button class="copy" type="button" data-copy="curl -fsS -X POST https://sindri.example.test/api/v1/subjects/sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe/promote -H &#34;Authorization: Bearer $SINDRI_TOKEN&#34; -H &#34;Content-Type: application/json&#34; -d &#39;{&#34;repository&#34;:&#34;team/app&#34;,&#34;stage&#34;:&#34;prod&#34;,&#34;reason&#34;:&#34;from the web interface&#34;}&#39;" aria-label="Copy command">Copy</button></div>
+
+  <p class="hint step">Revoke an approval</p>
+  <div class="cmd"><pre><code>curl -fsS -X POST https://sindri.example.test/api/v1/subjects/sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe/revoke -H &#34;Authorization: Bearer $SINDRI_TOKEN&#34; -H &#34;Content-Type: application/json&#34; -d &#39;{&#34;repository&#34;:&#34;team/app&#34;,&#34;stage&#34;:&#34;dev&#34;,&#34;reason&#34;:&#34;from the web interface&#34;}&#39;</code></pre><button class="copy" type="button" data-copy="curl -fsS -X POST https://sindri.example.test/api/v1/subjects/sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe/revoke -H &#34;Authorization: Bearer $SINDRI_TOKEN&#34; -H &#34;Content-Type: application/json&#34; -d &#39;{&#34;repository&#34;:&#34;team/app&#34;,&#34;stage&#34;:&#34;dev&#34;,&#34;reason&#34;:&#34;from the web interface&#34;}&#39;" aria-label="Copy command">Copy</button></div>
+
+  <p class="hint step">Scan again with the current vulnerability database</p>
+  <div class="cmd"><pre><code>curl -fsS -X POST https://sindri.example.test/api/v1/subjects/sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe/scan -H &#34;Authorization: Bearer $SINDRI_TOKEN&#34;</code></pre><button class="copy" type="button" data-copy="curl -fsS -X POST https://sindri.example.test/api/v1/subjects/sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe/scan -H &#34;Authorization: Bearer $SINDRI_TOKEN&#34;" aria-label="Copy command">Copy</button></div>
+
 </section>
 
 <section class="section">

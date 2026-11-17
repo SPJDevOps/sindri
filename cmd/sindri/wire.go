@@ -222,6 +222,8 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		RequestID: server.RequestIDFromContext,
 		SignOut:   signIn,
 		DocsURL:   cfg.UI.DocsURL,
+
+		ScanEnabled: cfg.Scanning.Enabled,
 	})
 	if err != nil {
 		database.Close()

@@ -19,6 +19,17 @@ import (
 	"github.com/spj/sindri/web"
 )
 
+// panelFor builds the "Use this" section the way the pages do, from the same
+// builders, so a golden shows real commands. Tabs link to path.
+func panelFor(title, path string, in cmdInput, steps []cmdStep, notes []string) *usePanel {
+	in.Client = pickClient(in.Protocol, in.Client)
+	p := &usePanel{Title: title, Steps: steps, Notes: notes, Fallback: in.Fallback}
+	for _, c := range clientsFor(in.Protocol) {
+		p.Tabs = append(p.Tabs, tabLink{Label: c, Href: path + "?client=" + c, Current: c == in.Client})
+	}
+	return p
+}
+
 var update = flag.Bool("update", false, "rewrite the golden files under testdata")
 
 // The Content-Security-Policy allows no inline script, style, or event
@@ -76,6 +87,16 @@ func TestTemplates_Golden(t *testing.T) {
 	adminBase.Admin = true
 	team := repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}
 
+	const base0 = "https://sindri.example.test"
+	ociIn := cmdInput{Base: base0, Repo: "team/app", Protocol: model.ProtocolOCI, Kind: model.RepoTypeHosted}
+	pullIn := ociIn
+	pullIn.Package, pullIn.Digest, pullIn.Tag = "web", digest, "1.0"
+	pypiIn := cmdInput{Base: base0, Repo: "internal-py", Protocol: model.ProtocolPyPI, Kind: model.RepoTypeHosted, Package: "demo"}
+	npmIn := cmdInput{Base: base0, Repo: "internal-npm", Protocol: model.ProtocolNPM, Kind: model.RepoTypeHosted, Package: "@acme/ui", Version: "1.1.0"}
+	virtIn := cmdInput{Base: base0, Repo: "python", Protocol: model.ProtocolPyPI, Kind: model.RepoTypeVirtual, Client: "uv"}
+	hubIn := cmdInput{Base: "http://sindri.test:8080", Repo: "hub", Protocol: model.ProtocolOCI, Kind: model.RepoTypeProxy, Package: "library/alpine", Digest: digest, Fallback: true}
+	manage := ManageCommands(manageInput{Base: base0, Repo: "team/app", Digest: digest, PromoteTo: "prod", RevokeFrom: "dev", Rescan: true})
+
 	cases := map[string]struct {
 		page string
 		data any
@@ -95,6 +116,10 @@ func TestTemplates_Golden(t *testing.T) {
 		"repo": {"repo", repoPage{chrome: base, Repo: team,
 			Packages: []link{{Name: "web", Href: "/ui/r/team/app/-/package?name=web"}},
 			More:     "/ui/r/team/app?cursor=web"}},
+		"repo-virtual": {"repo", repoPage{chrome: base, IsVirtual: true,
+			Repo:    repoView{Name: "python", Type: "virtual", Protocol: "pypi", Href: "/ui/r/python"},
+			Members: []link{{Name: "internal-py", Type: "hosted", Href: "/ui/r/internal-py"}, {Name: "pypi", Type: "proxy", Href: "/ui/r/pypi"}},
+			Use:     panelFor("Set up your client", "/ui/r/python", virtIn, SetupCommands(virtIn), nil)}},
 		"repo-proxy": {"repo", repoPage{chrome: base,
 			Repo:     repoView{Name: "hub", Type: "proxy", Protocol: "oci", Upstream: true},
 			Upstream: "https://registry-1.docker.io"}},
@@ -102,7 +127,8 @@ func TestTemplates_Golden(t *testing.T) {
 			Tags: []tagRow{{Name: "1.0", Digest: digest, Href: "/ui/r/team/app/-/artifact?digest=" + digest}}}},
 		"package-pypi": {"package", packagePage{chrome: base,
 			Repo: repoView{Name: "internal-py", Type: "hosted", Protocol: "pypi"}, Package: "demo",
-			Versions: []versionGroup{{Version: "1.0", Files: []fileRow{{Filename: "demo-1.0.tar.gz", Size: 2048, Href: "/x"}}}}}},
+			Versions: []versionGroup{{Version: "1.0", Files: []fileRow{{Filename: "demo-1.0.tar.gz", Size: 2048, Href: "/x"}}}},
+			Use:      panelFor("Install", "/ui/r/internal-py/-/package", pypiIn, InstallCommands(pypiIn), installNotes(pypiIn))}},
 		"package-npm": {"package", packagePage{chrome: base,
 			Repo: repoView{Name: "internal-npm", Type: "hosted", Protocol: "npm"}, Package: "@acme/ui",
 			DistTags: []distTagRow{{Tag: "beta", Version: "2.0.0-beta.1"}, {Tag: "latest", Version: "1.1.0"}},
@@ -110,7 +136,8 @@ func TestTemplates_Golden(t *testing.T) {
 				{Version: "1.0.0", Deprecated: "use 1.1.0, this release leaks a handle",
 					Files: []fileRow{{Filename: "ui-1.0.0.tgz", Size: 2048, Href: "/ui/r/internal-npm/-/artifact?digest=" + digest + "&image=%40acme%2Fui"}}},
 				{Version: "1.1.0", Files: []fileRow{{Filename: "ui-1.1.0.tgz", Size: 4096, Href: "/x"}}},
-			}}},
+			},
+			Use: panelFor("Install", "/ui/r/internal-npm/-/package", npmIn, InstallCommands(npmIn), installNotes(npmIn))}},
 		"artifact": {"artifact", artifactPage{chrome: base, Repo: "team/app", RepoHref: "/ui/r/team/app",
 			Digest: digest, Size: 1234, MediaType: "application/vnd.oci.image.manifest.v1+json", Kind: "oci-manifest",
 			HasIdentity: true, Owners: []string{"repository:team/app"}, CreatedAt: long,
@@ -134,9 +161,12 @@ func TestTemplates_Golden(t *testing.T) {
 			}),
 			Deliveries: []deliveryRow{{Webhook: "chat", Event: "finding.new", State: "delivered", Dot: "ok", Status: "200", At: long}},
 			Children:   []childRow{{Digest: digest, Size: 99, Href: "/y"}},
-			Document:   "{\n  \"schemaVersion\": 2\n}"}},
+			Document:   "{\n  \"schemaVersion\": 2\n}",
+			Use:        panelFor("Pull", "/ui/r/team/app/-/artifact", pullIn, PullCommands(pullIn), nil),
+			Manage:     manage, TokenDocs: "https://docs.example.test/sindri/quickstart.html"}},
 		"artifact-upstream": {"artifact", artifactPage{chrome: base, Repo: "hub", RepoHref: "/ui/r/hub",
-			Digest: digest, Size: 1234, Upstream: true}},
+			Digest: digest, Size: 1234, Upstream: true,
+			Use: panelFor("Pull", "/ui/r/hub/-/artifact", hubIn, PullCommands(hubIn), append([]string{"Pulls through the proxy, which fetches from the upstream on a miss."}, ociNotes(hubIn)...))}},
 		"notfound": {"notfound", base},
 		"error": {"error", struct {
 			chrome
@@ -281,7 +311,14 @@ func TestReference_Golden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing the reference page: %v", err)
 	}
-	data := chrome{Title: "Design reference", Who: "user:alice", SignOut: true, Version: "0.0.0-test", DocsURL: "https://docs.example.test/sindri/"}
+	ref := cmdInput{Base: "http://sindri.test:8080", Repo: "internal", Protocol: model.ProtocolPyPI, Kind: model.RepoTypeHosted, Package: "demo", Version: "1.0", Client: "poetry", Fallback: true}
+	data := struct {
+		chrome
+		Use *usePanel
+	}{
+		chrome{Title: "Design reference", Who: "user:alice", SignOut: true, Version: "0.0.0-test", DocsURL: "https://docs.example.test/sindri/"},
+		panelFor("Install", "#use", ref, InstallCommands(ref), installNotes(ref)),
+	}
 	var buf bytes.Buffer
 	if err := page.ExecuteTemplate(&buf, "layout", data); err != nil {
 		t.Fatalf("rendering: %v", err)

@@ -122,6 +122,27 @@
 </section>
 
 <section class="section">
+  <h2 class="section-title">Use this panel</h2>
+  <p class="hint">Client tabs are links that set ?client=, so the choice lives in the URL. A step may carry a caption; notes and the publicUrl hint follow the commands.</p>
+<section class="section use" aria-labelledby="use-title">
+  <h2 class="section-title" id="use-title">Install</h2>
+  <nav class="tabs" aria-label="Client"><a href="#use?client=pip">pip</a><a href="#use?client=uv">uv</a><a href="#use?client=poetry" aria-current="page">poetry</a></nav>
+  
+  <p class="hint step">Once per project</p>
+  <div class="cmd"><pre><code>poetry source add --priority=primary sindri &#34;http://sindri.test:8080/pypi/internal/simple/&#34;</code></pre><button class="copy" type="button" data-copy="poetry source add --priority=primary sindri &#34;http://sindri.test:8080/pypi/internal/simple/&#34;" aria-label="Copy command">Copy</button></div>
+
+  
+  <div class="cmd"><pre><code>poetry config http-basic.sindri token &#34;$SINDRI_TOKEN&#34;</code></pre><button class="copy" type="button" data-copy="poetry config http-basic.sindri token &#34;$SINDRI_TOKEN&#34;" aria-label="Copy command">Copy</button></div>
+
+  
+  <div class="cmd"><pre><code>poetry add demo==1.0</code></pre><button class="copy" type="button" data-copy="poetry add demo==1.0" aria-label="Copy command">Copy</button></div>
+
+  <p class="hint">The token travels as the password of the index URL, so $SINDRI_TOKEN must be set in your shell.</p>
+  <p class="hint">publicUrl is not set; commands use the address this page was loaded from.</p>
+</section>
+</section>
+
+<section class="section">
   <h2 class="section-title">Stat tile</h2>
   <p class="hint">States: neutral, approved, revoked, upstream, and a link.</p>
   <div class="stats">

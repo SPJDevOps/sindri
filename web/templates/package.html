@@ -1,6 +1,7 @@
 {{define "content"}}
 <h1 class="page-title">{{.Package}}</h1>
-<div class="pills"><span class="pill{{if .Repo.Upstream}} upstream{{end}}">{{.Repo.Type}}</span><span class="pill">{{.Repo.Protocol}}</span><button class="copy" type="button" data-copy="{{.Package}}" aria-label="Copy package name">Copy</button></div>
+<div class="pills"><span class="pill{{if .Repo.Upstream}} upstream{{end}}">{{.Repo.Type}}</span><span class="pill">{{.Repo.Protocol}}</span><button class="copy" type="button" data-copy="{{.Package}}" aria-label="Copy package name">Copy</button></div>{{with .Use}}
+{{template "use" .}}{{end}}
 {{if eq .Repo.Protocol "oci"}}
 <section class="section">
   <h2 class="section-title">Tags</h2>

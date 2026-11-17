@@ -1,6 +1,7 @@
 {{define "content"}}
 <h1 class="page-title mono" title="{{.Digest}}">{{short .Digest}}</h1>
-<div class="pills">{{if .Kind}}<span class="pill">{{.Kind}}</span>{{end}}{{if .Upstream}}<span class="pill upstream">upstream content</span>{{end}}</div>
+<div class="pills">{{if .Kind}}<span class="pill">{{.Kind}}</span>{{end}}{{if .Upstream}}<span class="pill upstream">upstream content</span>{{end}}</div>{{with .Use}}
+{{template "use" .}}{{end}}
 
 <section class="section">
   <dl class="facts">
@@ -34,7 +35,13 @@
   {{else}}
   <p class="hint">No lifecycle stages are defined on this server.</p>
   {{end}}
-</section>
+</section>{{if .Manage}}
+
+<section class="section">
+  <h2 class="section-title">Manage</h2>
+  <p class="hint">The page is read-only. These calls change state through the management API with your own token{{if .TokenDocs}}; <a href="{{.TokenDocs}}" rel="noreferrer noopener">how tokens work</a>{{end}}.</p>
+  {{template "commands" .Manage}}
+</section>{{end}}
 
 <section class="section">
   <h2 class="section-title">Evidence</h2>

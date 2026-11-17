@@ -74,6 +74,9 @@ type Options struct {
 	// DocsURL is where the footer's Docs link points: ui.docsUrl, which the
 	// configuration has already validated and defaulted.
 	DocsURL string
+	// ScanEnabled shows the re-scan command on an artifact page, which the
+	// management API refuses when scanning is off.
+	ScanEnabled bool
 }
 
 type handler struct {
@@ -324,9 +327,19 @@ func packageHref(repo, pkg string) string {
 }
 
 func artifactHref(repo, image string, d model.Digest) string {
+	return artifactTagHref(repo, image, d, "")
+}
+
+// artifactTagHref is artifactHref for a page reached through a tag, which the
+// artifact page then shows a pull command for. The page checks the tag still
+// names the digest before it uses it.
+func artifactTagHref(repo, image string, d model.Digest, tag string) string {
 	q := url.Values{"digest": {d.String()}}
 	if image != "" {
 		q.Set("image", image)
+	}
+	if tag != "" {
+		q.Set("tag", tag)
 	}
 	return repoHref(repo) + "/-/artifact?" + q.Encode()
 }
