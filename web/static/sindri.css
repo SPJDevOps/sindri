@@ -141,9 +141,15 @@ code, .mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 .container { width: 100%; max-width: 64rem; margin: 0 auto; padding: 0 var(--gutter); }
 main { flex: 1; padding: var(--space-10) 0 var(--space-16); }
 
-.site-header { border-bottom: 1px solid var(--border); background: var(--bg); }
-.site-header .container { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding-top: var(--space-4); padding-bottom: var(--space-4); }
+.skip { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.skip:focus { width: auto; height: auto; overflow: visible; clip-path: none; z-index: 10; top: var(--space-2); left: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); }
+
+.site-header { position: relative; border-bottom: 1px solid var(--border); background: var(--bg); }
+.site-header .container { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); height: var(--space-12); }
 .wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   font-family: var(--font-display);
   font-size: var(--text-lg);
   font-weight: 600;
@@ -151,10 +157,11 @@ main { flex: 1; padding: var(--space-10) 0 var(--space-16); }
   color: var(--text);
 }
 .wordmark:hover { color: var(--text); text-decoration: none; }
+.mark { display: block; width: 24px; height: 24px; }
 .nav { display: flex; align-items: center; gap: var(--space-6); color: var(--text-muted); }
 .nav a { color: var(--text-muted); }
 .nav a:hover { color: var(--text); text-decoration: none; }
-.who { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-faint); }
+.who { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-faint); overflow-wrap: anywhere; }
 .signout {
   font: inherit;
   color: var(--text-muted);
@@ -165,8 +172,21 @@ main { flex: 1; padding: var(--space-10) 0 var(--space-16); }
 }
 .signout:hover { color: var(--text); }
 
+/* Narrow header: the wordmark and a native menu, which needs no script. */
+.menu { display: none; }
+.menu summary { display: inline-flex; align-items: center; min-height: var(--target); padding: 0 var(--space-2); color: var(--text-muted); cursor: pointer; list-style: none; border: 1px solid var(--border-strong); border-radius: var(--radius); }
+.menu summary::-webkit-details-marker { display: none; }
+.menu[open] summary { color: var(--text); }
+.menu-panel { position: absolute; z-index: 5; top: 100%; right: var(--gutter); display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); min-width: 12rem; max-width: calc(100vw - 2 * var(--gutter)); padding: var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.menu-panel a, .menu-panel .signout { color: var(--text-muted); }
+@media (max-width: 719px) {
+  .nav { display: none; }
+  .menu { display: block; }
+}
+
 .site-footer { border-top: 1px solid var(--border); color: var(--text-faint); font-size: var(--text-sm); }
 .site-footer .container { display: flex; justify-content: space-between; gap: var(--space-4); padding-top: var(--space-4); padding-bottom: var(--space-4); }
+.site-footer a { color: var(--text-muted); }
 
 /* Headings and meta ---------------------------------------------------- */
 
@@ -415,6 +435,8 @@ pre.document {
 }
 
 .empty-state { padding: var(--space-12) var(--space-4); text-align: center; color: var(--text-muted); }
+.error-id { max-width: 28rem; margin: 0 auto var(--space-4); text-align: left; }
+.empty-state p + p, .empty-state p + .error-id { margin-top: var(--space-3); }
 .empty-state .big { font-family: var(--font-display); font-size: var(--text-4xl); color: var(--text-faint); line-height: 1; }
 
 /* Phone width: 16px gutters, stacked rows, no sideways scroll ------------ */
@@ -424,7 +446,6 @@ pre.document {
   main { padding-top: var(--space-6); }
   .page-title { font-size: var(--text-2xl); }
   .page-title.mono { font-size: var(--text-xl); }
-  .who { display: none; }
   .row { flex-direction: column; gap: 2px; }
   .facts { grid-template-columns: minmax(0, 1fr); }
   .facts dd { border-top: 0; padding-top: 0; }

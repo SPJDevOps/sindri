@@ -83,12 +83,29 @@ Each is shown, in every state below, on the reference page.
 | Filter bar | `.filters` `.filter` | link; `.active` (a span) |
 | Command block | `.cmd` `pre` `.copy` | the copy button is hidden unless `html.js-enhanced` is set |
 | Stat tile | `.stats` `.stat` `.stat-label` `.stat-value` | neutral; `.approve`; `.revoke`; `.upstream`; link (`a.stat`) |
-| Empty state | `.empty-state`; or `.row.empty` | full; inline |
+| Empty state | `.empty-state`; or `.row.empty` | full (also the 404 and 500 pages, the latter with a request id in `.cmd.error-id`); inline |
 | Pagination | `.pager` `.where` `.off`; `.more` | both links; first page (`.off`); load more; load more fetching (`.htmx-request`) |
 | Status dot | `.dot` | `.ok`; `.warn`; `.bad`; `.none`, always beside a text label |
 
 `code.command` on the notification log is the older inline form of the command
 block. A later ticket moves it onto `.cmd`.
+
+## Header, footer, and mark
+
+The header is one 48px row (`--space-12`): the mark and wordmark on the left; Repositories,
+System (administrators only), the signed-in name as plain text, and Sign out on the
+right. It lists only pages that exist. Below 720px the links give way to a native
+`<details class="menu">` holding the same links, which needs no script. Both are always
+in the markup, and the stylesheet shows one. The first focusable element is the
+skip-to-content link, which targets `<main id="main">`.
+
+The footer carries the version, the read-only note, and a Docs link to `ui.docsUrl`.
+
+The mark is a squared, Tektur-style S in white on `--accent` (the light value, so it is
+the same in both themes), in a square with 2px corners. The S is a path, because a
+favicon cannot load a web font. `static/favicon.svg` and `static/favicon.png` (32x32) come
+from one set of points in `web/genfavicon`; run `go run ./web/genfavicon` from the
+repository root after changing it. The page header shows the SVG as an image.
 
 ## Contrast
 

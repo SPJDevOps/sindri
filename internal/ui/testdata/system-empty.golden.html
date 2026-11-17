@@ -7,23 +7,33 @@
 <meta name="referrer" content="same-origin">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
 <title>t · Sindri</title>
+<link rel="icon" href="/ui/static/VERSION/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/ui/static/VERSION/favicon.png" type="image/png" sizes="32x32">
 <link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
 <script src="/ui/static/VERSION/htmx.min.js" defer></script>
 <script src="/ui/static/VERSION/sindri.js" defer></script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <header class="site-header">
   <div class="container">
-    <a class="wordmark" href="/ui/">Sindri</a>
+    <a class="wordmark" href="/ui/"><img class="mark" src="/ui/static/VERSION/favicon.svg" alt="" width="24" height="24">Sindri</a>
     <nav class="nav" aria-label="Main">
       <a href="/ui/">Repositories</a>
       <a href="/ui/system">System</a>
       <span class="who" title="Signed in as user:alice">user:alice</span>
-      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>
-    </nav>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    <details class="menu">
+      <summary>Menu</summary>
+      <nav class="menu-panel" aria-label="Menu">
+      <a href="/ui/">Repositories</a>
+      <a href="/ui/system">System</a>
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    </details>
   </div>
 </header>
-<main>
+<main id="main">
   <div class="container">
     
     
@@ -80,8 +90,9 @@
 </main>
 <footer class="site-footer">
   <div class="container">
-    <span>Sindri 0.0.0-test · read-only view</span>
-    <span>Changes go through configuration and the API, never this page.</span>
+    <span>Sindri 0.0.0-test</span>
+    <span>Read-only view. Changes go through configuration and the API, never this page.</span>
+    <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
   </div>
 </footer>
 <div class="live" id="live" role="status" aria-live="polite"></div>

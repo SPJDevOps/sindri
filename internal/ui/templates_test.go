@@ -71,7 +71,7 @@ func TestTemplates_Golden(t *testing.T) {
 	}
 	long := time.Date(2020, 3, 14, 15, 9, 26, 0, time.UTC)
 	digest := "sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe"
-	base := chrome{Title: "t", Who: "user:alice", SignOut: true, Version: "0.0.0-test"}
+	base := chrome{Title: "t", Who: "user:alice", SignOut: true, Version: "0.0.0-test", DocsURL: "https://docs.example.test/sindri/"}
 	adminBase := base
 	adminBase.Admin = true
 	team := repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}
@@ -138,6 +138,10 @@ func TestTemplates_Golden(t *testing.T) {
 		"artifact-upstream": {"artifact", artifactPage{chrome: base, Repo: "hub", RepoHref: "/ui/r/hub",
 			Digest: digest, Size: 1234, Upstream: true}},
 		"notfound": {"notfound", base},
+		"error": {"error", struct {
+			chrome
+			RequestID string
+		}{base, "7f3c9a2e-4d1b-4c8e-9a55-0b1f6d2e8a34"}},
 		"system": {"system", systemPage{chrome: adminBase, Configured: true, StatusClass: "bad", StatusText: "1 webhook failing",
 			StatusHref: "/ui/system/notifications?state=failed", Examples: examplePayloads,
 			Hooks: []hookRow{{Name: "chat", Events: "finding.new, lifecycle.promoted", Target: "https://hooks.example.com", Failed: 1, LogHref: "/ui/system/notifications?webhook=chat"}}}},
@@ -161,27 +165,69 @@ func TestTemplates_Golden(t *testing.T) {
 			if err := pages[tc.page].ExecuteTemplate(&buf, "layout", tc.data); err != nil {
 				t.Fatalf("rendering: %v", err)
 			}
-			// The asset version changes with every static file; the golden
-			// files should not.
-			got := strings.ReplaceAll(buf.String(), web.Version, "VERSION")
-			path := filepath.Join("testdata", name+".golden.html")
-			if *update {
-				if err := os.MkdirAll("testdata", 0o750); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			want, err := os.ReadFile(path) //nolint:gosec // G304: a fixed name under testdata
-			if err != nil {
-				t.Fatalf("reading %s (run with -update to create it): %v", path, err)
-			}
-			if got != string(want) {
-				t.Fatalf("%s differs from the golden file; run with -update if the change is intended\n--- got\n%s", path, got)
-			}
+			compareGolden(t, name, buf.String())
 		})
+	}
+}
+
+// The header is shown as a fragment too, so a change to it reads as a change
+// to a few lines and not to every page. The narrow header is the native menu
+// that takes the place of the links below 720px; the stylesheet decides which
+// one is shown, so both are always in the markup.
+func TestTemplates_GoldenHeader(t *testing.T) {
+	pages, err := parsePages()
+	if err != nil {
+		t.Fatalf("parsePages: %v", err)
+	}
+	user := chrome{Title: "t", Who: "user:alice", SignOut: true, Version: "0.0.0-test", DocsURL: "https://docs.example.test/sindri/"}
+	admin := user
+	admin.Admin = true
+	token := chrome{Title: "t", Who: "token:ci", Version: "0.0.0-test"}
+
+	cases := map[string]struct {
+		fragment string
+		data     chrome
+	}{
+		"header-admin":        {"header", admin},
+		"header-user":         {"header", user},
+		"header-token":        {"header", token},
+		"header-narrow-admin": {"menu", admin},
+		"header-narrow-user":  {"menu", user},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := pages["notfound"].ExecuteTemplate(&buf, tc.fragment, tc.data); err != nil {
+				t.Fatalf("rendering: %v", err)
+			}
+			compareGolden(t, name, buf.String())
+		})
+	}
+}
+
+// compareGolden checks rendered markup against testdata/<name>.golden.html,
+// or rewrites it under -update.
+func compareGolden(t *testing.T, name, rendered string) {
+	t.Helper()
+	// The asset version changes with every static file; the golden files
+	// should not.
+	got := strings.ReplaceAll(rendered, web.Version, "VERSION")
+	path := filepath.Join("testdata", name+".golden.html")
+	if *update {
+		if err := os.MkdirAll("testdata", 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path) //nolint:gosec // G304: a fixed name under testdata
+	if err != nil {
+		t.Fatalf("reading %s (run with -update to create it): %v", path, err)
+	}
+	if got != string(want) {
+		t.Fatalf("%s differs from the golden file; run with -update if the change is intended\n--- got\n%s", path, got)
 	}
 }
 
@@ -235,7 +281,7 @@ func TestReference_Golden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing the reference page: %v", err)
 	}
-	data := chrome{Title: "Design reference", Who: "user:alice", SignOut: true, Version: "0.0.0-test"}
+	data := chrome{Title: "Design reference", Who: "user:alice", SignOut: true, Version: "0.0.0-test", DocsURL: "https://docs.example.test/sindri/"}
 	var buf bytes.Buffer
 	if err := page.ExecuteTemplate(&buf, "layout", data); err != nil {
 		t.Fatalf("rendering: %v", err)

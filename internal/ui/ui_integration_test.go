@@ -223,6 +223,48 @@ func TestUI_UnreadableRepositoryPagesAre404(t *testing.T) {
 	}
 }
 
+// A repository that does not exist and one the caller may not read must be
+// indistinguishable: not only the status but every byte of the body and every
+// header. The comparison is on the raw response, because escaping could hide a
+// difference that a browser would still show. Nothing in the page may echo the
+// requested name either, which is also what makes the bodies equal.
+func TestUI_NotFoundIsByteIdenticalForMissingAndUnreadableRepositories(t *testing.T) {
+	e := newEnv(t)
+	d := e.push("team-b", "app", "1.0", "identical")
+	raw := func(path string) (int, http.Header, string) {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+		req.Header.Set("X-Test-User", "alice")
+		rec := httptest.NewRecorder()
+		e.srv.ServeHTTP(rec, req)
+		return rec.Code, rec.Header(), rec.Body.String()
+	}
+	missingStatus, missingHdr, missingBody := raw("/ui/r/no-such-repo")
+	if missingStatus != http.StatusNotFound || !strings.Contains(missingBody, "may not exist, or this account may not be allowed to read it") {
+		t.Fatalf("a missing repository: %d\n%s", missingStatus, missingBody)
+	}
+	for _, path := range []string{
+		"/ui/r/team-b",
+		"/ui/r/team-b/-/package?name=app",
+		"/ui/r/team-b/-/artifact?digest=" + d.String(),
+		"/ui/r/no-such-repo/-/package?name=app",
+		"/ui/r/team-a/-/no-such-page",
+		"/ui/no-such-page",
+	} {
+		status, hdr, body := raw(path)
+		if status != missingStatus {
+			t.Errorf("%s: status %d, want %d", path, status, missingStatus)
+		}
+		if body != missingBody {
+			t.Errorf("%s: the body differs from the one for a missing repository (%d and %d bytes)\n--- got\n%s\n--- want\n%s", path, len(body), len(missingBody), body, missingBody)
+		}
+		for _, h := range []string{"Content-Type", "Content-Length", "Cache-Control", "Vary", "Content-Security-Policy"} {
+			if hdr.Get(h) != missingHdr.Get(h) {
+				t.Errorf("%s: header %s is %q, want %q", path, h, hdr.Get(h), missingHdr.Get(h))
+			}
+		}
+	}
+}
+
 // Invariant I2 on the UI: the artifact page is scoped to a repository and
 // checks placement. A digest pushed only to team-b is not visible through
 // team-a, even to someone who may read both, and even though dedup means its

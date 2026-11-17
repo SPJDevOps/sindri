@@ -1,3 +1,8 @@
 {{define "content"}}
-<div class="rows"><div class="empty-state"><div class="big">404</div><p>Nothing here, or nothing you may read. <a href="/ui/">Back to repositories</a>.</p></div></div>
+<div class="rows"><div class="empty-state">
+  <div class="big">404</div>
+  <p>This repository or page may not exist, or this account may not be allowed to read it.</p>
+  {{if .Who}}<p class="hint">Signed in as <span class="mono">{{.Who}}</span>.</p>{{end}}
+  <p><a href="/ui/">Back to repositories</a></p>
+</div></div>
 {{end}}
