@@ -157,6 +157,7 @@ make test-integration  # needs Docker
 make lint              # gofmt check, go vet, golangci-lint
 make docs              # build the docs site into ./site; fails on a broken link
 make reference         # regenerate docs/configuration.md's server tables from internal/config
+make ui-seed           # seed the make-up database with 500 repos, 50,000 packages
 make up / make down    # local Postgres, MinIO, and Dex
 make run               # build and serve against them, UI sign-in included
 make ci                # what CI runs

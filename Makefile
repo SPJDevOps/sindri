@@ -132,6 +132,12 @@ run: build
 ui-preview:
 	go run ./internal/ui/preview
 
+## ui-seed: Seed the `make up` database with 500 repositories and 50,000 packages, to look at the UI at volume.
+.PHONY: ui-seed
+ui-seed:
+	SINDRI_SEED_DATABASE_URL='postgres://sindri:sindri@127.0.0.1:$(or $(SINDRI_PG_PORT),55432)/sindri?sslmode=disable' \
+		go test -tags=integration -count=1 -run '^TestSeedDevelopmentDatabase$$' -v ./internal/testsupport
+
 ## up: Start local Postgres, MinIO, and Dex for development.
 .PHONY: up
 up:
