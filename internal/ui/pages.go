@@ -12,6 +12,7 @@ import (
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
+	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/evidence"
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
@@ -45,51 +46,124 @@ func viewRepo(repo model.Repository) repoView {
 	}
 }
 
-type tile struct {
-	repoView
-	Detail string
-}
-
-// repositories is the home page: every repository the caller may read.
+// repositories is the home page: the repositories the caller may read, filtered
+// and paged by the URL.
 func (h *handler) repositories(w http.ResponseWriter, r *http.Request) {
+	filter := parseRepoFilter(r.URL.Query())
 	all, err := h.opts.Registry.AllRepositories(r.Context())
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	var tiles []tile
+	// Upstreams and members come in one query each, not one per repository:
+	// this page lists them all.
+	upstreams, err := h.opts.Registry.AllUpstreams(r.Context())
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	members, err := h.opts.Registry.AllMembers(r.Context())
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	byName := make(map[string]model.Repository, len(all))
+	for _, repo := range all {
+		byName[repo.Name] = repo
+	}
+	// The readability filter comes first: every count below is of what the
+	// caller may read and nothing else.
+	var visible, matching []model.Repository
 	for _, repo := range all {
 		if !readable(r, repo) {
 			continue
 		}
-		t := tile{repoView: viewRepo(repo)}
+		visible = append(visible, repo)
+		if filter.matches(repo) {
+			matching = append(matching, repo)
+		}
+	}
+	sortRepos(matching)
+	page, pages, from, to := paginate(len(matching), filter.Page, repoPageSize)
+	shown := matching[from:to]
+
+	names := make([]string, 0, len(shown))
+	for _, repo := range shown {
+		if repo.Type != model.RepoTypeVirtual {
+			names = append(names, repo.Name)
+		}
+	}
+	stats, err := h.opts.Registry.StatsFor(r.Context(), names)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	rows := make([]repoRow, 0, len(shown))
+	for _, repo := range shown {
+		row := repoRow{repoView: viewRepo(repo)}
 		switch repo.Type {
 		case model.RepoTypeProxy:
-			if remote, err := h.opts.Registry.GetRemote(r.Context(), repo.Name); err == nil {
-				t.Detail = "caches " + model.RedactUserinfo(remote.UpstreamURL)
-			}
+			row.Detail = upstreamDetail(upstreamHost(upstreams[repo.Name]))
 		case model.RepoTypeVirtual:
-			members, err := h.readableMembers(r, repo.Name)
-			if err != nil {
-				h.fail(w, r, err)
-				return
+			// A virtual repository answers only from members the caller
+			// may read, so the page counts only those.
+			n := 0
+			for _, name := range members[repo.Name] {
+				if m, ok := byName[name]; ok && readable(r, m) {
+					n++
+				}
 			}
-			names := make([]string, 0, len(members))
-			for _, m := range members {
-				names = append(names, m.Name)
-			}
-			if len(names) > 0 {
-				t.Detail = "resolves " + strings.Join(names, " → ")
-			}
+			row.Detail = memberDetail(n)
 		case model.RepoTypeHosted:
 		}
-		tiles = append(tiles, t)
+		if repo.Type != model.RepoTypeVirtual {
+			row.Stats = statsView(stats[repo.Name])
+		}
+		rows = append(rows, row)
 	}
-	slices.SortFunc(tiles, func(a, b tile) int { return strings.Compare(a.Name, b.Name) })
-	h.render(w, r, "repos", "", http.StatusOK, struct {
-		chrome
-		Repos []tile
-	}{h.chrome(r, "Repositories"), tiles})
+
+	table := useTable(len(matching), filter.View)
+	groups := groupRows(rows)
+	countNamespaces(groups, matching)
+	filter.Page = page
+	data := reposPage{
+		chrome:   h.chrome(r, "Repositories"),
+		Total:    len(visible),
+		Matching: len(matching),
+		Filter:   filter,
+		Table:    table,
+		Groups:   groups,
+		Types:    options(repoTypes, filter.Type),
+		Protos:   options(repoProtocols, filter.Protocol),
+	}
+	if len(matching) > 0 {
+		data.From, data.To = from+1, to
+	}
+	with := func(f repoFilter, view string) string { f.View = view; return f.href() }
+	data.TableHref, data.TilesHref = with(filter, viewTable), with(filter, viewTiles)
+	cleared := repoFilter{View: filter.View}
+	data.ClearHref = cleared.href()
+	if pages > 1 {
+		pv := &pagerView{Page: page, Pages: pages}
+		if page > 1 {
+			prev := filter
+			prev.Page = page - 1
+			pv.Prev = prev.href()
+		}
+		if page < pages {
+			next := filter
+			next.Page = page + 1
+			pv.Next = next.href()
+		}
+		data.Pager = pv
+	}
+	// A history restore asks for the whole page even though htmx sent it.
+	partial := "results"
+	if r.Header.Get("HX-History-Restore-Request") == "true" {
+		partial = ""
+	}
+	h.render(w, r, "repos", partial, http.StatusOK, data)
 }
 
 // readableMembers lists a virtual repository's members the caller may read.
@@ -123,6 +197,8 @@ type repoPage struct {
 	Packages  []link
 	Cursor    string
 	More      string
+	// Use is the "Set up your client" section.
+	Use *usePanel
 }
 
 func (h *handler) repositoryPage(w http.ResponseWriter, r *http.Request, repo model.Repository) {
@@ -132,6 +208,8 @@ func (h *handler) repositoryPage(w http.ResponseWriter, r *http.Request, repo mo
 		Repo:   view,
 		Cursor: r.URL.Query().Get("cursor"),
 	}
+	in := h.commandInput(r, repo)
+	data.Use = h.panel(r, "Set up your client", in, SetupCommands(in), ociNotes(in))
 	switch repo.Type {
 	case model.RepoTypeVirtual:
 		data.IsVirtual = true
@@ -204,6 +282,8 @@ type packagePage struct {
 	Versions []versionGroup
 	Cursor   string
 	More     string
+	// Use is the pull or install section.
+	Use *usePanel
 }
 
 // packagePage lists an OCI image's tags, or the files of a PyPI project or npm
@@ -238,8 +318,11 @@ func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model
 				data.Versions = append(data.Versions, versionGroup{Version: f.Version})
 			}
 			g := &data.Versions[len(data.Versions)-1]
-			g.Files = append(g.Files, fileRow{Filename: f.Filename, Size: f.Size, Href: artifactHref(repo.Name, "", f.Digest)})
+			g.Files = append(g.Files, fileRow{Filename: f.Filename, Size: f.Size, Href: artifactHref(repo.Name, name, f.Digest)})
 		}
+		in := h.commandInput(r, repo)
+		in.Package = name
+		data.Use = h.panel(r, "Install", in, InstallCommands(in), installNotes(in))
 		h.render(w, r, "package", "", http.StatusOK, data)
 		return
 	}
@@ -249,7 +332,7 @@ func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model
 		return
 	}
 
-	tags, err := h.opts.Registry.ListTags(r.Context(), registry.ListTagsParams{
+	tags, err := h.opts.Registry.ListTagTargets(r.Context(), registry.ListTagsParams{
 		Repo: repo.Name, Image: name, After: data.Cursor, Limit: pageSize,
 	})
 	if err != nil {
@@ -257,12 +340,12 @@ func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model
 		return
 	}
 	for _, tag := range tags.Items {
-		row := tagRow{Name: tag}
-		if man, err := h.opts.Registry.GetManifest(r.Context(), repo.Name, name, tag); err == nil {
-			row.Digest = man.Digest.String()
-			row.Href = artifactHref(repo.Name, name, man.Digest)
-		}
-		data.Tags = append(data.Tags, row)
+		data.Tags = append(data.Tags, tagRow{Name: tag.Name, Digest: tag.Digest.String(), Href: artifactTagHref(repo.Name, name, tag.Digest, tag.Name)})
+	}
+	if len(data.Tags) > 0 {
+		in := h.commandInput(r, repo)
+		in.Package, in.Tag = name, data.Tags[0].Name
+		data.Use = h.panel(r, "Pull", in, InstallCommands(in), installNotes(in))
 	}
 	if tags.NextCursor != "" {
 		data.More = packageHref(repo.Name, name) + "&" + url.Values{"cursor": {tags.NextCursor}}.Encode()
@@ -294,6 +377,11 @@ func (h *handler) npmPackagePage(w http.ResponseWriter, r *http.Request, repo mo
 		data.DistTags = append(data.DistTags, distTagRow{Tag: tag, Version: version})
 	}
 	slices.SortFunc(data.DistTags, func(a, b distTagRow) int { return strings.Compare(a.Tag, b.Tag) })
+	in := h.commandInput(r, repo)
+	// The version list is not in semver order, so the page pins only what
+	// the registry names: the latest dist-tag. Without one, the client picks.
+	in.Package, in.Version = pkg.Name, pkg.DistTags["latest"]
+	data.Use = h.panel(r, "Install", in, InstallCommands(in), installNotes(in))
 	h.render(w, r, "package", "", http.StatusOK, data)
 }
 
@@ -381,6 +469,12 @@ type artifactPage struct {
 	Document    string
 	// Deliveries are the webhook deliveries about this digest, for administrators.
 	Deliveries []deliveryRow
+	// Use is the pull or install section. Manage holds the management API
+	// calls, for a caller who may write the repository, and TokenDocs links
+	// the page that explains the token they use.
+	Use       *usePanel
+	Manage    []cmdStep
+	TokenDocs string
 }
 
 // artifactPage shows one digest as placed in one repository: its identity,
@@ -435,6 +529,7 @@ func (h *handler) artifactPage(w http.ResponseWriter, r *http.Request, repo mode
 		h.fail(w, r, err)
 		return
 	}
+	h.commands(r, &data, repo, image, digest)
 	h.render(w, r, "artifact", "", http.StatusOK, data)
 }
 
@@ -578,4 +673,97 @@ func packageLabel(repo model.Repository, name string) string {
 		return repo.Name
 	}
 	return name
+}
+
+// commands fills in the pull or install section and, for a hosted artifact the
+// caller may write, the management calls. It uses only what the page already
+// loaded, plus a lookup of the one tag, package, or version the URL names, so
+// a link cannot make the page print a command for something it does not
+// hold.
+func (h *handler) commands(r *http.Request, data *artifactPage, repo model.Repository, image string, digest model.Digest) {
+	ctx := r.Context()
+	in := h.commandInput(r, repo)
+	in.Package, in.Digest = image, digest.String()
+	var steps []cmdStep
+	switch repo.Protocol {
+	case model.ProtocolOCI:
+		if tag := r.URL.Query().Get("tag"); tag != "" {
+			if d, err := h.opts.Registry.ResolveTag(ctx, repo.Name, image, tag); err == nil && d == digest {
+				in.Tag = tag
+			}
+		}
+		steps = PullCommands(in)
+	case model.ProtocolPyPI:
+		files, err := h.opts.Registry.ListPackageFiles(ctx, repo.Name, image)
+		if err != nil {
+			break
+		}
+		for _, f := range files {
+			if f.Digest == digest {
+				in.Version = f.Version
+				steps = InstallCommands(in)
+				break
+			}
+		}
+	case model.ProtocolNPM:
+		pkg, err := h.opts.Registry.GetNPMPackage(ctx, repo.Name, image)
+		if err != nil {
+			break
+		}
+		for _, v := range pkg.Versions {
+			if v.File.Digest == digest {
+				in.Package, in.Version = pkg.Name, v.Version
+				steps = InstallCommands(in)
+				break
+			}
+		}
+	}
+	title := "Install"
+	if repo.Protocol == model.ProtocolOCI {
+		title = "Pull"
+	}
+	notes := installNotes(in)
+	if data.Upstream {
+		notes = append([]string{"Pulls through the proxy, which fetches from the upstream on a miss."}, notes...)
+	}
+	data.Use = h.panel(r, title, in, steps, notes)
+
+	// Proxy content is never promoted, revoked, or scanned: the lifecycle
+	// refuses a repository that is not hosted.
+	if data.Upstream || !data.HasIdentity || repo.Type != model.RepoTypeHosted || auth.Authorize(principal(r), repo, auth.RoleWrite) != nil {
+		return
+	}
+	promote, revoke := stageChoices(data)
+	data.Manage = ManageCommands(manageInput{
+		Base: in.Base, Repo: repo.Name, Digest: digest.String(),
+		PromoteTo: promote, RevokeFrom: revoke, Rescan: h.opts.ScanEnabled,
+	})
+	if data.Manage != nil {
+		data.TokenDocs = h.docsPage("quickstart.html")
+	}
+}
+
+// stageChoices picks the stage to show in the promote command, the first one
+// this repository has not approved, and in the revoke command, the first one it
+// has. Either falls back to the first stage, and to "" when there are none.
+func stageChoices(data *artifactPage) (promote, revoke string) {
+	col := slices.Index(data.StateRepos, data.Repo)
+	for _, st := range data.Stages {
+		approved := col >= 0 && col < len(st.Cells) && st.Cells[col].Action == string(lifecycle.ActionApprove)
+		switch {
+		case approved && revoke == "":
+			revoke = st.Name
+		case !approved && promote == "":
+			promote = st.Name
+		}
+	}
+	if len(data.Stages) > 0 {
+		if promote == "" {
+			promote = data.Stages[0].Name
+		}
+		if revoke == "" {
+			revoke = data.Stages[0].Name
+		}
+	}
+	return promote, revoke
 }

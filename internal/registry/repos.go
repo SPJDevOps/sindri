@@ -274,6 +274,67 @@ func (r *Registry) GetRemote(ctx context.Context, repoName string) (Remote, erro
 	}, nil
 }
 
+// AllUpstreams maps every proxy repository's name to its upstream URL, in one
+// query. It is for pages that list every repository; GetRemote answers for
+// one.
+func (r *Registry) AllUpstreams(ctx context.Context) (map[string]string, error) {
+	rows, err := r.q.ListAllRemotes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing upstreams: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[row.RepoName] = row.UpstreamUrl
+	}
+	return out, nil
+}
+
+// AllMembers maps every virtual repository's name to its members' names in
+// resolution order, in one query.
+func (r *Registry) AllMembers(ctx context.Context) (map[string][]string, error) {
+	rows, err := r.q.ListAllRepositoryMembers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing members: %w", err)
+	}
+	out := map[string][]string{}
+	for _, row := range rows {
+		out[row.VirtualName] = append(out[row.VirtualName], row.MemberName)
+	}
+	return out, nil
+}
+
+// RepositoryStats is what the repository list shows beside a name. See the
+// ListRepositoryStats query for what each figure counts.
+type RepositoryStats struct {
+	Packages int64
+	// LastPublished is the newest version's publish time; the zero time when
+	// the repository holds no dated version.
+	LastPublished time.Time
+}
+
+// StatsFor returns the stats of the named repositories, in one query however
+// many names there are. A name that does not exist is absent from the result.
+// The caller decides which names to ask about: it must have filtered them by
+// what the caller may read first.
+func (r *Registry) StatsFor(ctx context.Context, names []string) (map[string]RepositoryStats, error) {
+	if len(names) == 0 {
+		return map[string]RepositoryStats{}, nil
+	}
+	rows, err := r.q.ListRepositoryStats(ctx, names)
+	if err != nil {
+		return nil, fmt.Errorf("listing repository stats: %w", err)
+	}
+	out := make(map[string]RepositoryStats, len(rows))
+	for _, row := range rows {
+		s := RepositoryStats{Packages: row.PackageCount}
+		if row.LastPublishedAt.Valid {
+			s.LastPublished = row.LastPublishedAt.Time
+		}
+		out[row.RepoName] = s
+	}
+	return out, nil
+}
+
 // ProxiesWithUpstreamCredentials names the proxy repositories whose stored
 // upstream URL carries credentials. API-created rows from before such URLs were
 // refused (SIN-116) keep working, so startup warns about them instead of

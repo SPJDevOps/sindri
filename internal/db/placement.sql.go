@@ -1182,6 +1182,57 @@ func (q *Queries) ListRepositories(ctx context.Context, arg ListRepositoriesPara
 	return items, nil
 }
 
+const listTagTargets = `-- name: ListTagTargets :many
+SELECT t.name, t.target_digest FROM tags t
+JOIN repositories r ON r.id = t.repo_id
+JOIN packages p ON p.id = t.package_id
+WHERE r.name = $1
+  AND p.normalized_name = $2
+  AND ($3::text IS NULL OR t.name > $3)
+ORDER BY t.name
+LIMIT $4
+`
+
+type ListTagTargetsParams struct {
+	RepoName       string      `json:"repo_name"`
+	NormalizedName string      `json:"normalized_name"`
+	AfterName      pgtype.Text `json:"after_name"`
+	PageLimit      int32       `json:"page_limit"`
+}
+
+type ListTagTargetsRow struct {
+	Name         string `json:"name"`
+	TargetDigest string `json:"target_digest"`
+}
+
+// A tag's name and the digest it points at. A tag row is itself a placement
+// of that digest in the repository (CheckPlacement), so the pair needs no
+// second lookup.
+func (q *Queries) ListTagTargets(ctx context.Context, arg ListTagTargetsParams) ([]ListTagTargetsRow, error) {
+	rows, err := q.db.Query(ctx, listTagTargets,
+		arg.RepoName,
+		arg.NormalizedName,
+		arg.AfterName,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTagTargetsRow{}
+	for rows.Next() {
+		var i ListTagTargetsRow
+		if err := rows.Scan(&i.Name, &i.TargetDigest); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTags = `-- name: ListTags :many
 SELECT t.name FROM tags t
 JOIN repositories r ON r.id = t.repo_id

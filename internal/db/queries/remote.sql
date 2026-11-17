@@ -184,3 +184,47 @@ WITH gone AS (
 SELECT gone.version_id, v.package_id
 FROM gone
 JOIN versions v ON v.id = gone.version_id;
+
+-- name: ListAllRemotes :many
+-- Every proxy's upstream, for a page that lists all repositories: one query
+-- instead of one per proxy.
+SELECT r.name AS repo_name, rem.upstream_url
+FROM remotes rem
+JOIN repositories r ON r.id = rem.repo_id
+ORDER BY r.name;
+
+-- name: ListRepositoryStats :many
+-- What the repository list shows beside each name, for the named repositories
+-- only, in one query instead of one per row. The caller passes the names on the
+-- page it is about to render, so the cost follows the page, not the registry.
+--
+-- package_count is the packages the repository holds. last_published_at is the
+-- newest versions.published_at in it: the newest time a version was added, NULL
+-- when it holds none or only versions from before the column existed (00011).
+-- A virtual repository holds nothing of its own and reports zero and NULL.
+--
+-- There is deliberately no stored size. Summing the distinct blobs placed in a
+-- repository (files plus repository_blobs, joined to blobs) costs about 80ms for
+-- a 200-repository page of the large seed and over 400ms under load, which
+-- breaks the page's 200ms budget; a summary table would be the only fix, and
+-- the list does not justify one.
+WITH wanted AS (
+    SELECT r.id, r.name FROM repositories r WHERE r.name = ANY(@names::text[])
+), counts AS (
+    SELECT p.repo_id, count(*)::bigint AS package_count
+    FROM packages p
+    JOIN wanted w ON w.id = p.repo_id
+    GROUP BY p.repo_id
+), newest AS (
+    SELECT p.repo_id, max(v.published_at)::timestamptz AS last_published_at
+    FROM versions v
+    JOIN packages p ON p.id = v.package_id
+    JOIN wanted w ON w.id = p.repo_id
+    GROUP BY p.repo_id
+)
+SELECT w.name AS repo_name,
+       COALESCE(counts.package_count, 0)::bigint AS package_count,
+       newest.last_published_at AS last_published_at
+FROM wanted w
+LEFT JOIN counts ON counts.repo_id = w.id
+LEFT JOIN newest ON newest.repo_id = w.id;

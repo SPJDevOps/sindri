@@ -20,6 +20,7 @@ func (c *Config) RedactedCopy() Config {
 	out.Desired = nil
 	out.Database.URL = c.Database.Redacted()
 	out.PublicURL = RedactUserinfo(c.PublicURL)
+	out.UI.DocsURL = RedactUserinfo(c.UI.DocsURL)
 	out.Storage.Endpoint = RedactUserinfo(c.Storage.Endpoint)
 	out.Scanning.DBRepository = RedactUserinfo(c.Scanning.DBRepository)
 	out.Scanning.JavaDBRepository = RedactUserinfo(c.Scanning.JavaDBRepository)

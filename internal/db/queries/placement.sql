@@ -417,3 +417,16 @@ DELETE FROM remote_cache
 WHERE repo_id = sqlc.arg('repo_id')
   AND starts_with(cache_key, sqlc.arg('prefix')::text)
   AND right(cache_key, length(sqlc.arg('digest')::text) + 1) = ':' || sqlc.arg('digest')::text;
+
+-- name: ListTagTargets :many
+-- A tag's name and the digest it points at. A tag row is itself a placement
+-- of that digest in the repository (CheckPlacement), so the pair needs no
+-- second lookup.
+SELECT t.name, t.target_digest FROM tags t
+JOIN repositories r ON r.id = t.repo_id
+JOIN packages p ON p.id = t.package_id
+WHERE r.name = sqlc.arg('repo_name')
+  AND p.normalized_name = sqlc.arg('normalized_name')
+  AND (sqlc.narg('after_name')::text IS NULL OR t.name > sqlc.narg('after_name'))
+ORDER BY t.name
+LIMIT sqlc.arg('page_limit');

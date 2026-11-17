@@ -1,0 +1,18 @@
+<header class="site-header">
+  <div class="container">
+    <a class="wordmark" href="/ui/"><img class="mark" src="/ui/static/VERSION/favicon.svg" alt="" width="24" height="24">Sindri</a>
+    <nav class="nav" aria-label="Main">
+      <a href="/ui/">Repositories</a>
+      <a href="/ui/system">System</a>
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    <details class="menu">
+      <summary>Menu</summary>
+      <nav class="menu-panel" aria-label="Menu">
+      <a href="/ui/">Repositories</a>
+      <a href="/ui/system">System</a>
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    </details>
+  </div>
+</header>

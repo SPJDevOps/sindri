@@ -221,6 +221,9 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		Logger:    logger,
 		RequestID: server.RequestIDFromContext,
 		SignOut:   signIn,
+		DocsURL:   cfg.UI.DocsURL,
+
+		ScanEnabled: cfg.Scanning.Enabled,
 	})
 	if err != nil {
 		database.Close()
@@ -275,7 +278,7 @@ func build(ctx context.Context, cfg *config.Config, logger *slog.Logger, bo buil
 		NPM:               npmHandler,
 		Auth:              sessions,
 		// Read-only, GET and HEAD only, every page authorized (ADR 21).
-		UI:          auth.GuardUI(chain, uiHandler, signIn),
+		UI:          auth.GuardUI(chain, uiHandler, signIn, cfg.UI.DocsURL),
 		Logger:      logger,
 		Metrics:     metricsReg,
 		QueueCounts: jobs.Counts,

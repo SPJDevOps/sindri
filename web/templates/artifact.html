@@ -1,16 +1,17 @@
 {{define "content"}}
 <h1 class="page-title mono" title="{{.Digest}}">{{short .Digest}}</h1>
-<div class="pills">{{if .Kind}}<span class="pill">{{.Kind}}</span>{{end}}{{if .Upstream}}<span class="pill upstream">upstream content</span>{{end}}</div>
+<div class="pills">{{if .Kind}}<span class="pill">{{.Kind}}</span>{{end}}{{if .Upstream}}<span class="pill upstream">upstream content</span>{{end}}</div>{{with .Use}}
+{{template "use" .}}{{end}}
 
 <section class="section">
   <dl class="facts">
-    <dt>Digest</dt><dd class="mono">{{.Digest}}</dd>
+    <dt>Digest</dt><dd><span class="mono">{{.Digest}}</span><button class="copy" type="button" data-copy="{{.Digest}}" aria-label="Copy digest">Copy</button></dd>
     <dt>Size</dt><dd>{{bytes .Size}}</dd>
     {{if .MediaType}}<dt>Media type</dt><dd class="mono">{{.MediaType}}</dd>{{end}}
     <dt>Repository</dt><dd><a class="mono" href="{{.RepoHref}}">{{.Repo}}</a></dd>
     {{if .HasIdentity}}
     <dt>Owners</dt><dd>{{range $i, $o := .Owners}}{{if $i}}, {{end}}<span class="mono">{{$o}}</span>{{else}}<span class="hint">none you may see</span>{{end}}</dd>
-    <dt>First published</dt><dd title="{{when .CreatedAt}}">{{ago .CreatedAt}}</dd>
+    <dt>First published</dt><dd>{{ago .CreatedAt}}</dd>
     {{end}}
   </dl>
 </section>
@@ -26,7 +27,7 @@
     <thead><tr><th scope="col">Environment</th>{{range .StateRepos}}<th scope="col" class="mono">{{.}}</th>{{end}}</tr></thead>
     <tbody>
     {{range .Stages}}
-      <tr><th scope="row" class="mono">{{.Name}}</th>{{range .Cells}}<td>{{if .Action}}<span class="pill {{.Action}}">{{if eq .Action "approve"}}approved{{else}}revoked{{end}}</span><span class="by" title="{{when .At}}">{{.Actor}} · {{ago .At}}</span>{{else}}<span class="pill none">not promoted</span>{{end}}</td>{{end}}</tr>
+      <tr><th scope="row" class="mono">{{.Name}}</th>{{range .Cells}}<td>{{if .Action}}<span class="pill {{.Action}}">{{if eq .Action "approve"}}approved{{else}}revoked{{end}}</span><span class="by">{{.Actor}} · {{ago .At}}</span>{{else}}<span class="pill none">not promoted</span>{{end}}</td>{{end}}</tr>
     {{end}}
     </tbody>
   </table>
@@ -34,13 +35,19 @@
   {{else}}
   <p class="hint">No lifecycle stages are defined on this server.</p>
   {{end}}
-</section>
+</section>{{if .Manage}}
+
+<section class="section">
+  <h2 class="section-title">Manage</h2>
+  <p class="hint">The page is read-only. These calls change state through the management API with your own token{{if .TokenDocs}}; <a href="{{.TokenDocs}}" rel="noreferrer noopener">how tokens work</a>{{end}}.</p>
+  {{template "commands" .Manage}}
+</section>{{end}}
 
 <section class="section">
   <h2 class="section-title">Evidence</h2>
   <div class="rows">
   {{range .Evidence}}
-    <div class="row"><span class="primary"><span class="pill">{{.Type}}</span> <span class="mono">{{.MediaType}}</span>{{with .Scan}}<span class="findings">{{if .Clean}}<span class="pill sev-none">no findings</span>{{else}}{{range .Counts}}<span class="pill {{.Class}}">{{.N}} {{.Severity}}</span>{{end}}{{end}}{{with .Platform}}<span class="mono hint">{{.}}</span>{{end}}</span>{{end}}</span><span class="secondary" title="{{when .CreatedAt}}">{{bytes .Size}} · {{.CreatedBy}} · {{ago .CreatedAt}}</span></div>
+    <div class="row"><span class="primary"><span class="pill">{{.Type}}</span> <span class="mono">{{.MediaType}}</span>{{with .Scan}}<span class="findings">{{if .Clean}}<span class="pill sev-none">no findings</span>{{else}}{{range .Counts}}<span class="pill {{.Class}}">{{.N}} {{.Severity}}</span>{{end}}{{end}}{{with .Platform}}<span class="mono hint">{{.}}</span>{{end}}</span>{{end}}</span><span class="secondary">{{bytes .Size}} · {{.CreatedBy}} · {{ago .CreatedAt}}</span></div>
   {{else}}
     <div class="row empty">No evidence attached.</div>
   {{end}}
@@ -52,7 +59,7 @@
   <h2 class="section-title">Vulnerabilities</h2>
   {{range .Vulns}}
   <div class="vuln-panel">
-    <div class="vuln-head">{{if .Platform}}<span class="mono">{{.Platform}}</span>{{else}}<span class="hint">no platform</span>{{end}}<span class="hint" title="{{when .ScannedAt}}">Scanned {{ago .ScannedAt}}</span>{{with .DBUpdatedAt}}<span class="hint">database {{.}}</span>{{end}}</div>
+    <div class="vuln-head">{{if .Platform}}<span class="mono">{{.Platform}}</span>{{else}}<span class="hint">no platform</span>{{end}}<span class="hint">Scanned {{ago .ScannedAt}}</span>{{with .DBUpdatedAt}}<span class="hint">database {{.}}</span>{{end}}</div>
     <div class="pills">{{if .Clean}}<span class="pill sev-none">no findings</span>{{else}}{{range .Counts}}<span class="pill {{.Class}}">{{.N}} {{.Severity}}</span>{{end}}{{end}}</div>
     {{if .Clean}}
     <p class="hint">No findings</p>
@@ -79,7 +86,7 @@
   <h2 class="section-title">Notifications</h2>
   <div class="rows">
   {{range .Deliveries}}
-    <div class="row"><span class="primary"><span class="dot {{.Dot}}" aria-hidden="true"></span>Notification to <span class="mono">{{.Webhook}}</span>: <span class="mono">{{.Event}}</span>, {{.State}}{{if .Status}} ({{.Status}}){{end}}</span><span class="secondary" title="{{when .At}}">{{ago .At}}</span></div>
+    <div class="row"><span class="primary"><span class="dot {{.Dot}}" aria-hidden="true"></span>Notification to <span class="mono">{{.Webhook}}</span>: <span class="mono">{{.Event}}</span>, {{.State}}{{if .Status}} ({{.Status}}){{end}}</span><span class="secondary">{{ago .At}}</span></div>
   {{end}}
   </div>
 </section>
@@ -89,7 +96,7 @@
   <h2 class="section-title">Provenance</h2>
   <div class="rows">
   {{range .Provenance}}
-    <div class="row"><span class="primary"><span class="pill">{{.SourceType}}</span>{{if .SourceRef}} <span class="mono">{{.SourceRef}}</span>{{end}}{{if .BuildRef}} <span class="hint">at</span> <span class="mono">{{.BuildRef}}</span>{{end}}</span><span class="secondary" title="{{when .RecordedAt}}">{{ago .RecordedAt}}</span></div>
+    <div class="row"><span class="primary"><span class="pill">{{.SourceType}}</span>{{if .SourceRef}} <span class="mono">{{.SourceRef}}</span>{{end}}{{if .BuildRef}} <span class="hint">at</span> <span class="mono">{{.BuildRef}}</span>{{end}}</span><span class="secondary">{{ago .RecordedAt}}</span></div>
   {{else}}
     <div class="row empty">No provenance recorded.</div>
   {{end}}

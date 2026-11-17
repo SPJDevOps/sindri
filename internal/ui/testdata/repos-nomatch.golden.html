@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
+<title>t · Sindri</title>
+<link rel="icon" href="/ui/static/VERSION/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/ui/static/VERSION/favicon.png" type="image/png" sizes="32x32">
+<link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
+<script src="/ui/static/VERSION/htmx.min.js" defer></script>
+<script src="/ui/static/VERSION/sindri.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container">
+    <a class="wordmark" href="/ui/"><img class="mark" src="/ui/static/VERSION/favicon.svg" alt="" width="24" height="24">Sindri</a>
+    <nav class="nav" aria-label="Main">
+      <a href="/ui/">Repositories</a>
+      
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    <details class="menu">
+      <summary>Menu</summary>
+      <nav class="menu-panel" aria-label="Menu">
+      <a href="/ui/">Repositories</a>
+      
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    </details>
+  </div>
+</header>
+<main id="main">
+  <div class="container">
+    
+    
+<h1 class="page-title">Repositories</h1>
+<p class="lead">Every repository you may read. Hosted repositories hold your own artifacts; proxies cache an upstream; virtual repositories resolve across members, hosted first.</p>
+
+<form class="filter-form" method="get" action="/ui/" role="search" aria-label="Filter repositories"
+      hx-get="/ui/" hx-target="#repo-results" hx-swap="innerHTML" hx-push-url="true" hx-sync="this:replace"
+      hx-trigger="input changed delay:200ms from:#repo-q, change, search, submit">
+  <input type="search" id="repo-q" name="q" value="zzz" maxlength="100" placeholder="Filter by name" aria-label="Filter by name" autocomplete="off">
+  <select name="type" aria-label="Type"><option value="">All types</option><option value="hosted">hosted</option><option value="proxy">proxy</option><option value="virtual">virtual</option></select>
+  <select name="protocol" aria-label="Protocol"><option value="">All protocols</option><option value="oci">oci</option><option value="pypi">pypi</option><option value="npm">npm</option></select>
+  
+  <button type="submit">Filter</button>
+</form>
+
+<section class="section" id="repo-results">
+
+
+  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No repository matches this filter. <a href="/ui/">Clear the filter</a></p></div></div>
+
+
+</section>
+
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <span>Sindri 0.0.0-test</span>
+    <span>Read-only view. Changes go through configuration and the API, never this page.</span>
+    <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
+  </div>
+</footer>
+<div class="live" id="live" role="status" aria-live="polite"></div>
+<dialog class="keys" id="keys" aria-labelledby="keys-title">
+  <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
+  <dl class="facts">
+    <dt><kbd>g</kbd> then <kbd>r</kbd></dt><dd>Go to repositories</dd>
+    <dt><kbd>?</kbd></dt><dd>Show or hide this list</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Close this list</dd>
+  </dl>
+  <form method="dialog"><button class="close" type="submit">Close</button></form>
+</dialog>
+</body>
+</html>

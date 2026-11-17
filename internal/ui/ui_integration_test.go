@@ -18,6 +18,7 @@ import (
 	godigest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/spj/sindri/internal/auth"
@@ -39,6 +40,10 @@ var who = map[string]auth.Principal{
 	"alice": {Subject: "user:alice", Kind: auth.KindUser, Groups: []string{"team:a"}},
 	"bob":   {Subject: "user:bob", Kind: auth.KindUser, Groups: []string{"team:b"}},
 	"admin": {Subject: "user:admin", Kind: auth.KindUser, Admin: true},
+	// seeder may write every repository testsupport.SeedLarge creates, and
+	// read all but the restricted ones, so it sees the filtered list and the
+	// Manage commands.
+	"seeder": {Subject: "user:seeder", Kind: auth.KindUser, Groups: []string{"team:seed"}},
 }
 
 type env struct {
@@ -54,7 +59,13 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	database := testsupport.MigratedDB(t)
+	return newEnvTraced(t, nil)
+}
+
+// newEnvTraced is newEnv with tracer seeing every query the pages make.
+func newEnvTraced(t *testing.T, tracer pgx.QueryTracer) *env {
+	t.Helper()
+	database := testsupport.MigratedDBTraced(t, tracer)
 	store := cas.New(memstore.New(), cas.WithReserver(db.NewBlobReserver(database, "memory")))
 	reg := registry.New(database, store, "memory")
 	lc := lifecycle.New(database)
@@ -193,6 +204,27 @@ func TestUI_RepositoryListShowsOnlyReadable(t *testing.T) {
 	}
 }
 
+// The list reads every virtual repository's members in one query, so the
+// readability filter is the page's own: a tile counts only members the caller
+// may read, as the virtual repository's page lists only those.
+func TestUI_RepositoryListNamesOnlyReadableVirtualMembers(t *testing.T) {
+	e := newEnv(t)
+	r := e.get("alice", "/ui/")
+	if r.status != http.StatusOK {
+		t.Fatalf("GET /ui/: %d", r.status)
+	}
+	// "all" has three members; alice may read two of them.
+	if !strings.Contains(r.body, "resolves 2 members") {
+		t.Errorf("the virtual tile does not count alice's readable members:\n%s", r.body)
+	}
+	if strings.Contains(r.body, "resolves 3 members") {
+		t.Errorf("the virtual tile counts a member alice may not read:\n%s", r.body)
+	}
+	if strings.Contains(r.body, "team-b") {
+		t.Errorf("the repository list names team-b to alice:\n%s", r.body)
+	}
+}
+
 func TestUI_UnreadableRepositoryPagesAre404(t *testing.T) {
 	e := newEnv(t)
 	d := e.push("team-b", "app", "1.0", "b")
@@ -213,6 +245,48 @@ func TestUI_UnreadableRepositoryPagesAre404(t *testing.T) {
 	// The same pages work for someone who may read them.
 	if r := e.get("bob", "/ui/r/team-b/-/artifact?digest="+d.String()); r.status != http.StatusOK {
 		t.Fatalf("bob GET artifact: %d", r.status)
+	}
+}
+
+// A repository that does not exist and one the caller may not read must be
+// indistinguishable: not only the status but every byte of the body and every
+// header. The comparison is on the raw response, because escaping could hide a
+// difference that a browser would still show. Nothing in the page may echo the
+// requested name either, which is also what makes the bodies equal.
+func TestUI_NotFoundIsByteIdenticalForMissingAndUnreadableRepositories(t *testing.T) {
+	e := newEnv(t)
+	d := e.push("team-b", "app", "1.0", "identical")
+	raw := func(path string) (int, http.Header, string) {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+		req.Header.Set("X-Test-User", "alice")
+		rec := httptest.NewRecorder()
+		e.srv.ServeHTTP(rec, req)
+		return rec.Code, rec.Header(), rec.Body.String()
+	}
+	missingStatus, missingHdr, missingBody := raw("/ui/r/no-such-repo")
+	if missingStatus != http.StatusNotFound || !strings.Contains(missingBody, "may not exist, or this account may not be allowed to read it") {
+		t.Fatalf("a missing repository: %d\n%s", missingStatus, missingBody)
+	}
+	for _, path := range []string{
+		"/ui/r/team-b",
+		"/ui/r/team-b/-/package?name=app",
+		"/ui/r/team-b/-/artifact?digest=" + d.String(),
+		"/ui/r/no-such-repo/-/package?name=app",
+		"/ui/r/team-a/-/no-such-page",
+		"/ui/no-such-page",
+	} {
+		status, hdr, body := raw(path)
+		if status != missingStatus {
+			t.Errorf("%s: status %d, want %d", path, status, missingStatus)
+		}
+		if body != missingBody {
+			t.Errorf("%s: the body differs from the one for a missing repository (%d and %d bytes)\n--- got\n%s\n--- want\n%s", path, len(body), len(missingBody), body, missingBody)
+		}
+		for _, h := range []string{"Content-Type", "Content-Length", "Cache-Control", "Vary", "Content-Security-Policy"} {
+			if hdr.Get(h) != missingHdr.Get(h) {
+				t.Errorf("%s: header %s is %q, want %q", path, h, hdr.Get(h), missingHdr.Get(h))
+			}
+		}
 	}
 }
 
@@ -297,8 +371,8 @@ func TestUI_ProxyRepositoryIsMarkedAsUpstreamContent(t *testing.T) {
 	if !regexp.MustCompile(`class="tile upstream" href="/ui/r/hub"`).MatchString(r.body) {
 		t.Fatal("the proxy tile is not marked as upstream content")
 	}
-	if !strings.Contains(r.body, "caches https://registry-1.docker.io") {
-		t.Fatal("the proxy tile does not name its upstream")
+	if !strings.Contains(r.body, "caches registry-1.docker.io") || strings.Contains(r.body, "https://registry-1.docker.io") {
+		t.Fatal("the proxy tile does not name its upstream's host alone")
 	}
 	page := e.get("alice", "/ui/r/hub")
 	if !strings.Contains(page.body, "callout upstream") || !strings.Contains(page.body, "never be promoted") {
@@ -704,5 +778,147 @@ func TestUI_UpstreamURLCredentialsAreNeverRendered(t *testing.T) {
 		if !strings.Contains(r.body, "registry.example.com") {
 			t.Errorf("%s no longer names the upstream host", path)
 		}
+	}
+}
+
+// addRepos creates repositories readable by the groups given.
+func (e *env) addRepos(repos ...registry.CreateRepositoryParams) {
+	e.t.Helper()
+	for _, repo := range repos {
+		if _, err := e.reg.CreateRepository(e.t.Context(), repo); err != nil {
+			e.t.Fatalf("CreateRepository %s: %v", repo.Name, err)
+		}
+	}
+}
+
+// Every number on the list is of what the caller may read: a group's count,
+// the total, and "N of M". A restricted repository must not move any of them,
+// or the count would confirm that it exists.
+func TestUI_RepositoryListCountsExcludeWhatTheCallerMayNotRead(t *testing.T) {
+	e := newEnv(t)
+	open := model.Access{Read: []string{auth.Authenticated}}
+	secret := model.Access{Read: []string{"team:b"}}
+	e.addRepos(
+		registry.CreateRepositoryParams{Name: "acme/open", Type: model.RepoTypeHosted, Protocol: model.ProtocolOCI, Access: open},
+		registry.CreateRepositoryParams{Name: "acme/secret", Type: model.RepoTypeHosted, Protocol: model.ProtocolOCI, Access: secret},
+		registry.CreateRepositoryParams{Name: "acme/secret-two", Type: model.RepoTypeHosted, Protocol: model.ProtocolPyPI, Access: secret},
+		registry.CreateRepositoryParams{Name: "vault/only", Type: model.RepoTypeHosted, Protocol: model.ProtocolOCI, Access: secret},
+	)
+	// The default environment has nine repositories; alice may read all but
+	// team-b, and bob reads team-b, hub, and the acme ones he is granted.
+	tests := []struct {
+		name     string
+		user     string
+		path     string
+		contains []string
+		absent   []string
+	}{
+		{"alice's group count", "alice", "/ui/?view=table",
+			[]string{`<span class="mono">acme</span> <span class="pill">1</span>`, "9 repositories"},
+			[]string{"acme/secret", "vault", "13 repositories", ">3<"}},
+		{"alice's filtered count", "alice", "/ui/?q=acme",
+			[]string{"1 of 9 repositories match"}, []string{"acme/secret", "of 13"}},
+		{"alice finds nothing by a hidden name", "alice", "/ui/?q=secret",
+			[]string{"No repository matches this filter"}, []string{"acme/secret", "1 of"}},
+		{"alice finds nothing in a hidden namespace", "alice", "/ui/?q=vault",
+			[]string{"No repository matches this filter"}, []string{"vault/only"}},
+		{"alice's type filter", "alice", "/ui/?type=hosted&q=acme",
+			[]string{"1 of 9 repositories match"}, []string{"acme/secret"}},
+		{"admin counts them all", "admin", "/ui/?q=acme&view=table",
+			[]string{"3 of 13 repositories match", `<span class="mono">acme</span> <span class="pill">3</span>`, "acme/secret-two"}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := e.get(tc.user, tc.path)
+			if r.status != http.StatusOK {
+				t.Fatalf("GET %s: %d", tc.path, r.status)
+			}
+			for _, want := range tc.contains {
+				if !strings.Contains(r.body, want) {
+					t.Errorf("GET %s lacks %q", tc.path, want)
+				}
+			}
+			for _, bad := range tc.absent {
+				if strings.Contains(r.body, bad) {
+					t.Errorf("GET %s contains %q, which names or counts a repository %s may not read", tc.path, bad, tc.user)
+				}
+			}
+		})
+	}
+}
+
+// The filter's inputs are untrusted: anything unknown is ignored and the page
+// still renders.
+func TestUI_RepositoryListIgnoresHostileFilterInput(t *testing.T) {
+	e := newEnv(t)
+	for _, path := range []string{
+		"/ui/?page=99999999999999999999",
+		"/ui/?page=-3&type=%00&protocol=maven&view=grid",
+		"/ui/?q=" + strings.Repeat("%F0%9F%94%A5", 500),
+		"/ui/?q=%ff%fe&q=second&type=hosted&type=proxy",
+	} {
+		r := e.get("alice", path)
+		if r.status != http.StatusOK {
+			t.Errorf("GET %s: %d, want 200", path, r.status)
+		}
+	}
+	// e.get unescapes entities, so the escaping is checked on the raw body.
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ui/?q=%3Cscript%3Ealert(1)%3C/script%3E", nil)
+	req.Header.Set("X-Test-User", "alice")
+	rec := httptest.NewRecorder()
+	e.srv.ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), "<script>alert") {
+		t.Error("the filter text is echoed unescaped")
+	}
+	r := e.get("alice", "/ui/?q="+strings.Repeat("a", 5000))
+	if n := strings.Count(r.body, strings.Repeat("a", maxFilterLen+1)); n != 0 {
+		t.Errorf("the text filter was echoed past %d characters", maxFilterLen)
+	}
+}
+
+func TestUI_RepositoryListSwapsOnlyTheResultsForHTMX(t *testing.T) {
+	e := newEnv(t)
+	part := e.get("alice", "/ui/?q=team", "HX-Request", "true")
+	if strings.Contains(part.body, "<html") || strings.Contains(part.body, "filter-form") || !strings.Contains(part.body, "team-a") {
+		t.Errorf("an htmx request did not get just the results:\n%s", part.body)
+	}
+	if !strings.Contains(part.header.Get("Vary"), "HX-Request") {
+		t.Errorf("Vary = %q, want HX-Request", part.header.Get("Vary"))
+	}
+	restore := e.get("alice", "/ui/?q=team", "HX-Request", "true", "HX-History-Restore-Request", "true")
+	if !strings.Contains(restore.body, "<html") || !strings.Contains(restore.body, "filter-form") {
+		t.Error("a history restore did not get the whole page")
+	}
+}
+
+// The table's figures come from one aggregate query: packages and the newest
+// version.
+func TestUI_RepositoryTableShowsPackagesAndLastPublish(t *testing.T) {
+	e := newEnv(t)
+	e.push("team-a", "app", "1.0", "one")
+	e.push("team-a", "other", "1.0", "two")
+	e.publishNPM("npm", "left-pad", "1.0.0", "latest")
+	row := func(body, name string) string {
+		m := regexp.MustCompile(`(?s)<tr[^>]*>\s*<td><a class="mono" href="/ui/r/` + regexp.QuoteMeta(name) + `">.*?</tr>`).FindString(body)
+		if m == "" {
+			t.Fatalf("no table row for %s in:\n%s", name, body)
+		}
+		return m
+	}
+	body := e.get("admin", "/ui/?view=table").body
+	if got := row(body, "team-a"); !strings.Contains(got, `<td class="num">2</td>`) {
+		t.Errorf("team-a row does not show two packages:\n%s", got)
+	}
+	if got := row(body, "npm"); !strings.Contains(got, `<td class="num">1</td>`) || !strings.Contains(got, "<time ") {
+		t.Errorf("npm row does not show one package and a publish time:\n%s", got)
+	}
+	if got := row(body, "py"); !strings.Contains(got, `<td class="num">0</td>`) || !strings.Contains(got, "<td>-</td>") {
+		t.Errorf("an empty repository's row does not show zero and a dash:\n%s", got)
+	}
+	if got := row(body, "all"); strings.Contains(got, `<td class="num">0</td>`) || !strings.Contains(got, `<td class="num">-</td>`) {
+		t.Errorf("a virtual repository's row shows figures it does not have:\n%s", got)
+	}
+	if got := row(body, "hub"); !strings.Contains(got, `class="upstream"`) || !strings.Contains(got, "caches registry-1.docker.io") {
+		t.Errorf("the proxy row is not marked as upstream content:\n%s", got)
 	}
 }

@@ -7,22 +7,16 @@
 <meta name="referrer" content="same-origin">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
 <title>{{if .Title}}{{.Title}} · {{end}}Sindri</title>
+<link rel="icon" href="{{asset "favicon.svg"}}" type="image/svg+xml">
+<link rel="icon" href="{{asset "favicon.png"}}" type="image/png" sizes="32x32">
 <link rel="stylesheet" href="{{asset "sindri.css"}}">
 <script src="{{asset "htmx.min.js"}}" defer></script>
+<script src="{{asset "sindri.js"}}" defer></script>
 </head>
 <body>
-<header class="site-header">
-  <div class="container">
-    <a class="wordmark" href="/ui/">Sindri</a>
-    <nav class="nav" aria-label="Main">
-      <a href="/ui/">Repositories</a>
-      {{if .Admin}}<a href="/ui/system">System</a>{{end}}
-      {{if .Who}}<span class="who" title="Signed in as {{.Who}}">{{.Who}}</span>{{end}}
-      {{if .SignOut}}<button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>{{end}}
-    </nav>
-  </div>
-</header>
-<main>
+<a class="skip" href="#main">Skip to content</a>
+{{template "header" .}}
+<main id="main">
   <div class="container">
     {{if .Crumbs}}<p class="crumbs">{{range $i, $c := .Crumbs}}{{if $i}}<span class="sep">/</span>{{end}}{{if $c.Href}}<a href="{{$c.Href}}">{{$c.Label}}</a>{{else}}{{$c.Label}}{{end}}{{end}}</p>{{end}}
     {{template "content" .}}
@@ -30,9 +24,54 @@
 </main>
 <footer class="site-footer">
   <div class="container">
-    <span>Sindri {{.Version}} · read-only view</span>
-    <span>Changes go through configuration and the API, never this page.</span>
+    <span>Sindri {{.Version}}</span>
+    <span>Read-only view. Changes go through configuration and the API, never this page.</span>
+    {{if .DocsURL}}<a href="{{.DocsURL}}" rel="noreferrer noopener">Docs</a>{{end}}
   </div>
 </footer>
+<div class="live" id="live" role="status" aria-live="polite"></div>
+<dialog class="keys" id="keys" aria-labelledby="keys-title">
+  <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
+  <dl class="facts">
+    <dt><kbd>g</kbd> then <kbd>r</kbd></dt><dd>Go to repositories</dd>
+    <dt><kbd>?</kbd></dt><dd>Show or hide this list</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Close this list</dd>
+  </dl>
+  <form method="dialog"><button class="close" type="submit">Close</button></form>
+</dialog>
 </body>
 </html>{{end}}
+
+{{define "header"}}<header class="site-header">
+  <div class="container">
+    <a class="wordmark" href="/ui/"><img class="mark" src="{{asset "favicon.svg"}}" alt="" width="24" height="24">Sindri</a>
+    <nav class="nav" aria-label="Main">{{template "navlinks" .}}</nav>
+    {{template "menu" .}}
+  </div>
+</header>{{end}}
+
+{{define "navlinks"}}
+      <a href="/ui/">Repositories</a>
+      {{if .Admin}}<a href="/ui/system">System</a>{{end}}
+      {{if .Who}}<span class="who" title="Signed in as {{.Who}}">{{.Who}}</span>{{end}}
+      {{if .SignOut}}<button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>{{end}}
+{{- end}}
+
+{{define "menu"}}<details class="menu">
+      <summary>Menu</summary>
+      <nav class="menu-panel" aria-label="Menu">{{template "navlinks" .}}</nav>
+    </details>{{end}}
+
+
+{{define "use"}}<section class="section use" aria-labelledby="use-title">
+  <h2 class="section-title" id="use-title">{{.Title}}</h2>
+  <nav class="tabs" aria-label="Client">{{range .Tabs}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>
+  {{template "commands" .Steps}}
+  {{range .Notes}}<p class="hint">{{.}}</p>{{end}}
+  {{if .Fallback}}<p class="hint">publicUrl is not set; commands use the address this page was loaded from.</p>{{end}}
+</section>{{end}}
+
+{{define "commands"}}{{range .}}
+  {{if .Caption}}<p class="hint step">{{.Caption}}</p>{{end}}
+  <div class="cmd"><pre><code>{{.Text}}</code></pre><button class="copy" type="button" data-copy="{{.Text}}" aria-label="Copy command">Copy</button></div>
+{{end}}{{end}}

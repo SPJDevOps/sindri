@@ -689,6 +689,47 @@ func (r *Registry) ListTags(ctx context.Context, p ListTagsParams) (Page[string]
 	return page, nil
 }
 
+// TagTarget is a tag and the digest it points at.
+type TagTarget struct {
+	Name   string
+	Digest model.Digest
+}
+
+// ListTagTargets is ListTags with each tag's digest, in one query. A tag row
+// places its digest in the repository, so the digest is readable here without
+// a second lookup; reading the manifest's bytes is a separate, explicit step.
+func (r *Registry) ListTagTargets(ctx context.Context, p ListTagsParams) (Page[TagTarget], error) {
+	if _, err := r.requireOCIRepo(ctx, p.Repo); err != nil {
+		return Page[TagTarget]{}, err
+	}
+	limit, err := pageLimit(p.Limit)
+	if err != nil {
+		return Page[TagTarget]{}, err
+	}
+	rows, err := r.q.ListTagTargets(ctx, db.ListTagTargetsParams{
+		RepoName:       p.Repo,
+		NormalizedName: ociImagePackage(p.Image),
+		AfterName:      textCursor(p.After),
+		PageLimit:      limit + 1,
+	})
+	if err != nil {
+		return Page[TagTarget]{}, fmt.Errorf("listing tags: %w", err)
+	}
+	page := Page[TagTarget]{Items: make([]TagTarget, 0, len(rows))}
+	for i, row := range rows {
+		if int32(i) >= limit {
+			page.NextCursor = rows[limit-1].Name
+			break
+		}
+		digest, err := model.ParseDigest(row.TargetDigest)
+		if err != nil {
+			return Page[TagTarget]{}, fmt.Errorf("stored digest of tag %s: %w", row.Name, err)
+		}
+		page.Items = append(page.Items, TagTarget{Name: row.Name, Digest: digest})
+	}
+	return page, nil
+}
+
 // Referrer describes one manifest that names a subject (ADR 32).
 type Referrer struct {
 	Digest       model.Digest
@@ -746,6 +787,17 @@ func (r *Registry) ListReferrers(ctx context.Context, repoName string, subject m
 		})
 	}
 	return page, nil
+}
+
+// ResolveTag returns the digest a tag of an image currently names, or
+// ErrNotFound. It reads one row and no bytes; it does not check placement,
+// so a caller that shows the digest must have checked it already.
+func (r *Registry) ResolveTag(ctx context.Context, repoName, image, tag string) (model.Digest, error) {
+	if strings.Contains(tag, ":") {
+		// resolveManifestDigest would take this for a digest reference.
+		return model.Digest{}, ErrNotFound
+	}
+	return r.resolveManifestDigest(ctx, repoName, image, tag)
 }
 
 func nonNilAnnotations(a map[string]string) map[string]string {

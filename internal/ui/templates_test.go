@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"html/template"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,6 +18,17 @@ import (
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/web"
 )
+
+// panelFor builds the "Use this" section the way the pages do, from the same
+// builders, so a golden shows real commands. Tabs link to path.
+func panelFor(title, path string, in cmdInput, steps []cmdStep, notes []string) *usePanel {
+	in.Client = pickClient(in.Protocol, in.Client)
+	p := &usePanel{Title: title, Steps: steps, Notes: notes, Fallback: in.Fallback}
+	for _, c := range clientsFor(in.Protocol) {
+		p.Tabs = append(p.Tabs, tabLink{Label: c, Href: path + "?client=" + c, Current: c == in.Client})
+	}
+	return p
+}
 
 var update = flag.Bool("update", false, "rewrite the golden files under testdata")
 
@@ -59,6 +71,54 @@ func TestTemplates_NoInlineScriptOrStyleOrHandlers(t *testing.T) {
 	}
 }
 
+// The Content-Security-Policy lets a form submit to this server (form-action
+// 'self'). That is safe only while every form is a GET: the UI has no write
+// path, and the session cookie is honoured on GET and HEAD alone. A form with
+// no method counts as a GET to a browser, but the template must say so, so
+// that a change to POST is a visible edit and not a missing attribute (ADR 21).
+// The form must be a GET, or a dialog form, which never submits.
+func TestTemplates_EveryFormIsAnExplicitGET(t *testing.T) {
+	form := regexp.MustCompile(`(?is)<form\b[^>]*>`)
+	// method="dialog" closes the <dialog> it sits in and sends nothing, so it
+	// needs no form-action; it is the only other method a template may use.
+	method := regexp.MustCompile(`(?i)\smethod="(?:get|dialog)"`)
+	// A button's formmethod or formaction overrides its form's, so a GET form
+	// could still post through one; only formmethod="get" is allowed.
+	override := regexp.MustCompile(`(?i)\sform(?:method|action)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)`)
+	allowed := regexp.MustCompile(`(?i)^\sformmethod\s*=\s*["']?get["']?$`)
+	forms := 0
+	err := fs.WalkDir(web.Templates(), ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(web.Templates(), path)
+		if err != nil {
+			return err
+		}
+		for _, loc := range override.FindAllIndex(b, -1) {
+			if allowed.Match(b[loc[0]:loc[1]]) {
+				continue
+			}
+			line := bytes.Count(b[:loc[0]], []byte("\n")) + 1
+			t.Errorf("%s:%d: formmethod and formaction may not override a form's GET: %s", path, line, b[loc[0]:loc[1]])
+		}
+		for _, loc := range form.FindAllIndex(b, -1) {
+			forms++
+			if tag := b[loc[0]:loc[1]]; !method.Match(tag) {
+				line := bytes.Count(b[:loc[0]], []byte("\n")) + 1
+				t.Errorf("%s:%d: a <form> must say method=\"get\" (or \"dialog\", which sends nothing): %s", path, line, tag)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forms == 0 {
+		t.Error("no <form> found in any template; the test measures nothing")
+	}
+}
+
 // Golden renders of every page, from fixed data. They are what a reviewer
 // reads to see a template change, and they fail on an accidental one. Run
 // `go test ./internal/ui -run TestTemplates_Golden -update` to accept a
@@ -70,30 +130,71 @@ func TestTemplates_Golden(t *testing.T) {
 	}
 	long := time.Date(2020, 3, 14, 15, 9, 26, 0, time.UTC)
 	digest := "sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe"
-	base := chrome{Title: "t", Who: "user:alice", SignOut: true, Version: "0.0.0-test"}
+	base := chrome{Title: "t", Who: "user:alice", SignOut: true, Version: "0.0.0-test", DocsURL: "https://docs.example.test/sindri/"}
 	adminBase := base
 	adminBase.Admin = true
 	team := repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}
+
+	const base0 = "https://sindri.example.test"
+	ociIn := cmdInput{Base: base0, Repo: "team/app", Protocol: model.ProtocolOCI, Kind: model.RepoTypeHosted}
+	pullIn := ociIn
+	pullIn.Package, pullIn.Digest, pullIn.Tag = "web", digest, "1.0"
+	pypiIn := cmdInput{Base: base0, Repo: "internal-py", Protocol: model.ProtocolPyPI, Kind: model.RepoTypeHosted, Package: "demo"}
+	npmIn := cmdInput{Base: base0, Repo: "internal-npm", Protocol: model.ProtocolNPM, Kind: model.RepoTypeHosted, Package: "@acme/ui", Version: "1.1.0"}
+	virtIn := cmdInput{Base: base0, Repo: "python", Protocol: model.ProtocolPyPI, Kind: model.RepoTypeVirtual, Client: "uv"}
+	hubIn := cmdInput{Base: "http://sindri.test:8080", Repo: "hub", Protocol: model.ProtocolOCI, Kind: model.RepoTypeProxy, Package: "library/alpine", Digest: digest, Fallback: true}
+	manage := ManageCommands(manageInput{Base: base0, Repo: "team/app", Digest: digest, PromoteTo: "prod", RevokeFrom: "dev", Rescan: true})
 
 	cases := map[string]struct {
 		page string
 		data any
 	}{
-		"repos": {"repos", struct {
-			chrome
-			Repos []tile
-		}{base, []tile{
-			{repoView: team},
-			{repoView: repoView{Name: "hub", Type: "proxy", Protocol: "oci", Upstream: true, Href: "/ui/r/hub"}, Detail: "caches https://registry-1.docker.io"},
-			{repoView: repoView{Name: "python", Type: "virtual", Protocol: "pypi", Href: "/ui/r/python"}, Detail: "resolves internal-py → pypi"},
-		}}},
-		"repos-empty": {"repos", struct {
-			chrome
-			Repos []tile
-		}{base, nil}},
+		"repos": {"repos", reposPage{chrome: base, Total: 3, Matching: 3, From: 1, To: 3,
+			Table: false, Types: options(repoTypes, ""), Protos: options(repoProtocols, ""),
+			TableHref: "/ui/?view=table", TilesHref: "/ui/?view=tiles", ClearHref: "/ui/",
+			Groups: []repoGroup{
+				{Rows: []repoRow{
+					{repoView: repoView{Name: "hub", Type: "proxy", Protocol: "oci", Upstream: true, Href: "/ui/r/hub"}, Detail: "caches registry-1.docker.io",
+						Stats: &rowStats{Packages: 4, LastPublished: long}},
+					{repoView: repoView{Name: "python", Type: "virtual", Protocol: "pypi", Href: "/ui/r/python"}, Detail: "resolves 2 members"},
+				}, Total: 2},
+				{Label: "team", Rows: []repoRow{{repoView: team, Stats: &rowStats{Packages: 1}}}, Total: 1},
+			}}},
+		"repos-table": {"repos", reposPage{chrome: base, Total: 500, Matching: 500, From: 1, To: 200,
+			Table: true, Types: options(repoTypes, ""), Protos: options(repoProtocols, ""),
+			TableHref: "/ui/?view=table", TilesHref: "/ui/?view=tiles", ClearHref: "/ui/",
+			Pager: &pagerView{Page: 1, Pages: 3, Next: "/ui/?page=2"},
+			Groups: []repoGroup{
+				{Rows: []repoRow{
+					{repoView: repoView{Name: "hub", Type: "proxy", Protocol: "oci", ManagedBy: "config", Upstream: true, Href: "/ui/r/hub"}, Detail: "caches registry-1.docker.io",
+						Stats: &rowStats{Packages: 4, LastPublished: long}},
+					{repoView: repoView{Name: "python", Type: "virtual", Protocol: "pypi", ManagedBy: "config", Href: "/ui/r/python"}, Detail: "resolves 2 members"},
+				}, Total: 2},
+				// team continues on page 2, so its pill says how many of it this page shows.
+				{Label: "team", Total: 5, Rows: []repoRow{
+					{repoView: repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}, Stats: &rowStats{Packages: 12, LastPublished: long}},
+					{repoView: repoView{Name: "team/lib", Type: "hosted", Protocol: "pypi", ManagedBy: "api", Locked: true, Href: "/ui/r/team/lib"}, Stats: &rowStats{}},
+				}},
+			}}},
+		"repos-filtered": {"repos", reposPage{chrome: base, Total: 500, Matching: 2, From: 1, To: 2,
+			Filter: repoFilter{Q: "team", Type: "hosted", View: "table"}, Table: true,
+			Types: options(repoTypes, "hosted"), Protos: options(repoProtocols, ""),
+			TableHref: "/ui/?q=team&type=hosted&view=table", TilesHref: "/ui/?q=team&type=hosted&view=tiles", ClearHref: "/ui/?view=table",
+			Groups: []repoGroup{{Label: "team", Total: 2, Rows: []repoRow{
+				{repoView: repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}, Stats: &rowStats{Packages: 12, LastPublished: long}},
+				{repoView: repoView{Name: "team/lib", Type: "hosted", Protocol: "pypi", ManagedBy: "api", Href: "/ui/r/team/lib"}, Stats: &rowStats{}},
+			}}}}},
+		"repos-nomatch": {"repos", reposPage{chrome: base, Total: 500, Matching: 0,
+			Filter: repoFilter{Q: "zzz"}, Types: options(repoTypes, ""), Protos: options(repoProtocols, ""),
+			ClearHref: "/ui/"}},
+		"repos-empty": {"repos", reposPage{chrome: base}},
 		"repo": {"repo", repoPage{chrome: base, Repo: team,
 			Packages: []link{{Name: "web", Href: "/ui/r/team/app/-/package?name=web"}},
 			More:     "/ui/r/team/app?cursor=web"}},
+		"repo-virtual": {"repo", repoPage{chrome: base, IsVirtual: true,
+			Repo:    repoView{Name: "python", Type: "virtual", Protocol: "pypi", Href: "/ui/r/python"},
+			Members: []link{{Name: "internal-py", Type: "hosted", Href: "/ui/r/internal-py"}, {Name: "pypi", Type: "proxy", Href: "/ui/r/pypi"}},
+			Use:     panelFor("Set up your client", "/ui/r/python", virtIn, SetupCommands(virtIn), nil)}},
 		"repo-proxy": {"repo", repoPage{chrome: base,
 			Repo:     repoView{Name: "hub", Type: "proxy", Protocol: "oci", Upstream: true},
 			Upstream: "https://registry-1.docker.io"}},
@@ -101,7 +202,8 @@ func TestTemplates_Golden(t *testing.T) {
 			Tags: []tagRow{{Name: "1.0", Digest: digest, Href: "/ui/r/team/app/-/artifact?digest=" + digest}}}},
 		"package-pypi": {"package", packagePage{chrome: base,
 			Repo: repoView{Name: "internal-py", Type: "hosted", Protocol: "pypi"}, Package: "demo",
-			Versions: []versionGroup{{Version: "1.0", Files: []fileRow{{Filename: "demo-1.0.tar.gz", Size: 2048, Href: "/x"}}}}}},
+			Versions: []versionGroup{{Version: "1.0", Files: []fileRow{{Filename: "demo-1.0.tar.gz", Size: 2048, Href: "/x"}}}},
+			Use:      panelFor("Install", "/ui/r/internal-py/-/package", pypiIn, InstallCommands(pypiIn), installNotes(pypiIn))}},
 		"package-npm": {"package", packagePage{chrome: base,
 			Repo: repoView{Name: "internal-npm", Type: "hosted", Protocol: "npm"}, Package: "@acme/ui",
 			DistTags: []distTagRow{{Tag: "beta", Version: "2.0.0-beta.1"}, {Tag: "latest", Version: "1.1.0"}},
@@ -109,7 +211,8 @@ func TestTemplates_Golden(t *testing.T) {
 				{Version: "1.0.0", Deprecated: "use 1.1.0, this release leaks a handle",
 					Files: []fileRow{{Filename: "ui-1.0.0.tgz", Size: 2048, Href: "/ui/r/internal-npm/-/artifact?digest=" + digest + "&image=%40acme%2Fui"}}},
 				{Version: "1.1.0", Files: []fileRow{{Filename: "ui-1.1.0.tgz", Size: 4096, Href: "/x"}}},
-			}}},
+			},
+			Use: panelFor("Install", "/ui/r/internal-npm/-/package", npmIn, InstallCommands(npmIn), installNotes(npmIn))}},
 		"artifact": {"artifact", artifactPage{chrome: base, Repo: "team/app", RepoHref: "/ui/r/team/app",
 			Digest: digest, Size: 1234, MediaType: "application/vnd.oci.image.manifest.v1+json", Kind: "oci-manifest",
 			HasIdentity: true, Owners: []string{"repository:team/app"}, CreatedAt: long,
@@ -133,10 +236,17 @@ func TestTemplates_Golden(t *testing.T) {
 			}),
 			Deliveries: []deliveryRow{{Webhook: "chat", Event: "finding.new", State: "delivered", Dot: "ok", Status: "200", At: long}},
 			Children:   []childRow{{Digest: digest, Size: 99, Href: "/y"}},
-			Document:   "{\n  \"schemaVersion\": 2\n}"}},
+			Document:   "{\n  \"schemaVersion\": 2\n}",
+			Use:        panelFor("Pull", "/ui/r/team/app/-/artifact", pullIn, PullCommands(pullIn), nil),
+			Manage:     manage, TokenDocs: "https://docs.example.test/sindri/quickstart.html"}},
 		"artifact-upstream": {"artifact", artifactPage{chrome: base, Repo: "hub", RepoHref: "/ui/r/hub",
-			Digest: digest, Size: 1234, Upstream: true}},
+			Digest: digest, Size: 1234, Upstream: true,
+			Use: panelFor("Pull", "/ui/r/hub/-/artifact", hubIn, PullCommands(hubIn), append([]string{"Pulls through the proxy, which fetches from the upstream on a miss."}, ociNotes(hubIn)...))}},
 		"notfound": {"notfound", base},
+		"error": {"error", struct {
+			chrome
+			RequestID string
+		}{base, "7f3c9a2e-4d1b-4c8e-9a55-0b1f6d2e8a34"}},
 		"system": {"system", systemPage{chrome: adminBase, Configured: true, StatusClass: "bad", StatusText: "1 webhook failing",
 			StatusHref: "/ui/system/notifications?state=failed", Examples: examplePayloads,
 			Hooks: []hookRow{{Name: "chat", Events: "finding.new, lifecycle.promoted", Target: "https://hooks.example.com", Failed: 1, LogHref: "/ui/system/notifications?webhook=chat"}}}},
@@ -160,27 +270,69 @@ func TestTemplates_Golden(t *testing.T) {
 			if err := pages[tc.page].ExecuteTemplate(&buf, "layout", tc.data); err != nil {
 				t.Fatalf("rendering: %v", err)
 			}
-			// The asset version changes with every static file; the golden
-			// files should not.
-			got := strings.ReplaceAll(buf.String(), web.Version, "VERSION")
-			path := filepath.Join("testdata", name+".golden.html")
-			if *update {
-				if err := os.MkdirAll("testdata", 0o750); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			want, err := os.ReadFile(path) //nolint:gosec // G304: a fixed name under testdata
-			if err != nil {
-				t.Fatalf("reading %s (run with -update to create it): %v", path, err)
-			}
-			if got != string(want) {
-				t.Fatalf("%s differs from the golden file; run with -update if the change is intended\n--- got\n%s", path, got)
-			}
+			compareGolden(t, name, buf.String())
 		})
+	}
+}
+
+// The header is shown as a fragment too, so a change to it reads as a change
+// to a few lines and not to every page. The narrow header is the native menu
+// that takes the place of the links below 720px; the stylesheet decides which
+// one is shown, so both are always in the markup.
+func TestTemplates_GoldenHeader(t *testing.T) {
+	pages, err := parsePages()
+	if err != nil {
+		t.Fatalf("parsePages: %v", err)
+	}
+	user := chrome{Title: "t", Who: "user:alice", SignOut: true, Version: "0.0.0-test", DocsURL: "https://docs.example.test/sindri/"}
+	admin := user
+	admin.Admin = true
+	token := chrome{Title: "t", Who: "token:ci", Version: "0.0.0-test"}
+
+	cases := map[string]struct {
+		fragment string
+		data     chrome
+	}{
+		"header-admin":        {"header", admin},
+		"header-user":         {"header", user},
+		"header-token":        {"header", token},
+		"header-narrow-admin": {"menu", admin},
+		"header-narrow-user":  {"menu", user},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := pages["notfound"].ExecuteTemplate(&buf, tc.fragment, tc.data); err != nil {
+				t.Fatalf("rendering: %v", err)
+			}
+			compareGolden(t, name, buf.String())
+		})
+	}
+}
+
+// compareGolden checks rendered markup against testdata/<name>.golden.html,
+// or rewrites it under -update.
+func compareGolden(t *testing.T, name, rendered string) {
+	t.Helper()
+	// The asset version changes with every static file; the golden files
+	// should not.
+	got := strings.ReplaceAll(rendered, web.Version, "VERSION")
+	path := filepath.Join("testdata", name+".golden.html")
+	if *update {
+		if err := os.MkdirAll("testdata", 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path) //nolint:gosec // G304: a fixed name under testdata
+	if err != nil {
+		t.Fatalf("reading %s (run with -update to create it): %v", path, err)
+	}
+	if got != string(want) {
+		t.Fatalf("%s differs from the golden file; run with -update if the change is intended\n--- got\n%s", path, got)
 	}
 }
 
@@ -222,5 +374,43 @@ func TestPackageLabel_NamesARootImageAfterItsRepository(t *testing.T) {
 		if got := packageLabel(tc.repo, tc.in); got != tc.want {
 			t.Errorf("packageLabel(%s, %q) = %q, want %q", tc.repo.Name, tc.in, got, tc.want)
 		}
+	}
+}
+
+// The reference page shows every component in every state. It has no route:
+// it is rendered here, so a reviewer reads a component change in the golden
+// file and a component cannot exist without being shown. Accept a deliberate
+// change with `go test ./internal/ui -run TestReference_Golden -update`.
+func TestReference_Golden(t *testing.T) {
+	page, err := template.New("reference").Funcs(funcs).ParseFS(web.Templates(), "layout.html", "reference.html")
+	if err != nil {
+		t.Fatalf("parsing the reference page: %v", err)
+	}
+	ref := cmdInput{Base: "http://sindri.test:8080", Repo: "internal", Protocol: model.ProtocolPyPI, Kind: model.RepoTypeHosted, Package: "demo", Version: "1.0", Client: "poetry", Fallback: true}
+	data := struct {
+		chrome
+		Use *usePanel
+	}{
+		chrome{Title: "Design reference", Who: "user:alice", SignOut: true, Version: "0.0.0-test", DocsURL: "https://docs.example.test/sindri/"},
+		panelFor("Install", "#use", ref, InstallCommands(ref), installNotes(ref)),
+	}
+	var buf bytes.Buffer
+	if err := page.ExecuteTemplate(&buf, "layout", data); err != nil {
+		t.Fatalf("rendering: %v", err)
+	}
+	got := strings.ReplaceAll(buf.String(), web.Version, "VERSION")
+	path := filepath.Join("testdata", "reference.golden.html")
+	if *update {
+		if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path) //nolint:gosec // G304: a fixed name under testdata
+	if err != nil {
+		t.Fatalf("reading %s (run with -update to create it): %v", path, err)
+	}
+	if got != string(want) {
+		t.Fatalf("%s differs from the golden file; run with -update if the change is intended\n--- got\n%s", path, got)
 	}
 }

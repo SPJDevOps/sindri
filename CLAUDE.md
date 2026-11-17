@@ -100,7 +100,7 @@ loaded trees. `TestReconcile_ShortAndLongFormsProduceIdenticalDatabaseState` com
 database each form produces. A new configuration field is not done until
 `testdata/config/sindri.yaml` and `testdata/manifests/` both use it. The exception is
 server-level settings (`listen`, `storage`, `database`, `log`, `auth`, `worker`,
-`scanning`, `notifications`, `publicUrl`): manifests describe repositories and lifecycle, so these have
+`scanning`, `notifications`, `ui`, `publicUrl`): manifests describe repositories and lifecycle, so these have
 no manifest form and appear in `testdata/config/sindri.yaml` only.
 
 The reconciler owns rows with `managed_by = config`, and records which trigger owns
@@ -132,7 +132,11 @@ This is a registry. Supply-chain security is the product, so these are not style
    authorizes like the API and answers 404 for a repository the caller cannot
    read. Artifact pages check placement first. Templates carry no inline
    script, style, or event handlers: the Content-Security-Policy is `'self'`
-   only, and a test enforces it (ADR 21).
+   only, and a test enforces it (ADR 21). One sanctioned exception: the
+   "sign-in is not configured" page, which `internal/auth` serves before
+   sign-in and so cannot load the UI's stylesheet. It carries one inline
+   stylesheet, admitted by a sha256 hash in its own `default-src 'none'`
+   policy, and a test recomputes the hash.
 
 ## Operational rules
 
@@ -157,6 +161,7 @@ make test-integration  # needs Docker
 make lint              # gofmt check, go vet, golangci-lint
 make docs              # build the docs site into ./site; fails on a broken link
 make reference         # regenerate docs/configuration.md's server tables from internal/config
+make ui-seed           # seed the make-up database with 500 repos, 50,000 packages
 make up / make down    # local Postgres, MinIO, and Dex
 make run               # build and serve against them, UI sign-in included
 make ci                # what CI runs

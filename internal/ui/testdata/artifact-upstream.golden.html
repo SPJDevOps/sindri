@@ -7,31 +7,52 @@
 <meta name="referrer" content="same-origin">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
 <title>t · Sindri</title>
+<link rel="icon" href="/ui/static/VERSION/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/ui/static/VERSION/favicon.png" type="image/png" sizes="32x32">
 <link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
 <script src="/ui/static/VERSION/htmx.min.js" defer></script>
+<script src="/ui/static/VERSION/sindri.js" defer></script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <header class="site-header">
   <div class="container">
-    <a class="wordmark" href="/ui/">Sindri</a>
+    <a class="wordmark" href="/ui/"><img class="mark" src="/ui/static/VERSION/favicon.svg" alt="" width="24" height="24">Sindri</a>
     <nav class="nav" aria-label="Main">
       <a href="/ui/">Repositories</a>
       
       <span class="who" title="Signed in as user:alice">user:alice</span>
-      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>
-    </nav>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    <details class="menu">
+      <summary>Menu</summary>
+      <nav class="menu-panel" aria-label="Menu">
+      <a href="/ui/">Repositories</a>
+      
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    </details>
   </div>
 </header>
-<main>
+<main id="main">
   <div class="container">
     
     
 <h1 class="page-title mono" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe">sha256:4b825dc642cb</h1>
 <div class="pills"><span class="pill upstream">upstream content</span></div>
+<section class="section use" aria-labelledby="use-title">
+  <h2 class="section-title" id="use-title">Pull</h2>
+  <nav class="tabs" aria-label="Client"><a href="/ui/r/hub/-/artifact?client=docker" aria-current="page">docker</a><a href="/ui/r/hub/-/artifact?client=podman">podman</a><a href="/ui/r/hub/-/artifact?client=crane">crane</a></nav>
+  
+  
+  <div class="cmd"><pre><code>docker pull sindri.test:8080/hub/library/alpine@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</code></pre><button class="copy" type="button" data-copy="docker pull sindri.test:8080/hub/library/alpine@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy command">Copy</button></div>
+
+  <p class="hint">Pulls through the proxy, which fetches from the upstream on a miss.</p><p class="hint">This server speaks plain http. Docker refuses that unless sindri.test:8080 is listed under insecure-registries in its daemon configuration.</p>
+  <p class="hint">publicUrl is not set; commands use the address this page was loaded from.</p>
+</section>
 
 <section class="section">
   <dl class="facts">
-    <dt>Digest</dt><dd class="mono">sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</dd>
+    <dt>Digest</dt><dd><span class="mono">sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</span><button class="copy" type="button" data-copy="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy digest">Copy</button></dd>
     <dt>Size</dt><dd>1.2 KiB</dd>
     
     <dt>Repository</dt><dd><a class="mono" href="/ui/r/hub">hub</a></dd>
@@ -51,9 +72,20 @@
 </main>
 <footer class="site-footer">
   <div class="container">
-    <span>Sindri 0.0.0-test · read-only view</span>
-    <span>Changes go through configuration and the API, never this page.</span>
+    <span>Sindri 0.0.0-test</span>
+    <span>Read-only view. Changes go through configuration and the API, never this page.</span>
+    <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
   </div>
 </footer>
+<div class="live" id="live" role="status" aria-live="polite"></div>
+<dialog class="keys" id="keys" aria-labelledby="keys-title">
+  <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
+  <dl class="facts">
+    <dt><kbd>g</kbd> then <kbd>r</kbd></dt><dd>Go to repositories</dd>
+    <dt><kbd>?</kbd></dt><dd>Show or hide this list</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Close this list</dd>
+  </dl>
+  <form method="dialog"><button class="close" type="submit">Close</button></form>
+</dialog>
 </body>
 </html>

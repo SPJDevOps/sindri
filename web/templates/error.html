@@ -1,3 +1,9 @@
 {{define "content"}}
-<div class="rows"><div class="empty-state"><div class="big">500</div><p>Something went wrong on the server. The log has the details under request {{.RequestID}}.</p></div></div>
+<div class="rows"><div class="empty-state">
+  <div class="big">500</div>
+  <p>Something went wrong on the server.</p>
+  {{if .RequestID}}<p class="hint">If it keeps happening, give this request id to whoever runs this server.</p>
+  <div class="cmd error-id"><pre id="request-id">{{.RequestID}}</pre><button class="copy" type="button" data-copy-target="request-id" aria-label="Copy request id">Copy</button></div>{{end}}
+  <p><a href="/ui/">Back to repositories</a></p>
+</div></div>
 {{end}}

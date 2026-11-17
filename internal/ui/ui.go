@@ -47,10 +47,13 @@ const Prefix = "/ui"
 const pageSize = 50
 
 // contentSecurityPolicy allows nothing but this server's own files: no inline
-// script or style, no third-party origin, no forms, no framing. The templates
-// are tested to contain nothing that would need more.
+// script or style, no third-party origin, no framing, and forms only to this
+// server. The one form is a GET (the repository filter); the UI has no write
+// path, because the session cookie is honoured on GET and HEAD only, and a test
+// fails on any template form that is not a GET (ADR 21). The templates are
+// tested to contain nothing that would need more.
 const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; " +
-	"img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+	"img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
 // Options wires the UI to the services it reads.
 type Options struct {
@@ -71,6 +74,12 @@ type Options struct {
 	// SignOut shows a sign-out control, which needs browser sessions
 	// (auth.oidc) to be configured.
 	SignOut bool
+	// DocsURL is where the footer's Docs link points: ui.docsUrl, which the
+	// configuration has already validated and defaulted.
+	DocsURL string
+	// ScanEnabled shows the re-scan command on an artifact page, which the
+	// management API refuses when scanning is off.
+	ScanEnabled bool
 }
 
 type handler struct {
@@ -144,8 +153,8 @@ var funcs = template.FuncMap{
 	"asset": func(name string) string { return Prefix + "/static/" + web.Version + "/" + name },
 	"short": shortDigest,
 	"bytes": humanBytes,
-	"ago":   ago,
-	"when":  func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
+	"ago":   func(t time.Time) template.HTML { return timeTag(t, ago(t)) },
+	"when":  func(t time.Time) template.HTML { return timeTag(t, t.UTC().Format(time.RFC3339)) },
 }
 
 // securityHeaders goes on every response, pages and assets alike.
@@ -184,6 +193,7 @@ type chrome struct {
 	Who     string
 	SignOut bool
 	Version string
+	DocsURL string
 	Crumbs  []crumb
 	// Admin shows the System link.
 	Admin bool
@@ -201,6 +211,7 @@ func (h *handler) chrome(r *http.Request, title string, crumbs ...crumb) chrome 
 		Who:     p.Subject,
 		SignOut: h.opts.SignOut && p.Kind == auth.KindUser,
 		Version: version.Version,
+		DocsURL: h.opts.DocsURL,
 		Crumbs:  crumbs,
 		Admin:   p.Admin,
 	}
@@ -319,9 +330,19 @@ func packageHref(repo, pkg string) string {
 }
 
 func artifactHref(repo, image string, d model.Digest) string {
+	return artifactTagHref(repo, image, d, "")
+}
+
+// artifactTagHref is artifactHref for a page reached through a tag, which the
+// artifact page then shows a pull command for. The page checks the tag still
+// names the digest before it uses it.
+func artifactTagHref(repo, image string, d model.Digest, tag string) string {
 	q := url.Values{"digest": {d.String()}}
 	if image != "" {
 		q.Set("image", image)
+	}
+	if tag != "" {
+		q.Set("tag", tag)
 	}
 	return repoHref(repo) + "/-/artifact?" + q.Encode()
 }
@@ -346,6 +367,18 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// timeTag renders one instant as a <time> element whose text is shown and
+// whose title is the UTC time. The page script rewrites the title to include
+// the viewer's local time; without it the title stays UTC. Every time in the
+// UI goes through here, so a page never shows a time the script cannot see.
+func timeTag(t time.Time, text string) template.HTML {
+	if t.IsZero() {
+		return ""
+	}
+	u := t.UTC().Format(time.RFC3339)
+	return template.HTML(`<time datetime="` + u + `" title="` + u + `">` + template.HTMLEscapeString(text) + `</time>`) //nolint:gosec // u is a formatted time; text is escaped
 }
 
 func ago(t time.Time) string {

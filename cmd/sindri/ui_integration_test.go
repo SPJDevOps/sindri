@@ -14,6 +14,7 @@ import (
 
 	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/auth/oidctest"
+	"github.com/spj/sindri/internal/config"
 	"github.com/spj/sindri/internal/testsupport"
 )
 
@@ -94,6 +95,16 @@ func TestServe_UIBrowserSignInShowsOnlyReadableRepos(t *testing.T) {
 		}
 	})
 
+	t.Run("ExpiredSessionOnAnHtmxRequestGetsAnHXRedirect", func(t *testing.T) {
+		status, _, hdr := visit(t, browser(t, false), http.MethodGet, s.base+"/ui/r/team-a?cursor=x", func(r *http.Request) {
+			r.Header.Set("HX-Request", "true")
+			r.Header.Set("HX-Current-URL", s.base+"/ui/r/team-a")
+		})
+		if status != http.StatusUnauthorized || hdr.Get("HX-Redirect") != "/auth/login?next=%2Fui%2Fr%2Fteam-a" || hdr.Get("Location") != "" {
+			t.Fatalf("htmx without a session: %d, HX-Redirect %q, Location %q", status, hdr.Get("HX-Redirect"), hdr.Get("Location"))
+		}
+	})
+
 	alice := browser(t, true)
 	t.Run("SignedInSeesOnlyHerRepositories", func(t *testing.T) {
 		status, body, _ := visit(t, alice, http.MethodGet, s.base+"/", nil)
@@ -131,15 +142,52 @@ func TestServe_UIBrowserSignInShowsOnlyReadableRepos(t *testing.T) {
 
 	t.Run("AssetsLoadForASignedInBrowser", func(t *testing.T) {
 		_, body, _ := visit(t, alice, http.MethodGet, s.base+"/ui/", nil)
-		start := strings.Index(body, `href="/ui/static/`)
+		start := strings.Index(body, `<link rel="stylesheet" href="`)
 		if start < 0 {
 			t.Fatal("the page links no stylesheet")
 		}
-		href := body[start+len(`href="`):]
+		href := body[start+len(`<link rel="stylesheet" href="`):]
 		href = href[:strings.IndexByte(href, '"')]
 		status, css, hdr := visit(t, alice, http.MethodGet, s.base+href, nil)
 		if status != http.StatusOK || !strings.Contains(css, "--accent") || !strings.HasPrefix(hdr.Get("Content-Type"), "text/css") {
 			t.Fatalf("stylesheet %s: %d %q", href, status, hdr.Get("Content-Type"))
+		}
+		// The favicons load for a signed-in browser too, as the page links them.
+		for _, icon := range []struct{ file, contentType string }{{"favicon.svg", "image/svg+xml"}, {"favicon.png", "image/png"}} {
+			link := strings.Replace(href, "sindri.css", icon.file, 1)
+			if !strings.Contains(body, `href="`+link+`"`) {
+				t.Errorf("the page does not link %s", link)
+			}
+			if status, _, hdr := visit(t, alice, http.MethodGet, s.base+link, nil); status != http.StatusOK || !strings.HasPrefix(hdr.Get("Content-Type"), icon.contentType) {
+				t.Errorf("%s: %d %q, want 200 %s", link, status, hdr.Get("Content-Type"), icon.contentType)
+			}
+		}
+	})
+
+	t.Run("NoPageRendersTheSessionCookie", func(t *testing.T) {
+		if status, body := s.pushImage("team-a/app", "1.0", "ui-a", bearer(bootstrapToken)); status != http.StatusCreated {
+			t.Fatalf("push: %d %s", status, body)
+		}
+		var cookie string
+		for _, c := range alice.Jar.Cookies(mustURL(t, s.base)) {
+			if c.Name == auth.SessionCookie {
+				cookie = c.Value
+			}
+		}
+		if len(cookie) < 16 {
+			t.Fatalf("no usable session cookie to look for: %q", cookie)
+		}
+		for _, path := range []string{
+			"/ui/", "/ui/r/team-a", "/ui/r/team-a/-/package?name=app", "/ui/r/team-a?client=podman",
+			"/ui/r/team-a/-/package?name=app&client=crane", "/ui/r/team-b", "/ui/system",
+		} {
+			status, body, _ := visit(t, alice, http.MethodGet, s.base+path, nil)
+			if status == http.StatusInternalServerError || strings.Contains(body, cookie) {
+				t.Errorf("GET %s: %d, and it renders the session cookie: %v", path, status, strings.Contains(body, cookie))
+			}
+			if path == "/ui/r/team-a" && !strings.Contains(body, "docker login") {
+				t.Errorf("the repository page lacks the login command:\n%s", body)
+			}
 		}
 	})
 
@@ -170,9 +218,22 @@ func TestServe_UIWithoutSignInExplains(t *testing.T) {
 	if strings.HasPrefix(hdr.Get("WWW-Authenticate"), "Basic") {
 		t.Fatal("the UI asked the browser for Basic credentials")
 	}
+	if want := `href="` + config.DefaultDocsURL + `"`; !strings.Contains(body, want) {
+		t.Fatalf("the page lacks the default documentation link %s:\n%s", want, body)
+	}
 	// The bootstrap token still opens it, for an operator with curl.
 	if status, _, _ := visit(t, browser(t, false), http.MethodGet, s.base+"/ui/", bearer(bootstrapToken)); status != http.StatusOK {
 		t.Fatalf("UI with the bootstrap token: %d", status)
+	}
+}
+
+// The sign-in help links the operator's own copy of the documentation when
+// ui.docsUrl names one.
+func TestServe_UIWithoutSignInLinksTheConfiguredDocs(t *testing.T) {
+	s := startServe(t, testsupport.DatabaseURL(t), uiRepos+"\nui:\n  docsUrl: https://docs.internal.example/sindri/\n", nil)
+	_, body, _ := visit(t, browser(t, false), http.MethodGet, s.base+"/ui/", nil)
+	if !strings.Contains(body, `href="https://docs.internal.example/sindri/"`) {
+		t.Fatalf("the page lacks the configured documentation link:\n%s", body)
 	}
 }
 

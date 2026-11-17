@@ -27,6 +27,17 @@ make build              # ./bin/sindri
 make help               # everything else
 ```
 
+To look at the UI with a realistic amount of data, seed the development database
+after `make up`. The server migrates the database when it starts, so run `make run`
+once, stop it, then:
+
+```bash
+make ui-seed            # 500 repositories, 50,000 packages, lifecycle, evidence, scans
+make run                # browse /ui/; seed/oci-0001 and seed/oci-all-0001 are good places to start
+```
+
+The seed refuses to run twice; `make down && make up` gives you a clean database.
+
 CI and the release build pin Go 1.27.4, and `make tools` builds golangci-lint with
 the same Go. A linter built with an older Go cannot read a newer standard library,
 so after a Go bump, run `make tools` again.

@@ -7,50 +7,97 @@
 <meta name="referrer" content="same-origin">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
 <title>t · Sindri</title>
+<link rel="icon" href="/ui/static/VERSION/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/ui/static/VERSION/favicon.png" type="image/png" sizes="32x32">
 <link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
 <script src="/ui/static/VERSION/htmx.min.js" defer></script>
+<script src="/ui/static/VERSION/sindri.js" defer></script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <header class="site-header">
   <div class="container">
-    <a class="wordmark" href="/ui/">Sindri</a>
+    <a class="wordmark" href="/ui/"><img class="mark" src="/ui/static/VERSION/favicon.svg" alt="" width="24" height="24">Sindri</a>
     <nav class="nav" aria-label="Main">
       <a href="/ui/">Repositories</a>
       
       <span class="who" title="Signed in as user:alice">user:alice</span>
-      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>
-    </nav>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    <details class="menu">
+      <summary>Menu</summary>
+      <nav class="menu-panel" aria-label="Menu">
+      <a href="/ui/">Repositories</a>
+      
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    </details>
   </div>
 </header>
-<main>
+<main id="main">
   <div class="container">
     
     
 <h1 class="page-title">Repositories</h1>
 <p class="lead">Every repository you may read. Hosted repositories hold your own artifacts; proxies cache an upstream; virtual repositories resolve across members, hosted first.</p>
-<section class="section">
 
-  <div class="tiles">
+<form class="filter-form" method="get" action="/ui/" role="search" aria-label="Filter repositories"
+      hx-get="/ui/" hx-target="#repo-results" hx-swap="innerHTML" hx-push-url="true" hx-sync="this:replace"
+      hx-trigger="input changed delay:200ms from:#repo-q, change, search, submit">
+  <input type="search" id="repo-q" name="q" value="" maxlength="100" placeholder="Filter by name" aria-label="Filter by name" autocomplete="off">
+  <select name="type" aria-label="Type"><option value="">All types</option><option value="hosted">hosted</option><option value="proxy">proxy</option><option value="virtual">virtual</option></select>
+  <select name="protocol" aria-label="Protocol"><option value="">All protocols</option><option value="oci">oci</option><option value="pypi">pypi</option><option value="npm">npm</option></select>
   
-    <a class="tile" href="/ui/r/team/app">
-      <div class="name">team/app</div>
-      <div class="meta"><span class="pill">hosted</span><span class="pill">oci</span></div>
-      
-    </a>
-  
-    <a class="tile upstream" href="/ui/r/hub">
-      <div class="name">hub</div>
-      <div class="meta"><span class="pill upstream">proxy</span><span class="pill">oci</span></div>
-      <div class="detail">caches https://registry-1.docker.io</div>
-    </a>
-  
-    <a class="tile" href="/ui/r/python">
-      <div class="name">python</div>
-      <div class="meta"><span class="pill">virtual</span><span class="pill">pypi</span></div>
-      <div class="detail">resolves internal-py → pypi</div>
-    </a>
-  
+  <button type="submit">Filter</button>
+</form>
+
+<section class="section" id="repo-results">
+
+
+  <div class="list-bar">
+    <p class="hint" role="status">3 repositories</p>
+    <p class="filters" aria-label="View"><span class="filter active">Tiles</span><a class="filter" href="/ui/?view=table">Table</a></p>
   </div>
+  
+  
+    <details class="group" open><summary>Top level <span class="pill">2</span></summary>
+    
+    <div class="tiles">
+    
+      <a class="tile upstream" href="/ui/r/hub">
+        <div class="name">hub</div>
+        <div class="meta"><span class="pill upstream">proxy</span><span class="pill">oci</span></div>
+        <div class="detail">caches registry-1.docker.io</div>
+        <div class="detail">4 packages · <time datetime="2020-03-14T15:09:26Z" title="2020-03-14T15:09:26Z">14 Mar 2020</time></div>
+      </a>
+    
+      <a class="tile" href="/ui/r/python">
+        <div class="name">python</div>
+        <div class="meta"><span class="pill">virtual</span><span class="pill">pypi</span></div>
+        <div class="detail">resolves 2 members</div>
+        
+      </a>
+    
+    </div>
+    
+    </details>
+  
+    <details class="group" open><summary><span class="mono">team</span> <span class="pill">1</span></summary>
+    
+    <div class="tiles">
+    
+      <a class="tile" href="/ui/r/team/app">
+        <div class="name">team/app</div>
+        <div class="meta"><span class="pill">hosted</span><span class="pill">oci</span></div>
+        
+        <div class="detail">1 package</div>
+      </a>
+    
+    </div>
+    
+    </details>
+  
+  
+
 
 </section>
 
@@ -58,9 +105,20 @@
 </main>
 <footer class="site-footer">
   <div class="container">
-    <span>Sindri 0.0.0-test · read-only view</span>
-    <span>Changes go through configuration and the API, never this page.</span>
+    <span>Sindri 0.0.0-test</span>
+    <span>Read-only view. Changes go through configuration and the API, never this page.</span>
+    <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
   </div>
 </footer>
+<div class="live" id="live" role="status" aria-live="polite"></div>
+<dialog class="keys" id="keys" aria-labelledby="keys-title">
+  <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
+  <dl class="facts">
+    <dt><kbd>g</kbd> then <kbd>r</kbd></dt><dd>Go to repositories</dd>
+    <dt><kbd>?</kbd></dt><dd>Show or hide this list</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Close this list</dd>
+  </dl>
+  <form method="dialog"><button class="close" type="submit">Close</button></form>
+</dialog>
 </body>
 </html>
