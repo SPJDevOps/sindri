@@ -32,10 +32,11 @@ a new token.
 | `--revoked` | Revoked in a lifecycle stage; a failing status dot. |
 | `--sev-critical` | Critical severity. Its pill is also bold. |
 | `--sev-high` | High severity. |
-| `--sev-medium` | Medium severity, and a status dot that needs attention (a delivery waiting for a retry). |
+| `--sev-medium` | Medium severity. |
 | `--sev-low` | Low severity. |
 | `--sev-unknown` | Unknown severity. Its pill has a dashed border. |
 | `--new` | A finding that the last scan found and the one before did not. |
+| `--warn` | A status dot that needs attention, such as a delivery waiting for a retry. A fill only, never text. |
 
 Green is approved. Red is revoked or critical. Colour is never the only signal: every
 pill carries text, every status dot sits beside a label, and a sortable header shows
@@ -130,3 +131,11 @@ Pills sit on `--surface`, and on `--surface-2` when a tile or row is hovered.
 | `--sev-unknown` on `--surface-2` | 5.3 | 6.2 |
 | `--new` on `--surface` | 7.1 | 8.0 |
 | `--new` on `--surface-2` | 6.5 | 7.4 |
+
+Fills that carry no text, such as status dots, need 3:1 against what they sit on (WCAG 1.4.11).
+`TestDesignContrast_FillsMatchTokensAndPass` checks this table the same way.
+
+| Fill | Light | Dark |
+|---|---|---|
+| `--warn` fill on `--surface` | 3.7 | 11.5 |
+| `--warn` fill on `--surface-2` | 3.4 | 10.5 |

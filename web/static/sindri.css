@@ -53,6 +53,7 @@
   --sev-low: #0e7490;
   --sev-unknown: #5f6672;
   --new: #6d28d9;
+  --warn: #a87f00;
 
   --font-sans: "Geist", system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -111,6 +112,7 @@
     --sev-low: #5cc0d6;
     --sev-unknown: #9aa1ab;
     --new: #b9a3f2;
+    --warn: #facc15;
   }
 }
 
@@ -419,7 +421,7 @@ pre.document {
   vertical-align: baseline;
 }
 .dot.ok { background: var(--approved); }
-.dot.warn { background: var(--sev-medium); }
+.dot.warn { background: var(--warn); }
 .dot.bad { background: var(--revoked); }
 .dot.none { background: var(--text-faint); }
 

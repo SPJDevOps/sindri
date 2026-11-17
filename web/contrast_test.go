@@ -16,6 +16,9 @@ import (
 // minContrast is WCAG AA for normal text.
 const minContrast = 4.5
 
+// minFillContrast is WCAG 1.4.11's ratio for graphics that carry no text.
+const minFillContrast = 3.0
+
 // colourTokens reads every --name: #rrggbb custom property out of the
 // :root block for the light theme and out of the prefers-color-scheme: dark
 // block for the dark one. The dark theme inherits what it does not set.
@@ -121,6 +124,45 @@ func TestDesignContrast_TableMatchesTokensAndPasses(t *testing.T) {
 		if !foreground[token] {
 			t.Errorf("%s carries text but DESIGN.md lists no contrast pair for it", token)
 		}
+	}
+}
+
+// Fills that carry no text, such as the warn status dot, need 3:1 against
+// what they sit on, and DESIGN.md's fill table must match sindri.css.
+func TestDesignContrast_FillsMatchTokensAndPass(t *testing.T) {
+	light, dark := colourTokens(t)
+	doc, err := os.ReadFile("DESIGN.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := regexp.MustCompile("(?m)^\\| `(--[a-z0-9-]+)` fill on `(--[a-z0-9-]+)` \\| ([0-9]+\\.[0-9]) \\| ([0-9]+\\.[0-9]) \\|\\s*$")
+	rows := row.FindAllStringSubmatch(string(doc), -1)
+	listed := map[string]bool{}
+	for _, r := range rows {
+		fg, bg := r[1], r[2]
+		listed[fg] = true
+		for _, theme := range []struct {
+			name   string
+			tokens map[string]string
+			listed string
+		}{{"light", light, r[3]}, {"dark", dark, r[4]}} {
+			f, fok := theme.tokens[fg]
+			b, bok := theme.tokens[bg]
+			if !fok || !bok {
+				t.Errorf("%s fill on %s: a token is not defined in sindri.css", fg, bg)
+				continue
+			}
+			got := ratio(t, f, b)
+			if got < minFillContrast {
+				t.Errorf("%s fill on %s in %s: contrast %.2f is below %.1f", fg, bg, theme.name, got, minFillContrast)
+			}
+			if want := fmt.Sprintf("%.1f", got); want != theme.listed {
+				t.Errorf("%s fill on %s in %s: DESIGN.md says %s, sindri.css gives %s", fg, bg, theme.name, theme.listed, want)
+			}
+		}
+	}
+	if !listed["--warn"] {
+		t.Error("--warn is a fill but DESIGN.md lists no fill contrast for it")
 	}
 }
 
