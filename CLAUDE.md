@@ -132,7 +132,11 @@ This is a registry. Supply-chain security is the product, so these are not style
    authorizes like the API and answers 404 for a repository the caller cannot
    read. Artifact pages check placement first. Templates carry no inline
    script, style, or event handlers: the Content-Security-Policy is `'self'`
-   only, and a test enforces it (ADR 21).
+   only, and a test enforces it (ADR 21). One sanctioned exception: the
+   "sign-in is not configured" page, which `internal/auth` serves before
+   sign-in and so cannot load the UI's stylesheet. It carries one inline
+   stylesheet, admitted by a sha256 hash in its own `default-src 'none'`
+   policy, and a test recomputes the hash.
 
 ## Operational rules
 

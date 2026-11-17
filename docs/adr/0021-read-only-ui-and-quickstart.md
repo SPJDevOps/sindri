@@ -59,6 +59,14 @@ URLs are not allowed. A test fails any template with inline script, inline
 style, or an event-handler attribute, so nothing tempts a later change to
 loosen the policy.
 
+*Amended 2026-11-17 (SIN-98).* The "sign-in is not configured" page is the one
+exception. `internal/auth` serves it before anyone has signed in, and the UI's
+assets sit behind sign-in, so it cannot load `sindri.css`. It carries a single
+inline stylesheet, admitted by its sha256 hash in that page's own policy
+(`default-src 'none'`, no script, no forms, no framing), and a test recomputes
+the hash. The alternative, an unauthenticated stylesheet route, was rejected:
+it would be an anonymous path, which ADR 18 refuses.
+
 **Sign-in.**
 
 - Browsers sign in through ADR 18's authorization code flow. The session
