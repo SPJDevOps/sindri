@@ -164,6 +164,33 @@ func TestServe_UIBrowserSignInShowsOnlyReadableRepos(t *testing.T) {
 		}
 	})
 
+	t.Run("NoPageRendersTheSessionCookie", func(t *testing.T) {
+		if status, body := s.pushImage("team-a/app", "1.0", "ui-a", bearer(bootstrapToken)); status != http.StatusCreated {
+			t.Fatalf("push: %d %s", status, body)
+		}
+		var cookie string
+		for _, c := range alice.Jar.Cookies(mustURL(t, s.base)) {
+			if c.Name == auth.SessionCookie {
+				cookie = c.Value
+			}
+		}
+		if len(cookie) < 16 {
+			t.Fatalf("no usable session cookie to look for: %q", cookie)
+		}
+		for _, path := range []string{
+			"/ui/", "/ui/r/team-a", "/ui/r/team-a/-/package?name=app", "/ui/r/team-a?client=podman",
+			"/ui/r/team-a/-/package?name=app&client=crane", "/ui/r/team-b", "/ui/system",
+		} {
+			status, body, _ := visit(t, alice, http.MethodGet, s.base+path, nil)
+			if status == http.StatusInternalServerError || strings.Contains(body, cookie) {
+				t.Errorf("GET %s: %d, and it renders the session cookie: %v", path, status, strings.Contains(body, cookie))
+			}
+			if path == "/ui/r/team-a" && !strings.Contains(body, "docker login") {
+				t.Errorf("the repository page lacks the login command:\n%s", body)
+			}
+		}
+	})
+
 	t.Run("SignOutClearsTheSession", func(t *testing.T) {
 		status, _, hdr := visit(t, alice, http.MethodPost, s.base+"/auth/logout", func(r *http.Request) {
 			r.Header.Set("HX-Request", "true")

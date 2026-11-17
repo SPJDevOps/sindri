@@ -61,7 +61,8 @@ func scalePages(info testsupport.SeedInfo) []scalePage {
 		{"pypi package", "admin", pkg(info.PyPIRepo, info.PyPIPackage), 5},
 		{"npm package", "admin", pkg(info.NPMRepo, info.NPMPackage), 7},
 		{"oci artifact", "admin", artifact(info.HostedOCI, info.OCIImage, info.OCIDigest), 22},
-		{"pypi artifact", "admin", artifact(info.PyPIRepo, "", info.PyPIDigest), 19},
+		{"pypi artifact", "admin", artifact(info.PyPIRepo, info.PyPIPackage, info.PyPIDigest), 19},
+		{"npm artifact", "admin", artifact(info.NPMRepo, info.NPMPackage, info.NPMDigest), 21},
 		{"system", "admin", "/ui/system", 3},
 		{"notifications", "admin", "/ui/system/notifications", 3},
 	}
