@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"html/template"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -222,5 +223,36 @@ func TestPackageLabel_NamesARootImageAfterItsRepository(t *testing.T) {
 		if got := packageLabel(tc.repo, tc.in); got != tc.want {
 			t.Errorf("packageLabel(%s, %q) = %q, want %q", tc.repo.Name, tc.in, got, tc.want)
 		}
+	}
+}
+
+// The reference page shows every component in every state. It has no route:
+// it is rendered here, so a reviewer reads a component change in the golden
+// file and a component cannot exist without being shown. Accept a deliberate
+// change with `go test ./internal/ui -run TestReference_Golden -update`.
+func TestReference_Golden(t *testing.T) {
+	page, err := template.New("reference").Funcs(funcs).ParseFS(web.Templates(), "layout.html", "reference.html")
+	if err != nil {
+		t.Fatalf("parsing the reference page: %v", err)
+	}
+	data := chrome{Title: "Design reference", Who: "user:alice", SignOut: true, Version: "0.0.0-test"}
+	var buf bytes.Buffer
+	if err := page.ExecuteTemplate(&buf, "layout", data); err != nil {
+		t.Fatalf("rendering: %v", err)
+	}
+	got := strings.ReplaceAll(buf.String(), web.Version, "VERSION")
+	path := filepath.Join("testdata", "reference.golden.html")
+	if *update {
+		if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path) //nolint:gosec // G304: a fixed name under testdata
+	if err != nil {
+		t.Fatalf("reading %s (run with -update to create it): %v", path, err)
+	}
+	if got != string(want) {
+		t.Fatalf("%s differs from the golden file; run with -update if the change is intended\n--- got\n%s", path, got)
 	}
 }
