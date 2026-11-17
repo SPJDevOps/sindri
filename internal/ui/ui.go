@@ -71,6 +71,9 @@ type Options struct {
 	// SignOut shows a sign-out control, which needs browser sessions
 	// (auth.oidc) to be configured.
 	SignOut bool
+	// DocsURL is where the footer's Docs link points: ui.docsUrl, which the
+	// configuration has already validated and defaulted.
+	DocsURL string
 }
 
 type handler struct {
@@ -184,6 +187,7 @@ type chrome struct {
 	Who     string
 	SignOut bool
 	Version string
+	DocsURL string
 	Crumbs  []crumb
 	// Admin shows the System link.
 	Admin bool
@@ -201,6 +205,7 @@ func (h *handler) chrome(r *http.Request, title string, crumbs ...crumb) chrome 
 		Who:     p.Subject,
 		SignOut: h.opts.SignOut && p.Kind == auth.KindUser,
 		Version: version.Version,
+		DocsURL: h.opts.DocsURL,
 		Crumbs:  crumbs,
 		Admin:   p.Admin,
 	}

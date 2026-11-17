@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/spj/sindri/internal/auth"
 	"github.com/spj/sindri/internal/auth/oidctest"
+	"github.com/spj/sindri/internal/config"
 )
 
 func newOIDC(t *testing.T, idp *oidctest.Provider) *auth.OIDC {
@@ -148,7 +150,7 @@ func TestSession_LoginSetsCookieAndWhoamiReadsIt(t *testing.T) {
 	mux.Handle("/ui/", auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, _ := auth.PrincipalFromContext(r.Context())
 		_, _ = io.WriteString(w, "hello "+p.Subject)
-	}), true))
+	}), true, "https://docs.example/"))
 	handler = mux
 
 	jar, err := cookiejar.New(nil)
@@ -264,7 +266,7 @@ func TestSession_LoginRefusesOpenRedirects(t *testing.T) {
 
 func TestGuardUI_IsReadOnly(t *testing.T) {
 	chain := auth.NewChain("boot", nil, nil, nil)
-	h := auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), true)
+	h := auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), true, "https://docs.example/")
 
 	anon := httptest.NewRecorder()
 	h.ServeHTTP(anon, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ui/", nil))
@@ -287,7 +289,7 @@ func TestGuardUI_IsReadOnly(t *testing.T) {
 // requests, including POSTs to the API and the adapters.
 func TestGuardUI_NoLoginConfiguredExplainsInsteadOfRedirecting(t *testing.T) {
 	chain := auth.NewChain("boot", nil, nil, nil)
-	h := auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), false)
+	h := auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), false, "https://docs.example/")
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ui/", nil))
@@ -311,6 +313,110 @@ func TestGuardUI_NoLoginConfiguredExplainsInsteadOfRedirecting(t *testing.T) {
 	h.ServeHTTP(ok, req)
 	if ok.Code != http.StatusOK {
 		t.Fatalf("UI visit with a token: %d", ok.Code)
+	}
+}
+
+// Without a provider the page says what to write, with every field the
+// loader requires, and links the configured documentation. It must work
+// before sign-in, so it may load nothing and its policy admits nothing but its
+// own stylesheet.
+func TestGuardUI_NoLoginConfiguredShowsTheOIDCBlockAndTheDocsLink(t *testing.T) {
+	chain := auth.NewChain("boot", nil, nil, nil)
+	h := auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), false, "https://docs.internal.example/sindri/?a=1&b=2")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ui/", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		"auth:\n", "  oidc:\n", "    issuer: https://", "    clientId: ", "    clientSecret: ${", "    redirectUrl: https://", "/auth/callback",
+		`href="https://docs.internal.example/sindri/?a=1&amp;b=2"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page lacks %q:\n%s", want, body)
+		}
+	}
+	for _, banned := range []string{"<script", "<link", "<img", " src=", "@import", "url("} {
+		if strings.Contains(body, banned) {
+			t.Errorf("the page loads or runs something (%q)", banned)
+		}
+	}
+	// The block must be one the loader accepts as written, once the operator
+	// has set the variables it names.
+	t.Setenv("SINDRI_TOKEN", "a-token")
+	t.Setenv("SINDRI_OIDC_CLIENT_SECRET", "a-secret")
+	pre := body[strings.Index(body, "<pre>")+len("<pre>") : strings.Index(body, "</pre>")]
+	cfg, err := config.Parse([]byte(pre), "signin-example.yaml")
+	if err != nil {
+		t.Fatalf("the example block does not load: %v\n%s", err, pre)
+	}
+	if cfg.Auth.OIDC == nil || cfg.Auth.OIDC.RedirectURL == "" || cfg.Auth.OIDC.ClientID == "" || cfg.Auth.OIDC.Issuer == "" {
+		t.Errorf("the example block leaves out a field browser sign-in needs: %+v", cfg.Auth.OIDC)
+	}
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.HasPrefix(csp, "default-src 'none'") || strings.Contains(csp, "unsafe") || strings.Contains(csp, "script-src") {
+		t.Errorf("Content-Security-Policy = %q", csp)
+	}
+	// The one inline stylesheet is admitted by its hash, so it must be the
+	// hashed one.
+	style := strings.TrimSuffix(strings.TrimPrefix(body[strings.Index(body, "<style>"):strings.Index(body, "</style>")], "<style>"), "")
+	sum := sha256.Sum256([]byte(style))
+	if want := "style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"; !strings.Contains(csp, want) {
+		t.Errorf("Content-Security-Policy = %q, want it to contain %q", csp, want)
+	}
+}
+
+// An htmx request is XHR, which follows a 302 silently to the identity
+// provider and hands htmx a page it cannot swap. The guard answers 401 with
+// HX-Redirect instead, which htmx follows by navigating the whole page.
+func TestGuardUI_HtmxRequestWithoutASessionGetsAnHXRedirect(t *testing.T) {
+	chain := auth.NewChain("boot", nil, nil, nil)
+	h := auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), true, "https://docs.example/")
+
+	tests := []struct {
+		name    string
+		target  string
+		current string
+		want    string
+	}{
+		{"CurrentPageWithItsQuery", "/ui/r/team/app?cursor=web", "https://sindri.example.com/ui/r/team/app/-/package?name=web&x=1", "/auth/login?next=%2Fui%2Fr%2Fteam%2Fapp%2F-%2Fpackage%3Fname%3Dweb%26x%3D1"},
+		{"NoCurrentURLFallsBackToTheRequest", "/ui/r/team/app?cursor=web", "", "/auth/login?next=%2Fui%2Fr%2Fteam%2Fapp%3Fcursor%3Dweb"},
+		{"UnparseableCurrentURLFallsBackToTheRequest", "/ui/?cursor=a", "http://[::1", "/auth/login?next=%2Fui%2F%3Fcursor%3Da"},
+		{"CurrentURLWithoutAPathFallsBackToTheRequest", "/ui/?cursor=a", "https://evil.example", "/auth/login?next=%2Fui%2F%3Fcursor%3Da"},
+		{"SchemeRelativePathIsNotKept", "/ui/?cursor=a", "https://sindri.example.com//evil.example/x", "/auth/login?next=%2Fui%2F%3Fcursor%3Da"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tc.target, nil)
+			req.Header.Set("HX-Request", "true")
+			if tc.current != "" {
+				req.Header.Set("HX-Current-URL", tc.current)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+			if got := rec.Header().Get("HX-Redirect"); got != tc.want {
+				t.Errorf("HX-Redirect = %q, want %q", got, tc.want)
+			}
+			if rec.Header().Get("Location") != "" {
+				t.Errorf("Location = %q: a redirect status would be followed by XHR", rec.Header().Get("Location"))
+			}
+		})
+	}
+}
+
+// A browser navigating to a page still gets the plain redirect.
+func TestGuardUI_FullPageRequestWithoutASessionStillRedirects(t *testing.T) {
+	chain := auth.NewChain("boot", nil, nil, nil)
+	h := auth.GuardUI(chain, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), true, "https://docs.example/")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ui/r/team/app?x=1", nil))
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/auth/login?next=%2Fui%2Fr%2Fteam%2Fapp%3Fx%3D1" {
+		t.Fatalf("full page visit: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec.Header().Get("HX-Redirect") != "" {
+		t.Errorf("a full-page request got HX-Redirect %q", rec.Header().Get("HX-Redirect"))
 	}
 }
 
