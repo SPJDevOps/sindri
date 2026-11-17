@@ -839,7 +839,7 @@ publish is scanned, and promotion is refused above a severity.
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
 | 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 ✅ |
 | 14, Nov 16–22 | Notifications ✅ | SIN-117, 112 | v1.6.0 ✅ |
-| 15, Nov 23–29 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
+| 15, Nov 17–29 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
 | 16–17, two weeks from the announcement | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
@@ -869,6 +869,12 @@ Sprint 13 shipped all seven tickets as v1.5.1 on 2026-11-16, recorded under
 [v1.5.1 — Hardening](#v151--hardening-) below. Sprint 14 started the same day, Nov 16–22,
 and Sprint 15 moved to Nov 23–29. Its work is recorded under
 [v1.6.0 — Notifications](#v160--notifications-) below.
+
+Sprint 15 started early on Nov 17 and still ends on Nov 29. Decisions made at its start:
+screenshots stay a person's job, reviewed in Safari against `make ui-preview` and a seeded
+`make run`, with no headless browser in CI. A new server-level setting, `ui.docsUrl`, points
+the footer's docs link at a self-hosted copy for air-gapped sites. The mark is a Tektur "S"
+on the accent. The component reference page is rendered only in tests.
 
 Not scheduled: SIN-56, 58, 65, 74, and 76 from the hardening epic, kept as filler for the
 M12 window. SIN-118, an optional `format: slack` on a webhook so a notification can post
