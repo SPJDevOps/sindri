@@ -489,13 +489,16 @@ func (q *Queries) ListRepositoryNamePrefixes(ctx context.Context, name string) (
 const listRepositoryStats = `-- name: ListRepositoryStats :many
 WITH wanted AS (
     SELECT r.id, r.name FROM repositories r WHERE r.name = ANY($1::text[])
-), pkg AS (
-    SELECT p.repo_id,
-           count(DISTINCT p.id)::bigint AS package_count,
-           max(v.published_at)::timestamptz AS last_published_at
+), counts AS (
+    SELECT p.repo_id, count(*)::bigint AS package_count
     FROM packages p
     JOIN wanted w ON w.id = p.repo_id
-    LEFT JOIN versions v ON v.package_id = p.id
+    GROUP BY p.repo_id
+), newest AS (
+    SELECT p.repo_id, max(v.published_at)::timestamptz AS last_published_at
+    FROM versions v
+    JOIN packages p ON p.id = v.package_id
+    JOIN wanted w ON w.id = p.repo_id
     GROUP BY p.repo_id
 ), placed AS (
     SELECT p.repo_id, f.blob_digest AS digest
@@ -514,11 +517,12 @@ WITH wanted AS (
     GROUP BY pl.repo_id
 )
 SELECT w.name AS repo_name,
-       COALESCE(pkg.package_count, 0)::bigint AS package_count,
+       COALESCE(counts.package_count, 0)::bigint AS package_count,
        COALESCE(sized.stored_bytes, 0)::bigint AS stored_bytes,
-       pkg.last_published_at AS last_published_at
+       newest.last_published_at AS last_published_at
 FROM wanted w
-LEFT JOIN pkg ON pkg.repo_id = w.id
+LEFT JOIN counts ON counts.repo_id = w.id
+LEFT JOIN newest ON newest.repo_id = w.id
 LEFT JOIN sized ON sized.repo_id = w.id
 `
 

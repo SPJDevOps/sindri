@@ -54,7 +54,11 @@ func scalePages(info testsupport.SeedInfo) []scalePage {
 		return "/ui/r/" + repo + "/-/artifact?" + q.Encode()
 	}
 	return []scalePage{
-		{"repositories", "admin", "/ui/", 5},
+		{"repositories", "admin", "/ui/", 6},
+		{"repositories, filtered by text and type", "admin", "/ui/?q=oci-00&type=hosted", 6},
+		{"repositories, a later page", "admin", "/ui/?page=3", 6},
+		{"repositories, table view", "admin", "/ui/?view=table", 6},
+		{"repositories, tiles of the first page", "admin", "/ui/?view=tiles", 6},
 		{"hosted repository", "admin", "/ui/r/" + info.HostedOCI, 5},
 		{"proxy repository", "admin", "/ui/r/" + info.ProxyOCI, 6},
 		{"virtual repository", "admin", "/ui/r/" + info.VirtualOCI, 4},
@@ -67,7 +71,9 @@ func scalePages(info testsupport.SeedInfo) []scalePage {
 		// A caller who is not an administrator goes through the readability
 		// filters, which an administrator skips: alice reads every seeded
 		// repository but the restricted ones, and seeder may also write.
-		{"repositories, filtered", "alice", "/ui/", 5},
+		{"repositories, filtered", "alice", "/ui/", 6},
+		{"repositories, filtered by text and type, as alice", "alice", "/ui/?q=oci-00&type=hosted", 6},
+		{"repositories, a later page, as alice", "alice", "/ui/?page=2&view=table", 6},
 		{"hosted repository, filtered", "alice", "/ui/r/" + info.HostedOCI, 5},
 		{"virtual repository, filtered", "alice", "/ui/r/" + info.VirtualOCI, 4},
 		{"oci package, filtered", "alice", pkg(info.HostedOCI, info.OCIImage), 5},

@@ -129,6 +129,13 @@ func Seed(ctx context.Context, pool *pgxpool.Pool) (SeedInfo, error) {
 	if err := tx.Commit(ctx); err != nil {
 		return SeedInfo{}, fmt.Errorf("committing the seed: %w", err)
 	}
+	// A bulk load leaves the planner without statistics, so it plans the way it
+	// would for empty tables until autovacuum catches up, a minute or so later.
+	// Analyzing now makes a measurement of the seeded set the same as one of a
+	// registry that has been running for a while.
+	if _, err := pool.Exec(ctx, "ANALYZE"); err != nil {
+		return SeedInfo{}, fmt.Errorf("analyzing the seeded tables: %w", err)
+	}
 	return s.info, nil
 }
 
