@@ -18,6 +18,7 @@ import (
 	godigest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/spj/sindri/internal/auth"
@@ -54,7 +55,13 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	database := testsupport.MigratedDB(t)
+	return newEnvTraced(t, nil)
+}
+
+// newEnvTraced is newEnv with tracer seeing every query the pages make.
+func newEnvTraced(t *testing.T, tracer pgx.QueryTracer) *env {
+	t.Helper()
+	database := testsupport.MigratedDBTraced(t, tracer)
 	store := cas.New(memstore.New(), cas.WithReserver(db.NewBlobReserver(database, "memory")))
 	reg := registry.New(database, store, "memory")
 	lc := lifecycle.New(database)
