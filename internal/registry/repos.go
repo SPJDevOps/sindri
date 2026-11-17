@@ -303,6 +303,40 @@ func (r *Registry) AllMembers(ctx context.Context) (map[string][]string, error) 
 	return out, nil
 }
 
+// RepositoryStats is what the repository list shows beside a name. See the
+// ListRepositoryStats query for what each figure counts.
+type RepositoryStats struct {
+	Packages int64
+	// StoredBytes is the size of the distinct blobs placed in the repository.
+	StoredBytes int64
+	// LastPublished is the newest version's publish time; the zero time when
+	// the repository holds no dated version.
+	LastPublished time.Time
+}
+
+// StatsFor returns the stats of the named repositories, in one query however
+// many names there are. A name that does not exist is absent from the result.
+// The caller decides which names to ask about: it must have filtered them by
+// what the caller may read first.
+func (r *Registry) StatsFor(ctx context.Context, names []string) (map[string]RepositoryStats, error) {
+	if len(names) == 0 {
+		return map[string]RepositoryStats{}, nil
+	}
+	rows, err := r.q.ListRepositoryStats(ctx, names)
+	if err != nil {
+		return nil, fmt.Errorf("listing repository stats: %w", err)
+	}
+	out := make(map[string]RepositoryStats, len(rows))
+	for _, row := range rows {
+		s := RepositoryStats{Packages: row.PackageCount, StoredBytes: row.StoredBytes}
+		if row.LastPublishedAt.Valid {
+			s.LastPublished = row.LastPublishedAt.Time
+		}
+		out[row.RepoName] = s
+	}
+	return out, nil
+}
+
 // ProxiesWithUpstreamCredentials names the proxy repositories whose stored
 // upstream URL carries credentials. API-created rows from before such URLs were
 // refused (SIN-116) keep working, so startup warns about them instead of

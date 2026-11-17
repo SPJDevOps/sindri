@@ -192,3 +192,52 @@ SELECT r.name AS repo_name, rem.upstream_url
 FROM remotes rem
 JOIN repositories r ON r.id = rem.repo_id
 ORDER BY r.name;
+
+-- name: ListRepositoryStats :many
+-- What the repository list shows beside each name, for the named repositories
+-- only, in one query instead of one per row. The caller passes the names on the
+-- page it is about to render, so the cost follows the page, not the registry.
+--
+-- package_count is the packages the repository holds. last_published_at is the
+-- newest versions.published_at in it: the newest time a version was added, NULL
+-- when it holds none or only versions from before the column existed (00011).
+-- stored_bytes is the sum of the sizes of the distinct blobs placed in the
+-- repository: those its files point at, plus its OCI blob memberships
+-- (repository_blobs). A blob placed twice counts once; the same blob in another
+-- repository is counted there too, because each repository's figure answers
+-- "how much does this hold", not "how much does it add to the disk". Evidence
+-- is stored by digest and attached to subjects, not placed, so it is not
+-- counted. A virtual repository holds nothing of its own and reports zeros.
+WITH wanted AS (
+    SELECT r.id, r.name FROM repositories r WHERE r.name = ANY(@names::text[])
+), pkg AS (
+    SELECT p.repo_id,
+           count(DISTINCT p.id)::bigint AS package_count,
+           max(v.published_at)::timestamptz AS last_published_at
+    FROM packages p
+    JOIN wanted w ON w.id = p.repo_id
+    LEFT JOIN versions v ON v.package_id = p.id
+    GROUP BY p.repo_id
+), placed AS (
+    SELECT p.repo_id, f.blob_digest AS digest
+    FROM files f
+    JOIN versions v ON v.id = f.version_id
+    JOIN packages p ON p.id = v.package_id
+    JOIN wanted w ON w.id = p.repo_id
+    UNION
+    SELECT rb.repo_id, rb.digest
+    FROM repository_blobs rb
+    JOIN wanted w ON w.id = rb.repo_id
+), sized AS (
+    SELECT pl.repo_id, COALESCE(sum(b.size), 0)::bigint AS stored_bytes
+    FROM placed pl
+    JOIN blobs b ON b.digest = pl.digest
+    GROUP BY pl.repo_id
+)
+SELECT w.name AS repo_name,
+       COALESCE(pkg.package_count, 0)::bigint AS package_count,
+       COALESCE(sized.stored_bytes, 0)::bigint AS stored_bytes,
+       pkg.last_published_at AS last_published_at
+FROM wanted w
+LEFT JOIN pkg ON pkg.repo_id = w.id
+LEFT JOIN sized ON sized.repo_id = w.id;
