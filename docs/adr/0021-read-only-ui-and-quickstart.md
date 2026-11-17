@@ -72,7 +72,7 @@ instead of `'none'`, so the repository list's filter can be a plain
 `<form method="get" action="/ui/">`. Every form in a template must be a GET
 with the method written out, and a test fails any that is not. This is safe
 because the UI still has no write path: the session cookie is honoured only on
-GET and HEAD, so a form that posted would be answered 405 and do nothing, and
+GET and HEAD, so a form that posted would be refused with 401 and do nothing, and
 a GET form can only reach the same read-only pages a link reaches. The sign-in
 help page's policy in `internal/auth` stays at `form-action 'none'`. The
 alternative, links and htmx only, was rejected: the text box would not work

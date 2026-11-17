@@ -171,6 +171,10 @@ type repoRow struct {
 type repoGroup struct {
 	Label string // empty for names without a namespace
 	Rows  []repoRow
+	// Total counts the namespace across every page of the filtered list, so
+	// a namespace split by a page boundary does not show a partial count as
+	// its size. It counts only repositories the caller may read.
+	Total int
 }
 
 // groupRows splits rows, already in sortRepos order, into one group per
@@ -186,6 +190,18 @@ func groupRows(rows []repoRow) []repoGroup {
 		g.Rows = append(g.Rows, row)
 	}
 	return groups
+}
+
+// countNamespaces sets each group's Total from the whole filtered list, which
+// holds only repositories the caller may read.
+func countNamespaces(groups []repoGroup, matching []model.Repository) {
+	counts := map[string]int{}
+	for _, repo := range matching {
+		counts[namespace(repo.Name)]++
+	}
+	for i := range groups {
+		groups[i].Total = counts[groups[i].Label]
+	}
 }
 
 // upstreamHost is the host (and port) of an upstream URL, which is all the list

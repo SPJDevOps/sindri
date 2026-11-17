@@ -131,6 +131,16 @@ func TestGroupRows_PutsNamesWithoutANamespaceFirstAndCountsEachGroup(t *testing.
 	}
 }
 
+func TestCountNamespaces_CountsTheWholeFilteredListNotJustThisPage(t *testing.T) {
+	matching := []model.Repository{{Name: "solo"}, {Name: "team/a"}, {Name: "team/b"}, {Name: "team/c"}}
+	// This page holds only team/a; team/b and team/c are on the next one.
+	groups := groupRows([]repoRow{{repoView: repoView{Name: "team/a"}}})
+	countNamespaces(groups, matching)
+	if len(groups) != 1 || groups[0].Total != 3 || len(groups[0].Rows) != 1 {
+		t.Errorf("groups = %+v, want team with 1 row of 3", groups)
+	}
+}
+
 func TestPaginate(t *testing.T) {
 	tests := []struct {
 		name                       string

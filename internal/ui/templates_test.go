@@ -82,6 +82,10 @@ func TestTemplates_EveryFormIsAnExplicitGET(t *testing.T) {
 	// method="dialog" closes the <dialog> it sits in and sends nothing, so it
 	// needs no form-action; it is the only other method a template may use.
 	method := regexp.MustCompile(`(?i)\smethod="(?:get|dialog)"`)
+	// A button's formmethod or formaction overrides its form's, so a GET form
+	// could still post through one; only formmethod="get" is allowed.
+	override := regexp.MustCompile(`(?i)\sform(?:method|action)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)`)
+	allowed := regexp.MustCompile(`(?i)^\sformmethod\s*=\s*["']?get["']?$`)
 	forms := 0
 	err := fs.WalkDir(web.Templates(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -90,6 +94,13 @@ func TestTemplates_EveryFormIsAnExplicitGET(t *testing.T) {
 		b, err := fs.ReadFile(web.Templates(), path)
 		if err != nil {
 			return err
+		}
+		for _, loc := range override.FindAllIndex(b, -1) {
+			if allowed.Match(b[loc[0]:loc[1]]) {
+				continue
+			}
+			line := bytes.Count(b[:loc[0]], []byte("\n")) + 1
+			t.Errorf("%s:%d: formmethod and formaction may not override a form's GET: %s", path, line, b[loc[0]:loc[1]])
 		}
 		for _, loc := range form.FindAllIndex(b, -1) {
 			forms++
@@ -146,8 +157,8 @@ func TestTemplates_Golden(t *testing.T) {
 					{repoView: repoView{Name: "hub", Type: "proxy", Protocol: "oci", Upstream: true, Href: "/ui/r/hub"}, Detail: "caches registry-1.docker.io",
 						Stats: &rowStats{Packages: 4, LastPublished: long}},
 					{repoView: repoView{Name: "python", Type: "virtual", Protocol: "pypi", Href: "/ui/r/python"}, Detail: "resolves 2 members"},
-				}},
-				{Label: "team", Rows: []repoRow{{repoView: team, Stats: &rowStats{Packages: 1}}}},
+				}, Total: 2},
+				{Label: "team", Rows: []repoRow{{repoView: team, Stats: &rowStats{Packages: 1}}}, Total: 1},
 			}}},
 		"repos-table": {"repos", reposPage{chrome: base, Total: 500, Matching: 500, From: 1, To: 200,
 			Table: true, Types: options(repoTypes, ""), Protos: options(repoProtocols, ""),
@@ -158,8 +169,9 @@ func TestTemplates_Golden(t *testing.T) {
 					{repoView: repoView{Name: "hub", Type: "proxy", Protocol: "oci", ManagedBy: "config", Upstream: true, Href: "/ui/r/hub"}, Detail: "caches registry-1.docker.io",
 						Stats: &rowStats{Packages: 4, LastPublished: long}},
 					{repoView: repoView{Name: "python", Type: "virtual", Protocol: "pypi", ManagedBy: "config", Href: "/ui/r/python"}, Detail: "resolves 2 members"},
-				}},
-				{Label: "team", Rows: []repoRow{
+				}, Total: 2},
+				// team continues on page 2, so its pill says how many of it this page shows.
+				{Label: "team", Total: 5, Rows: []repoRow{
 					{repoView: repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}, Stats: &rowStats{Packages: 12, LastPublished: long}},
 					{repoView: repoView{Name: "team/lib", Type: "hosted", Protocol: "pypi", ManagedBy: "api", Locked: true, Href: "/ui/r/team/lib"}, Stats: &rowStats{}},
 				}},
@@ -168,7 +180,7 @@ func TestTemplates_Golden(t *testing.T) {
 			Filter: repoFilter{Q: "team", Type: "hosted", View: "table"}, Table: true,
 			Types: options(repoTypes, "hosted"), Protos: options(repoProtocols, ""),
 			TableHref: "/ui/?q=team&type=hosted&view=table", TilesHref: "/ui/?q=team&type=hosted&view=tiles", ClearHref: "/ui/?view=table",
-			Groups: []repoGroup{{Label: "team", Rows: []repoRow{
+			Groups: []repoGroup{{Label: "team", Total: 2, Rows: []repoRow{
 				{repoView: repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}, Stats: &rowStats{Packages: 12, LastPublished: long}},
 				{repoView: repoView{Name: "team/lib", Type: "hosted", Protocol: "pypi", ManagedBy: "api", Href: "/ui/r/team/lib"}, Stats: &rowStats{}},
 			}}}}},

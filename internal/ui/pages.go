@@ -124,6 +124,8 @@ func (h *handler) repositories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	table := useTable(len(matching), filter.View)
+	groups := groupRows(rows)
+	countNamespaces(groups, matching)
 	filter.Page = page
 	data := reposPage{
 		chrome:   h.chrome(r, "Repositories"),
@@ -131,7 +133,7 @@ func (h *handler) repositories(w http.ResponseWriter, r *http.Request) {
 		Matching: len(matching),
 		Filter:   filter,
 		Table:    table,
-		Groups:   groupRows(rows),
+		Groups:   groups,
 		Types:    options(repoTypes, filter.Type),
 		Protos:   options(repoProtocols, filter.Protocol),
 	}

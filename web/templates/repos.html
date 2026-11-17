@@ -29,7 +29,7 @@
   </div>
   {{$groups := .Groups}}{{$table := .Table}}
   {{range $groups}}
-    {{if or .Label (gt (len $groups) 1)}}<details class="group" open><summary>{{if .Label}}<span class="mono">{{.Label}}</span>{{else}}Top level{{end}} <span class="pill">{{len .Rows}}</span></summary>{{end}}
+    {{if or .Label (gt (len $groups) 1)}}<details class="group" open><summary>{{if .Label}}<span class="mono">{{.Label}}</span>{{else}}Top level{{end}} <span class="pill">{{if lt (len .Rows) .Total}}{{len .Rows}} of {{.Total}}{{else}}{{.Total}}{{end}}</span></summary>{{end}}
     {{if $table}}
     <div class="table-wrap">
     <table>
