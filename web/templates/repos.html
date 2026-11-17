@@ -33,14 +33,14 @@
     {{if $table}}
     <div class="table-wrap">
     <table>
-      <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Protocol</th><th scope="col" class="num">Packages</th><th scope="col" class="num">Stored</th><th scope="col">Last publish</th><th scope="col">Managed by</th></tr></thead>
+      <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Protocol</th><th scope="col" class="num">Packages</th><th scope="col">Last publish</th><th scope="col">Managed by</th></tr></thead>
       <tbody>
       {{range .Rows}}
         <tr{{if .Upstream}} class="upstream"{{end}}>
           <td><a class="mono" href="{{.Href}}">{{.Name}}</a>{{if .Detail}}<span class="by">{{.Detail}}</span>{{end}}</td>
           <td><span class="pill{{if .Upstream}} upstream{{end}}">{{.Type}}</span>{{if .Locked}} <span class="pill">locked</span>{{end}}</td>
           <td><span class="pill">{{.Protocol}}</span></td>
-          {{if .Stats}}<td class="num">{{.Stats.Packages}}</td><td class="num">{{bytes .Stats.Stored}}</td><td>{{if .Stats.LastPublished.IsZero}}-{{else}}{{ago .Stats.LastPublished}}{{end}}</td>{{else}}<td class="num">-</td><td class="num">-</td><td>-</td>{{end}}
+          {{if .Stats}}<td class="num">{{.Stats.Packages}}</td><td>{{if .Stats.LastPublished.IsZero}}-{{else}}{{ago .Stats.LastPublished}}{{end}}</td>{{else}}<td class="num">-</td><td>-</td>{{end}}
           <td>{{.ManagedBy}}</td>
         </tr>
       {{end}}
@@ -54,7 +54,7 @@
         <div class="name">{{.Name}}</div>
         <div class="meta"><span class="pill{{if .Upstream}} upstream{{end}}">{{.Type}}</span><span class="pill">{{.Protocol}}</span>{{if .Locked}}<span class="pill">locked</span>{{end}}</div>
         {{if .Detail}}<div class="detail">{{.Detail}}</div>{{end}}
-        {{if .Stats}}<div class="detail">{{.Stats.Packages}} {{if eq .Stats.Packages 1}}package{{else}}packages{{end}} · {{bytes .Stats.Stored}}{{if not .Stats.LastPublished.IsZero}} · {{ago .Stats.LastPublished}}{{end}}</div>{{end}}
+        {{if .Stats}}<div class="detail">{{.Stats.Packages}} {{if eq .Stats.Packages 1}}package{{else}}packages{{end}}{{if not .Stats.LastPublished.IsZero}} · {{ago .Stats.LastPublished}}{{end}}</div>{{end}}
       </a>
     {{end}}
     </div>

@@ -144,10 +144,10 @@ func TestTemplates_Golden(t *testing.T) {
 			Groups: []repoGroup{
 				{Rows: []repoRow{
 					{repoView: repoView{Name: "hub", Type: "proxy", Protocol: "oci", Upstream: true, Href: "/ui/r/hub"}, Detail: "caches registry-1.docker.io",
-						Stats: &rowStats{Packages: 4, Stored: 5 << 20, LastPublished: long}},
+						Stats: &rowStats{Packages: 4, LastPublished: long}},
 					{repoView: repoView{Name: "python", Type: "virtual", Protocol: "pypi", Href: "/ui/r/python"}, Detail: "resolves 2 members"},
 				}},
-				{Label: "team", Rows: []repoRow{{repoView: team, Stats: &rowStats{Packages: 1, Stored: 1234}}}},
+				{Label: "team", Rows: []repoRow{{repoView: team, Stats: &rowStats{Packages: 1}}}},
 			}}},
 		"repos-table": {"repos", reposPage{chrome: base, Total: 500, Matching: 500, From: 1, To: 200,
 			Table: true, Types: options(repoTypes, ""), Protos: options(repoProtocols, ""),
@@ -156,11 +156,11 @@ func TestTemplates_Golden(t *testing.T) {
 			Groups: []repoGroup{
 				{Rows: []repoRow{
 					{repoView: repoView{Name: "hub", Type: "proxy", Protocol: "oci", ManagedBy: "config", Upstream: true, Href: "/ui/r/hub"}, Detail: "caches registry-1.docker.io",
-						Stats: &rowStats{Packages: 4, Stored: 5 << 20, LastPublished: long}},
+						Stats: &rowStats{Packages: 4, LastPublished: long}},
 					{repoView: repoView{Name: "python", Type: "virtual", Protocol: "pypi", ManagedBy: "config", Href: "/ui/r/python"}, Detail: "resolves 2 members"},
 				}},
 				{Label: "team", Rows: []repoRow{
-					{repoView: repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}, Stats: &rowStats{Packages: 12, Stored: 3 << 30, LastPublished: long}},
+					{repoView: repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}, Stats: &rowStats{Packages: 12, LastPublished: long}},
 					{repoView: repoView{Name: "team/lib", Type: "hosted", Protocol: "pypi", ManagedBy: "api", Locked: true, Href: "/ui/r/team/lib"}, Stats: &rowStats{}},
 				}},
 			}}},
@@ -169,7 +169,7 @@ func TestTemplates_Golden(t *testing.T) {
 			Types: options(repoTypes, "hosted"), Protos: options(repoProtocols, ""),
 			TableHref: "/ui/?q=team&type=hosted&view=table", TilesHref: "/ui/?q=team&type=hosted&view=tiles", ClearHref: "/ui/?view=table",
 			Groups: []repoGroup{{Label: "team", Rows: []repoRow{
-				{repoView: repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}, Stats: &rowStats{Packages: 12, Stored: 3 << 30, LastPublished: long}},
+				{repoView: repoView{Name: "team/app", Type: "hosted", Protocol: "oci", ManagedBy: "config", Href: "/ui/r/team/app"}, Stats: &rowStats{Packages: 12, LastPublished: long}},
 				{repoView: repoView{Name: "team/lib", Type: "hosted", Protocol: "pypi", ManagedBy: "api", Href: "/ui/r/team/lib"}, Stats: &rowStats{}},
 			}}}}},
 		"repos-nomatch": {"repos", reposPage{chrome: base, Total: 500, Matching: 0,

@@ -156,7 +156,6 @@ func paginate(total, page, size int) (clamped, pages, from, to int) {
 // rowStats are the figures of one repository; see registry.RepositoryStats.
 type rowStats struct {
 	Packages      int64
-	Stored        int64
 	LastPublished time.Time
 }
 
@@ -257,5 +256,5 @@ func options(values []string, selected string) []optionView {
 
 // statsView converts the registry's figures for one repository.
 func statsView(s registry.RepositoryStats) *rowStats {
-	return &rowStats{Packages: s.Packages, Stored: s.StoredBytes, LastPublished: s.LastPublished}
+	return &rowStats{Packages: s.Packages, LastPublished: s.LastPublished}
 }

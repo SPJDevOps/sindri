@@ -891,9 +891,9 @@ func TestUI_RepositoryListSwapsOnlyTheResultsForHTMX(t *testing.T) {
 	}
 }
 
-// The table's figures come from one aggregate query: packages, the size of the
-// blobs placed, and the newest version.
-func TestUI_RepositoryTableShowsPackagesSizeAndLastPublish(t *testing.T) {
+// The table's figures come from one aggregate query: packages and the newest
+// version.
+func TestUI_RepositoryTableShowsPackagesAndLastPublish(t *testing.T) {
 	e := newEnv(t)
 	e.push("team-a", "app", "1.0", "one")
 	e.push("team-a", "other", "1.0", "two")
@@ -906,8 +906,8 @@ func TestUI_RepositoryTableShowsPackagesSizeAndLastPublish(t *testing.T) {
 		return m
 	}
 	body := e.get("admin", "/ui/?view=table").body
-	if got := row(body, "team-a"); !strings.Contains(got, `<td class="num">2</td>`) || strings.Contains(got, `<td class="num">0 B</td>`) {
-		t.Errorf("team-a row does not show two packages and a size:\n%s", got)
+	if got := row(body, "team-a"); !strings.Contains(got, `<td class="num">2</td>`) {
+		t.Errorf("team-a row does not show two packages:\n%s", got)
 	}
 	if got := row(body, "npm"); !strings.Contains(got, `<td class="num">1</td>`) || !strings.Contains(got, "<time ") {
 		t.Errorf("npm row does not show one package and a publish time:\n%s", got)

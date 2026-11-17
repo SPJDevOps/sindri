@@ -121,7 +121,7 @@ The gate runs `docs/quickstart.md`, read from the document itself, in a fresh
 - The UI adds about 220 KB of assets to the binary, mostly fonts.
 - Every page costs a few queries per repository it shows. A registry has tens
   or hundreds of repositories, so the home page filters and groups them by
-  namespace, pages them 200 at a time, and reads their figures (packages, size,
+  namespace, pages them 200 at a time, and reads their figures (packages,
   last publish) in one aggregate query for the page, never one per row. Other
   listings page by 50.
 - Signing out from the UI ends the Sindri session but not the identity

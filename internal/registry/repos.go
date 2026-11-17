@@ -307,8 +307,6 @@ func (r *Registry) AllMembers(ctx context.Context) (map[string][]string, error) 
 // ListRepositoryStats query for what each figure counts.
 type RepositoryStats struct {
 	Packages int64
-	// StoredBytes is the size of the distinct blobs placed in the repository.
-	StoredBytes int64
 	// LastPublished is the newest version's publish time; the zero time when
 	// the repository holds no dated version.
 	LastPublished time.Time
@@ -328,7 +326,7 @@ func (r *Registry) StatsFor(ctx context.Context, names []string) (map[string]Rep
 	}
 	out := make(map[string]RepositoryStats, len(rows))
 	for _, row := range rows {
-		s := RepositoryStats{Packages: row.PackageCount, StoredBytes: row.StoredBytes}
+		s := RepositoryStats{Packages: row.PackageCount}
 		if row.LastPublishedAt.Valid {
 			s.LastPublished = row.LastPublishedAt.Time
 		}

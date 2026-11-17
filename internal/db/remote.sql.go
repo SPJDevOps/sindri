@@ -500,36 +500,18 @@ WITH wanted AS (
     JOIN packages p ON p.id = v.package_id
     JOIN wanted w ON w.id = p.repo_id
     GROUP BY p.repo_id
-), placed AS (
-    SELECT p.repo_id, f.blob_digest AS digest
-    FROM files f
-    JOIN versions v ON v.id = f.version_id
-    JOIN packages p ON p.id = v.package_id
-    JOIN wanted w ON w.id = p.repo_id
-    UNION
-    SELECT rb.repo_id, rb.digest
-    FROM repository_blobs rb
-    JOIN wanted w ON w.id = rb.repo_id
-), sized AS (
-    SELECT pl.repo_id, COALESCE(sum(b.size), 0)::bigint AS stored_bytes
-    FROM placed pl
-    JOIN blobs b ON b.digest = pl.digest
-    GROUP BY pl.repo_id
 )
 SELECT w.name AS repo_name,
        COALESCE(counts.package_count, 0)::bigint AS package_count,
-       COALESCE(sized.stored_bytes, 0)::bigint AS stored_bytes,
        newest.last_published_at AS last_published_at
 FROM wanted w
 LEFT JOIN counts ON counts.repo_id = w.id
 LEFT JOIN newest ON newest.repo_id = w.id
-LEFT JOIN sized ON sized.repo_id = w.id
 `
 
 type ListRepositoryStatsRow struct {
 	RepoName        string             `json:"repo_name"`
 	PackageCount    int64              `json:"package_count"`
-	StoredBytes     int64              `json:"stored_bytes"`
 	LastPublishedAt pgtype.Timestamptz `json:"last_published_at"`
 }
 
@@ -540,13 +522,13 @@ type ListRepositoryStatsRow struct {
 // package_count is the packages the repository holds. last_published_at is the
 // newest versions.published_at in it: the newest time a version was added, NULL
 // when it holds none or only versions from before the column existed (00011).
-// stored_bytes is the sum of the sizes of the distinct blobs placed in the
-// repository: those its files point at, plus its OCI blob memberships
-// (repository_blobs). A blob placed twice counts once; the same blob in another
-// repository is counted there too, because each repository's figure answers
-// "how much does this hold", not "how much does it add to the disk". Evidence
-// is stored by digest and attached to subjects, not placed, so it is not
-// counted. A virtual repository holds nothing of its own and reports zeros.
+// A virtual repository holds nothing of its own and reports zero and NULL.
+//
+// There is deliberately no stored size. Summing the distinct blobs placed in a
+// repository (files plus repository_blobs, joined to blobs) costs about 80ms for
+// a 200-repository page of the large seed and over 400ms under load, which
+// breaks the page's 200ms budget; a summary table would be the only fix, and
+// the list does not justify one.
 func (q *Queries) ListRepositoryStats(ctx context.Context, names []string) ([]ListRepositoryStatsRow, error) {
 	rows, err := q.db.Query(ctx, listRepositoryStats, names)
 	if err != nil {
@@ -556,12 +538,7 @@ func (q *Queries) ListRepositoryStats(ctx context.Context, names []string) ([]Li
 	items := []ListRepositoryStatsRow{}
 	for rows.Next() {
 		var i ListRepositoryStatsRow
-		if err := rows.Scan(
-			&i.RepoName,
-			&i.PackageCount,
-			&i.StoredBytes,
-			&i.LastPublishedAt,
-		); err != nil {
+		if err := rows.Scan(&i.RepoName, &i.PackageCount, &i.LastPublishedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
