@@ -253,15 +253,50 @@ func TestSession_LoginRefusesOpenRedirects(t *testing.T) {
 	o := newOIDC(t, idp)
 	h := auth.NewSessions(auth.SessionConfig{ClientID: oidctest.ClientID, RedirectURL: "http://127.0.0.1/auth/callback"}, o,
 		auth.NewChain("boot", nil, o, nil)).Handler()
-	for _, next := range []string{"https://evil.example.com/", "//evil.example.com/", "/\\evil.example.com"} {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/auth/login?next="+next, nil))
-		for _, c := range rec.Result().Cookies() {
-			if strings.Contains(c.Value, "evil") {
-				t.Fatalf("next=%q was kept for after login", next)
-			}
-		}
+	tests := []struct{ name, next string }{
+		{"Absolute", "https://evil.example.com/"},
+		{"SchemeRelative", "//evil.example.com/"},
+		{"Backslash", "/\\evil.example.com"},
+		// Browsers strip tabs and newlines from a URL before resolving it,
+		// so "/<tab>/evil" becomes "//evil" in the Location header.
+		{"TabBetweenSlashes", "/%09/evil.example.com"},
+		{"NewlineBetweenSlashes", "/%0A/evil.example.com"},
+		{"CarriageReturnBetweenSlashes", "/%0D/evil.example.com"},
+		{"TabBeforeBackslash", "/%09%5Cevil.example.com"},
 	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/auth/login?next="+tc.next, nil))
+			if got := pendingNext(t, rec); got != "/auth/whoami" {
+				t.Fatalf("next=%q was kept for after login as %q", tc.next, got)
+			}
+		})
+	}
+}
+
+// pendingNext decodes the login cookie and returns where the callback will
+// send the browser.
+func pendingNext(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		if c.Name != "sindri_login" {
+			continue
+		}
+		raw, err := base64.RawURLEncoding.DecodeString(c.Value)
+		if err != nil {
+			t.Fatalf("decoding the login cookie: %v", err)
+		}
+		var pl struct {
+			Next string `json:"r"`
+		}
+		if err := json.Unmarshal(raw, &pl); err != nil {
+			t.Fatalf("parsing the login cookie: %v", err)
+		}
+		return pl.Next
+	}
+	t.Fatalf("login set no login cookie (status %d)", rec.Code)
+	return ""
 }
 
 func TestGuardUI_IsReadOnly(t *testing.T) {

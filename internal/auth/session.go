@@ -366,8 +366,14 @@ func signInHelpPage(docsURL string) (string, error) {
 // safeNext keeps the post-login redirect on this server: a path, never a
 // scheme-relative or absolute URL that would make /auth/login an open
 // redirect.
+//
+// It refuses control characters and backslashes anywhere, not only after the
+// first slash: browsers strip tabs and newlines from a Location before
+// resolving it, and read a backslash as a slash, so "/\t/evil" and "/\t\evil"
+// both become "//evil".
 func safeNext(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") {
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") ||
+		strings.ContainsFunc(next, func(c rune) bool { return c < 0x20 || c == 0x7f || c == '\\' }) {
 		return "/auth/whoami"
 	}
 	return next
