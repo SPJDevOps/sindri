@@ -184,3 +184,11 @@ WITH gone AS (
 SELECT gone.version_id, v.package_id
 FROM gone
 JOIN versions v ON v.id = gone.version_id;
+
+-- name: ListAllRemotes :many
+-- Every proxy's upstream, for a page that lists all repositories: one query
+-- instead of one per proxy.
+SELECT r.name AS repo_name, rem.upstream_url
+FROM remotes rem
+JOIN repositories r ON r.id = rem.repo_id
+ORDER BY r.name;

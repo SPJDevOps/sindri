@@ -57,6 +57,22 @@ func (h *handler) repositories(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	// Upstreams and members come in one query each, not one per repository:
+	// this page lists them all.
+	upstreams, err := h.opts.Registry.AllUpstreams(r.Context())
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	members, err := h.opts.Registry.AllMembers(r.Context())
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	byName := make(map[string]model.Repository, len(all))
+	for _, repo := range all {
+		byName[repo.Name] = repo
+	}
 	var tiles []tile
 	for _, repo := range all {
 		if !readable(r, repo) {
@@ -65,18 +81,17 @@ func (h *handler) repositories(w http.ResponseWriter, r *http.Request) {
 		t := tile{repoView: viewRepo(repo)}
 		switch repo.Type {
 		case model.RepoTypeProxy:
-			if remote, err := h.opts.Registry.GetRemote(r.Context(), repo.Name); err == nil {
-				t.Detail = "caches " + model.RedactUserinfo(remote.UpstreamURL)
+			if upstream, ok := upstreams[repo.Name]; ok {
+				t.Detail = "caches " + model.RedactUserinfo(upstream)
 			}
 		case model.RepoTypeVirtual:
-			members, err := h.readableMembers(r, repo.Name)
-			if err != nil {
-				h.fail(w, r, err)
-				return
-			}
-			names := make([]string, 0, len(members))
-			for _, m := range members {
-				names = append(names, m.Name)
+			// A virtual repository answers only from members the caller
+			// may read, so the page names only those.
+			var names []string
+			for _, name := range members[repo.Name] {
+				if m, ok := byName[name]; ok && readable(r, m) {
+					names = append(names, name)
+				}
 			}
 			if len(names) > 0 {
 				t.Detail = "resolves " + strings.Join(names, " → ")
@@ -249,7 +264,7 @@ func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model
 		return
 	}
 
-	tags, err := h.opts.Registry.ListTags(r.Context(), registry.ListTagsParams{
+	tags, err := h.opts.Registry.ListTagTargets(r.Context(), registry.ListTagsParams{
 		Repo: repo.Name, Image: name, After: data.Cursor, Limit: pageSize,
 	})
 	if err != nil {
@@ -257,12 +272,7 @@ func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model
 		return
 	}
 	for _, tag := range tags.Items {
-		row := tagRow{Name: tag}
-		if man, err := h.opts.Registry.GetManifest(r.Context(), repo.Name, name, tag); err == nil {
-			row.Digest = man.Digest.String()
-			row.Href = artifactHref(repo.Name, name, man.Digest)
-		}
-		data.Tags = append(data.Tags, row)
+		data.Tags = append(data.Tags, tagRow{Name: tag.Name, Digest: tag.Digest.String(), Href: artifactHref(repo.Name, name, tag.Digest)})
 	}
 	if tags.NextCursor != "" {
 		data.More = packageHref(repo.Name, name) + "&" + url.Values{"cursor": {tags.NextCursor}}.Encode()

@@ -274,6 +274,35 @@ func (r *Registry) GetRemote(ctx context.Context, repoName string) (Remote, erro
 	}, nil
 }
 
+// AllUpstreams maps every proxy repository's name to its upstream URL, in one
+// query. It is for pages that list every repository; GetRemote answers for
+// one.
+func (r *Registry) AllUpstreams(ctx context.Context) (map[string]string, error) {
+	rows, err := r.q.ListAllRemotes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing upstreams: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[row.RepoName] = row.UpstreamUrl
+	}
+	return out, nil
+}
+
+// AllMembers maps every virtual repository's name to its members' names in
+// resolution order, in one query.
+func (r *Registry) AllMembers(ctx context.Context) (map[string][]string, error) {
+	rows, err := r.q.ListAllRepositoryMembers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing members: %w", err)
+	}
+	out := map[string][]string{}
+	for _, row := range rows {
+		out[row.VirtualName] = append(out[row.VirtualName], row.MemberName)
+	}
+	return out, nil
+}
+
 // ProxiesWithUpstreamCredentials names the proxy repositories whose stored
 // upstream URL carries credentials. API-created rows from before such URLs were
 // refused (SIN-116) keep working, so startup warns about them instead of

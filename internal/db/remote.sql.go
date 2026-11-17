@@ -211,6 +211,40 @@ func (q *Queries) InsertRepositoryMember(ctx context.Context, arg InsertReposito
 	return i, err
 }
 
+const listAllRemotes = `-- name: ListAllRemotes :many
+SELECT r.name AS repo_name, rem.upstream_url
+FROM remotes rem
+JOIN repositories r ON r.id = rem.repo_id
+ORDER BY r.name
+`
+
+type ListAllRemotesRow struct {
+	RepoName    string `json:"repo_name"`
+	UpstreamUrl string `json:"upstream_url"`
+}
+
+// Every proxy's upstream, for a page that lists all repositories: one query
+// instead of one per proxy.
+func (q *Queries) ListAllRemotes(ctx context.Context) ([]ListAllRemotesRow, error) {
+	rows, err := q.db.Query(ctx, listAllRemotes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllRemotesRow{}
+	for rows.Next() {
+		var i ListAllRemotesRow
+		if err := rows.Scan(&i.RepoName, &i.UpstreamUrl); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEvictableCacheEntries = `-- name: ListEvictableCacheEntries :many
 SELECT rc.repo_id, rc.cache_key, rc.status, r.name AS repo_name, r.protocol
 FROM remote_cache rc
