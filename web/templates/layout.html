@@ -9,6 +9,7 @@
 <title>{{if .Title}}{{.Title}} · {{end}}Sindri</title>
 <link rel="stylesheet" href="{{asset "sindri.css"}}">
 <script src="{{asset "htmx.min.js"}}" defer></script>
+<script src="{{asset "sindri.js"}}" defer></script>
 </head>
 <body>
 <header class="site-header">
@@ -34,5 +35,15 @@
     <span>Changes go through configuration and the API, never this page.</span>
   </div>
 </footer>
+<div class="live" id="live" role="status" aria-live="polite"></div>
+<dialog class="keys" id="keys" aria-labelledby="keys-title">
+  <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
+  <dl class="facts">
+    <dt><kbd>g</kbd> then <kbd>r</kbd></dt><dd>Go to repositories</dd>
+    <dt><kbd>?</kbd></dt><dd>Show or hide this list</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Close this list</dd>
+  </dl>
+  <form method="dialog"><button class="close" type="submit">Close</button></form>
+</dialog>
 </body>
 </html>{{end}}

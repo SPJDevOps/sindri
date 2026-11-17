@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1 class="page-title">{{.Package}}</h1>
-<div class="pills"><span class="pill{{if .Repo.Upstream}} upstream{{end}}">{{.Repo.Type}}</span><span class="pill">{{.Repo.Protocol}}</span></div>
+<div class="pills"><span class="pill{{if .Repo.Upstream}} upstream{{end}}">{{.Repo.Type}}</span><span class="pill">{{.Repo.Protocol}}</span><button class="copy" type="button" data-copy="{{.Package}}" aria-label="Copy package name">Copy</button></div>
 {{if eq .Repo.Protocol "oci"}}
 <section class="section">
   <h2 class="section-title">Tags</h2>
@@ -23,7 +23,7 @@
   <h2 class="section-title">Versions</h2>
   <div class="rows">
   {{range .Versions}}
-    <div class="version-group">{{.Version}}</div>
+    <div class="version-group">{{.Version}}<button class="copy" type="button" data-copy="{{.Version}}" aria-label="Copy version">Copy</button></div>
     {{if .Deprecated}}
     <div class="row"><span class="primary"><span class="pill revoke">deprecated</span> {{.Deprecated}}</span></div>
     {{end}}
@@ -39,7 +39,7 @@
 {{end}}
 
 {{define "tag-rows"}}{{range .Tags}}
-    <div class="row"><span class="primary"><span class="mono">{{.Name}}</span></span>{{if .Href}}<a class="secondary mono" href="{{.Href}}" title="{{.Digest}}">{{short .Digest}}</a>{{else}}<span class="secondary">unavailable</span>{{end}}</div>
+    <div class="row"><span class="primary"><span class="mono">{{.Name}}</span></span>{{if .Href}}<span class="secondary"><a class="mono" href="{{.Href}}" title="{{.Digest}}">{{short .Digest}}</a><button class="copy" type="button" data-copy="{{.Digest}}" aria-label="Copy digest">Copy</button></span>{{else}}<span class="secondary">unavailable</span>{{end}}</div>
 {{else}}{{if not .Cursor}}
     <div class="row empty">No tags.</div>
 {{end}}{{end}}{{if .More}}

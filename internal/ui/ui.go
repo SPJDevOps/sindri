@@ -144,8 +144,8 @@ var funcs = template.FuncMap{
 	"asset": func(name string) string { return Prefix + "/static/" + web.Version + "/" + name },
 	"short": shortDigest,
 	"bytes": humanBytes,
-	"ago":   ago,
-	"when":  func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
+	"ago":   func(t time.Time) template.HTML { return timeTag(t, ago(t)) },
+	"when":  func(t time.Time) template.HTML { return timeTag(t, t.UTC().Format(time.RFC3339)) },
 }
 
 // securityHeaders goes on every response, pages and assets alike.
@@ -346,6 +346,18 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// timeTag renders one instant as a <time> element whose text is shown and
+// whose title is the UTC time. The page script rewrites the title to include
+// the viewer's local time; without it the title stays UTC. Every time in the
+// UI goes through here, so a page never shows a time the script cannot see.
+func timeTag(t time.Time, text string) template.HTML {
+	if t.IsZero() {
+		return ""
+	}
+	u := t.UTC().Format(time.RFC3339)
+	return template.HTML(`<time datetime="` + u + `" title="` + u + `">` + template.HTMLEscapeString(text) + `</time>`) //nolint:gosec // u is a formatted time; text is escaped
 }
 
 func ago(t time.Time) string {

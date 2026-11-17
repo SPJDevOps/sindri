@@ -12,16 +12,16 @@
     <tbody>
     {{range .Rows}}
       <tr>
-        <td title="{{when .At}}">{{ago .At}}</td>
+        <td>{{ago .At}}</td>
         <td class="mono">{{.Event}}</td>
         <td class="mono">{{.Webhook}}</td>
-        <td class="mono">{{if .Href}}<a href="{{.Href}}" title="{{.Digest}}">{{short .Digest}}</a>{{else}}<span title="{{.Digest}}">{{short .Digest}}</span>{{end}}</td>
+        <td class="mono">{{if .Href}}<a href="{{.Href}}" title="{{.Digest}}">{{short .Digest}}</a>{{else}}<span title="{{.Digest}}">{{short .Digest}}</span>{{end}}<button class="copy" type="button" data-copy="{{.Digest}}" aria-label="Copy digest">Copy</button></td>
         <td class="mono">{{.Repository}}</td>
         <td><span class="dot {{.Dot}}" aria-hidden="true"></span>{{.State}}</td>
         <td class="mono">{{if .Status}}{{.Status}}{{else}}-{{end}}</td>
         <td>{{.Attempts}}</td>
         <td>{{if not .NextRetry.IsZero}}<span class="mono">{{when .NextRetry}}</span>{{else}}-{{end}}</td>
-        <td>{{if .Error}}{{.Error}}{{else}}-{{end}}{{if .Redeliver}}<br><span class="hint">To redeliver:</span> <code class="command">{{.Redeliver}}</code>{{end}}</td>
+        <td>{{if .Error}}{{.Error}}{{else}}-{{end}}{{if .Redeliver}}<br><span class="hint">To redeliver:</span> <code class="command">{{.Redeliver}}</code><button class="copy" type="button" data-copy="{{.Redeliver}}" aria-label="Copy redeliver command">Copy</button>{{end}}</td>
       </tr>
     {{end}}
     </tbody>

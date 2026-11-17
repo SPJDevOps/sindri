@@ -9,6 +9,7 @@
 <title>t · Sindri</title>
 <link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
 <script src="/ui/static/VERSION/htmx.min.js" defer></script>
+<script src="/ui/static/VERSION/sindri.js" defer></script>
 </head>
 <body>
 <header class="site-header">
@@ -27,7 +28,7 @@
     
     
 <h1 class="page-title">@acme/ui</h1>
-<div class="pills"><span class="pill">hosted</span><span class="pill">npm</span></div>
+<div class="pills"><span class="pill">hosted</span><span class="pill">npm</span><button class="copy" type="button" data-copy="@acme/ui" aria-label="Copy package name">Copy</button></div>
 
 
 <section class="section">
@@ -45,7 +46,7 @@
   <h2 class="section-title">Versions</h2>
   <div class="rows">
   
-    <div class="version-group">1.0.0</div>
+    <div class="version-group">1.0.0<button class="copy" type="button" data-copy="1.0.0" aria-label="Copy version">Copy</button></div>
     
     <div class="row"><span class="primary"><span class="pill revoke">deprecated</span> use 1.1.0, this release leaks a handle</span></div>
     
@@ -53,7 +54,7 @@
     <div class="row"><a class="primary mono" href="/ui/r/internal-npm/-/artifact?digest=sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe&amp;image=%40acme%2Fui">ui-1.0.0.tgz</a><span class="secondary">2.0 KiB</span></div>
     
   
-    <div class="version-group">1.1.0</div>
+    <div class="version-group">1.1.0<button class="copy" type="button" data-copy="1.1.0" aria-label="Copy version">Copy</button></div>
     
     
     <div class="row"><a class="primary mono" href="/x">ui-1.1.0.tgz</a><span class="secondary">4.0 KiB</span></div>
@@ -71,5 +72,15 @@
     <span>Changes go through configuration and the API, never this page.</span>
   </div>
 </footer>
+<div class="live" id="live" role="status" aria-live="polite"></div>
+<dialog class="keys" id="keys" aria-labelledby="keys-title">
+  <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
+  <dl class="facts">
+    <dt><kbd>g</kbd> then <kbd>r</kbd></dt><dd>Go to repositories</dd>
+    <dt><kbd>?</kbd></dt><dd>Show or hide this list</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Close this list</dd>
+  </dl>
+  <form method="dialog"><button class="close" type="submit">Close</button></form>
+</dialog>
 </body>
 </html>

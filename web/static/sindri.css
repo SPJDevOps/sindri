@@ -379,6 +379,29 @@ th[aria-sort] .sort { color: var(--text); }
 html.js-enhanced .cmd .copy { display: inline-flex; }
 .cmd .copy:hover { color: var(--accent); }
 
+/* Inline copy buttons: quiet text, shown on hover and focus, always shown on
+ * touch screens, and absent entirely without the script. */
+
+.copy { display: none; margin-left: var(--space-2); padding: 0 var(--space-2); font: 500 var(--text-xs)/1.8 var(--font-sans); color: var(--text-muted); background: none; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; vertical-align: baseline; }
+.cmd .copy { border-radius: 0; margin-left: 0; }
+html.js-enhanced .copy { display: inline-block; }
+html.js-enhanced .cmd .copy { display: inline-flex; }
+html.js-enhanced :is(.row, dd, td, .pills, .version-group) .copy { opacity: 0; }
+html.js-enhanced :is(.row, dd, td, .pills, .version-group):is(:hover, :focus-within) .copy,
+html.js-enhanced .copy:focus-visible { opacity: 1; }
+@media (hover: none) { html.js-enhanced .copy { opacity: 1 !important; } }
+.copy:hover { color: var(--accent); }
+
+.live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Keyboard shortcuts overlay: a native dialog opened with showModal. */
+
+dialog.keys { max-width: min(28rem, calc(100vw - 2 * var(--space-4))); padding: var(--space-4); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+dialog.keys::backdrop { background: rgb(0 0 0 / 0.5); }
+dialog.keys .facts { margin: var(--space-3) 0; }
+dialog.keys .close { min-height: var(--target); padding: 0 var(--space-3); }
+kbd { font-family: var(--font-mono); font-size: var(--text-sm); padding: 0 var(--space-1); border: 1px solid var(--border); border-radius: var(--radius); }
+
 pre.document {
   background: var(--surface-2);
   border: 1px solid var(--border);

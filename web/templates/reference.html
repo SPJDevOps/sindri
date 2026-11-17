@@ -13,7 +13,7 @@
   <p class="hint">States: row with a secondary value, row that is a link, empty. At least 36px tall.</p>
   <div class="rows">
     <div class="row"><a class="primary mono" href="#rows">team/app</a><span class="secondary">hosted</span></div>
-    <div class="row"><span class="primary">A row of plain text, which wraps when it is long enough to need more than one line on a narrow screen.</span><span class="secondary">3 minutes ago</span></div>
+    <div class="row"><span class="primary">A row of plain text, which wraps when it is long enough to need more than one line on a narrow screen.</span><span class="secondary"><time datetime="2020-03-14T06:00:00Z" title="2020-03-14T06:00:00Z">3 minutes ago</time></span></div>
     <div class="row empty">Nothing published here yet.</div>
   </div>
 </section>
@@ -47,7 +47,7 @@
   <p class="hint">States: short value, long value that wraps anywhere, link, value that is only a hint. Stacks on a phone.</p>
   <dl class="facts">
     <dt>Size</dt><dd>1.2 KiB</dd>
-    <dt>Digest</dt><dd class="mono">sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</dd>
+    <dt>Digest</dt><dd><span class="mono">sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</span><button class="copy" type="button" data-copy="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy digest">Copy</button></dd>
     <dt>Repository</dt><dd><a class="mono" href="#facts">team/app</a></dd>
     <dt>Owners</dt><dd><span class="hint">none you may see</span></dd>
   </dl>
@@ -80,7 +80,7 @@
 <section class="section">
   <h2 class="section-title">Command block</h2>
   <p class="hint">Mono, scrolls sideways, never wraps. The copy button is hidden until a script sets html.js-enhanced on the page.</p>
-  <div class="cmd"><pre><code>docker pull registry.example.com/team/app@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</code></pre><button class="copy" type="button">Copy</button></div>
+  <div class="cmd"><pre><code>docker pull registry.example.com/team/app@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</code></pre><button class="copy" type="button" data-copy="docker pull registry.example.com/team/app@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy the pull command">Copy</button></div>
 </section>
 
 <section class="section">
