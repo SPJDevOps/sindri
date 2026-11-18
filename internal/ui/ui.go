@@ -260,7 +260,11 @@ func (h *handler) render(w http.ResponseWriter, r *http.Request, page, partial s
 }
 
 func (h *handler) notFound(w http.ResponseWriter, r *http.Request) {
-	h.render(w, r, "notfound", "", http.StatusNotFound, h.chrome(r, "Not found"))
+	// The page must not depend on the path, or its bytes would tell a missing
+	// repository from one the caller may not read: no header link is current.
+	c := h.chrome(r, "Not found")
+	c.NavRepos, c.NavSystem = "", ""
+	h.render(w, r, "notfound", "", http.StatusNotFound, c)
 }
 
 // fail logs err and answers with an error page that names the request, never
