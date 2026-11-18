@@ -34,7 +34,7 @@ func (q *Queries) GetOrgPolicy(ctx context.Context) ([]byte, error) {
 }
 
 const listAllRepositories = `-- name: ListAllRepositories :many
-SELECT id, name, type, protocol, config, locked, managed_by, created_at FROM repositories
+SELECT id, name, type, protocol, config, locked, managed_by, created_at, last_published_at FROM repositories
 ORDER BY name
 `
 
@@ -56,6 +56,7 @@ func (q *Queries) ListAllRepositories(ctx context.Context) ([]Repository, error)
 			&i.Locked,
 			&i.ManagedBy,
 			&i.CreatedAt,
+			&i.LastPublishedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -105,7 +106,7 @@ const updateRepositoryConfig = `-- name: UpdateRepositoryConfig :one
 UPDATE repositories
 SET config = $2, locked = $3
 WHERE id = $1
-RETURNING id, name, type, protocol, config, locked, managed_by, created_at
+RETURNING id, name, type, protocol, config, locked, managed_by, created_at, last_published_at
 `
 
 type UpdateRepositoryConfigParams struct {
@@ -126,6 +127,7 @@ func (q *Queries) UpdateRepositoryConfig(ctx context.Context, arg UpdateReposito
 		&i.Locked,
 		&i.ManagedBy,
 		&i.CreatedAt,
+		&i.LastPublishedAt,
 	)
 	return i, err
 }

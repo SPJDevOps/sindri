@@ -178,14 +178,15 @@ type RemoteCache struct {
 }
 
 type Repository struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	Protocol  string    `json:"protocol"`
-	Config    []byte    `json:"config"`
-	Locked    bool      `json:"locked"`
-	ManagedBy string    `json:"managed_by"`
-	CreatedAt time.Time `json:"created_at"`
+	ID              uuid.UUID          `json:"id"`
+	Name            string             `json:"name"`
+	Type            string             `json:"type"`
+	Protocol        string             `json:"protocol"`
+	Config          []byte             `json:"config"`
+	Locked          bool               `json:"locked"`
+	ManagedBy       string             `json:"managed_by"`
+	CreatedAt       time.Time          `json:"created_at"`
+	LastPublishedAt pgtype.Timestamptz `json:"last_published_at"`
 }
 
 type RepositoryBlob struct {
