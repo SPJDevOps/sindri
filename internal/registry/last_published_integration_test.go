@@ -136,3 +136,44 @@ func TestLastPublished_ConcurrentPublishesAllSucceedAndTheColumnIsTheMax(t *test
 		t.Fatal("last_published_at is not the newest published_at after concurrent publishes")
 	}
 }
+
+// The tag upsert always sets target_digest, and UPDATE OF fires whenever the
+// column is in the SET list. A proxy refreshing an unchanged tag, or a re-push
+// of the same digest, must not count as a publish; a tag that moves must.
+func TestLastPublished_OnlyATagThatMovesCountsAsAPublish(t *testing.T) {
+	const (
+		first  = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+		second = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	)
+	cases := []struct {
+		name     string
+		update   string
+		wantSame bool
+	}{
+		{name: "same digest leaves it", update: "UPDATE tags SET target_digest = '" + first + "'", wantSame: true},
+		{name: "moved tag advances it", update: "UPDATE tags SET target_digest = '" + second + "'", wantSame: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEvictFixture(t)
+			f.hostedRepo("oci-hosted", model.ProtocolOCI)
+			f.exec(`INSERT INTO blobs (digest, size, storage_backend) VALUES ('` + first + `', 1, 'test'), ('` + second + `', 1, 'test')`)
+			f.exec(`INSERT INTO packages (repo_id, normalized_name, display_name)
+				SELECT id, 'app', 'app' FROM repositories WHERE name = 'oci-hosted'`)
+			f.exec(`INSERT INTO tags (repo_id, package_id, name, target_digest)
+				SELECT p.repo_id, p.id, 'latest', '` + first + `' FROM packages p`)
+			if f.lastPublished("oci-hosted") == nil {
+				t.Fatal("last_published_at is NULL after a tag insert")
+			}
+			// Wind it back, so that any write by the update shows.
+			f.exec(`UPDATE repositories SET last_published_at = '2000-01-01T00:00:00Z' WHERE name = 'oci-hosted'`)
+			before := f.lastPublished("oci-hosted")
+
+			f.exec(tc.update)
+			after := f.lastPublished("oci-hosted")
+			if got := after.Equal(*before); got != tc.wantSame {
+				t.Fatalf("last_published_at unchanged = %v, want %v (before %v, after %v)", got, tc.wantSame, before, after)
+			}
+		})
+	}
+}

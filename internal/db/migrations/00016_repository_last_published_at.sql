@@ -3,7 +3,7 @@
 
 -- The last time a version was published into a repository, kept on the
 -- repository row so the repository list reads it instead of computing a max
--- over every version of every repository on the page (SIN-116: that join cost
+-- over every version of every repository on the page (v1.7.1: that join cost
 -- ~17ms of a ~21ms query on the 50,000-package seed and broke the page budget
 -- on a loaded CI runner).
 --
@@ -23,16 +23,6 @@
 --
 -- Backward compatible: the column is nullable and v1.7.0 never names it.
 ALTER TABLE repositories ADD COLUMN last_published_at timestamptz NULL;
-
-UPDATE repositories r
-SET last_published_at = s.newest
-FROM (
-    SELECT p.repo_id, max(v.published_at) AS newest
-    FROM versions v
-    JOIN packages p ON p.id = v.package_id
-    GROUP BY p.repo_id
-) s
-WHERE s.repo_id = r.id AND s.newest IS NOT NULL;
 
 CREATE FUNCTION repositories_note_publish() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -55,7 +45,7 @@ AFTER INSERT ON versions
 FOR EACH ROW EXECUTE FUNCTION repositories_note_publish();
 
 -- An OCI image has no versions row (it is a package plus tags), so a push is a
--- tag insert or move. The same rule applies there with now() as the time.
+-- tag insert or a tag moving to another digest. The same rule applies there with now() as the time.
 -- Existing OCI repositories stay NULL after the backfill: tags carry no
 -- timestamp, so their real time is not known. Pushing by digest alone, which
 -- creates no tag, is not a publish for this purpose.
@@ -71,14 +61,40 @@ END;
 $$;
 
 CREATE TRIGGER tags_note_publish
-AFTER INSERT OR UPDATE OF target_digest ON tags
+AFTER INSERT ON tags
 FOR EACH ROW EXECUTE FUNCTION repositories_note_tag_publish();
+
+-- UPDATE OF fires whenever the column is in the SET list, and the tag upsert
+-- always sets target_digest, so without the WHEN a proxy refreshing an
+-- unchanged tag, or a re-push of the same digest, would count as a publish.
+-- Only a tag that moves does, which matches PyPI and npm, where a re-fill of
+-- an existing version inserts no row.
+CREATE TRIGGER tags_note_move
+AFTER UPDATE OF target_digest ON tags
+FOR EACH ROW WHEN (OLD.target_digest IS DISTINCT FROM NEW.target_digest)
+EXECUTE FUNCTION repositories_note_tag_publish();
+
+-- The backfill runs after the triggers exist. CREATE TRIGGER takes a lock on
+-- versions and tags that blocks writers until this migration commits, so a
+-- publish from a still-running older server either lands before the backfill
+-- reads, or waits and then fires the trigger; none falls between the two.
+UPDATE repositories r
+SET last_published_at = s.newest
+FROM (
+    SELECT p.repo_id, max(v.published_at) AS newest
+    FROM versions v
+    JOIN packages p ON p.id = v.package_id
+    GROUP BY p.repo_id
+) s
+WHERE s.repo_id = r.id AND s.newest IS NOT NULL;
+
 
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
 
+DROP TRIGGER IF EXISTS tags_note_move ON tags;
 DROP TRIGGER IF EXISTS tags_note_publish ON tags;
 DROP FUNCTION IF EXISTS repositories_note_tag_publish();
 DROP TRIGGER IF EXISTS versions_note_publish ON versions;

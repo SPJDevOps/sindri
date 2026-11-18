@@ -309,12 +309,17 @@ dist_tag_events(id PK, repository, package, tag,  -- append only, no FKs (ADR 24
 ```
 
 `repositories.last_published_at` is the last time a version or tag was published into the
-repository, for the repository list. `AFTER INSERT` triggers on `versions` (newest
-`published_at`) and on `tags` (OCI has no `versions` rows; the insert or move time) keep it
-current, so every write path is covered, including a proxy cache fill. It never decreases:
-deleting versions, retention, and revoke leave it alone. Each publish updates the repository
-row, so concurrent publishes into one repository serialise briefly on that row lock; nothing
-takes an explicit share lock on `repositories`, so they cannot deadlock on it.
+repository, for the repository list. Triggers on `versions` (an insert, at its
+`published_at`) and on `tags` (OCI has no `versions` rows; an insert, or an update that
+moves the tag to another digest, at the time of the change) keep it current, so every write
+path is covered, including a proxy cache fill. A re-push or proxy refresh of an unchanged tag
+does not count. It never decreases: deleting versions, retention, and revoke leave it alone.
+Each publish updates the repository row, so concurrent publishes into one repository
+serialise briefly on that row lock. Nothing takes an explicit share lock on `repositories`,
+so publishes cannot deadlock with each other on it. Deleting a repository while something
+is published into it can deadlock (the delete holds the row and cascades into `packages`;
+the publish holds a `packages` row and wants the repository row); Postgres aborts one side
+with a deadlock error, which the client sees as a failed request.
 
 `repositories.config` carries what authorization and the reconciler read on
 the request path. That covers the owning team's namespace, which reconciler
