@@ -37,6 +37,14 @@ type vulnMetadata struct {
 	Fixed     string `json:"fixed"`
 }
 
+// refused reports whether the severity gate refuses this scan outright
+// (lifecycle evaluateScanRule): it lists no vulnerabilities, or it is a
+// platform scan with no platforms list. Either needs a new scan, so the page
+// must not read the digest as scanned.
+func (m scanMetadata) refused() bool {
+	return m.Vulnerabilities == nil || (m.Platform != "" && len(m.Platforms) == 0)
+}
+
 // parseSindriScan reads the metadata of a scan Sindri's own worker produced.
 // It reports false for anything else, or for metadata it cannot read: a
 // client-attached scan says nothing the page should present as Sindri's.

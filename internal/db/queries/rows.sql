@@ -93,38 +93,47 @@ WITH cur AS (
     SELECT DISTINCT t.package_id, t.target_digest AS digest
     FROM tags t
     WHERE t.package_id = ANY(sqlc.arg('package_ids')::uuid[])
-), newest AS (
+), scan_ids AS (
     -- The newest Sindri scan per platform: the rule of ListNewestSindriScans,
-    -- which the severity gate reads. Keep the two in step.
+    -- which the severity gate reads. Keep the two in step. Only the id is kept
+    -- here: a scan's metadata can be large, and it is read below for the
+    -- scans that were picked, not for every candidate.
     SELECT DISTINCT ON (c.package_id, c.digest, coalesce(e.metadata->>'platform', ''))
            c.package_id, c.digest, coalesce(e.metadata->>'platform', '') AS platform,
-           e.metadata->'severity_counts' AS counts, e.metadata->'platforms' AS platforms,
-           e.created_at
+           e.id, e.created_at
     FROM cur c
     JOIN evidence e ON e.subject_digest = c.digest
                    AND e.type = 'scan'
                    AND e.metadata->>'producer' = 'sindri'
     ORDER BY c.package_id, c.digest, coalesce(e.metadata->>'platform', ''), e.created_at DESC, e.id DESC
-), top AS (
-    -- The newest scan overall lists the platforms an index must have a scan
-    -- for, as the gate reads it (evaluateScanRule): newest created_at, the
-    -- first platform by name on a tie.
-    SELECT DISTINCT ON (package_id, digest) package_id, digest, platforms
-    FROM newest
-    ORDER BY package_id, digest, created_at DESC, platform
+), newest AS (
+    SELECT p.package_id, p.digest, p.platform, p.created_at,
+           e.metadata->'severity_counts' AS counts, e.metadata->'platforms' AS platforms,
+           -- The two scans the gate refuses outright (evaluateScanRule): no
+           -- vulnerabilities list, or a platform scan with no platforms list.
+           (jsonb_typeof(e.metadata->'vulnerabilities') IS DISTINCT FROM 'array')
+           OR (p.platform <> ''
+               AND coalesce(CASE WHEN jsonb_typeof(e.metadata->'platforms') = 'array' THEN jsonb_array_length(e.metadata->'platforms') END, 0) = 0) AS refused
+    FROM scan_ids p
+    JOIN evidence e ON e.id = p.id
 ), complete AS (
-    -- A digest is fully scanned when every platform that scan lists has a
-    -- newest scan of its own; an index with one of two scanned is not.
-    SELECT t.package_id, t.digest
-    FROM top t
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(t.platforms) = 'array' THEN t.platforms ELSE '[]'::jsonb END) AS want(platform)
-        WHERE NOT EXISTS (
-            SELECT 1 FROM newest n
-            WHERE n.package_id = t.package_id AND n.digest = t.digest AND n.platform = want.platform
-        )
-    )
+    -- A digest is fully scanned when no scan the gate refuses is among its
+    -- newest, and every platform the newest scan lists has a newest scan of its
+    -- own; an index with one of two scanned is not. The newest scan overall
+    -- names the required platforms, as the gate reads it (evaluateScanRule):
+    -- newest created_at, the first platform by name on a tie. One aggregate, so
+    -- the planner has no join to misjudge.
+    SELECT g.package_id, g.digest
+    FROM (
+        SELECT package_id, digest,
+               bool_or(refused) AS refused,
+               jsonb_agg(platform) AS have,
+               (array_agg(platforms ORDER BY created_at DESC, platform))[1] AS required
+        FROM newest
+        GROUP BY package_id, digest
+    ) g
+    WHERE NOT g.refused
+      AND CASE WHEN jsonb_typeof(g.required) = 'array' THEN g.required ELSE '[]'::jsonb END <@ g.have
 )
 SELECT c.package_id,
        count(DISTINCT c.digest)::bigint AS subjects,
@@ -151,38 +160,47 @@ WITH picked AS (
     FROM picked p
     JOIN versions v ON v.package_id = p.package_id AND v.version = p.version
     JOIN files f ON f.version_id = v.id AND f.upstream_gone_at IS NULL
-), newest AS (
+), scan_ids AS (
     -- The newest Sindri scan per platform: the rule of ListNewestSindriScans,
-    -- which the severity gate reads. Keep the two in step.
+    -- which the severity gate reads. Keep the two in step. Only the id is kept
+    -- here: a scan's metadata can be large, and it is read below for the
+    -- scans that were picked, not for every candidate.
     SELECT DISTINCT ON (c.package_id, c.digest, coalesce(e.metadata->>'platform', ''))
            c.package_id, c.digest, coalesce(e.metadata->>'platform', '') AS platform,
-           e.metadata->'severity_counts' AS counts, e.metadata->'platforms' AS platforms,
-           e.created_at
+           e.id, e.created_at
     FROM cur c
     JOIN evidence e ON e.subject_digest = c.digest
                    AND e.type = 'scan'
                    AND e.metadata->>'producer' = 'sindri'
     ORDER BY c.package_id, c.digest, coalesce(e.metadata->>'platform', ''), e.created_at DESC, e.id DESC
-), top AS (
-    -- The newest scan overall lists the platforms an index must have a scan
-    -- for, as the gate reads it (evaluateScanRule): newest created_at, the
-    -- first platform by name on a tie.
-    SELECT DISTINCT ON (package_id, digest) package_id, digest, platforms
-    FROM newest
-    ORDER BY package_id, digest, created_at DESC, platform
+), newest AS (
+    SELECT p.package_id, p.digest, p.platform, p.created_at,
+           e.metadata->'severity_counts' AS counts, e.metadata->'platforms' AS platforms,
+           -- The two scans the gate refuses outright (evaluateScanRule): no
+           -- vulnerabilities list, or a platform scan with no platforms list.
+           (jsonb_typeof(e.metadata->'vulnerabilities') IS DISTINCT FROM 'array')
+           OR (p.platform <> ''
+               AND coalesce(CASE WHEN jsonb_typeof(e.metadata->'platforms') = 'array' THEN jsonb_array_length(e.metadata->'platforms') END, 0) = 0) AS refused
+    FROM scan_ids p
+    JOIN evidence e ON e.id = p.id
 ), complete AS (
-    -- A digest is fully scanned when every platform that scan lists has a
-    -- newest scan of its own; an index with one of two scanned is not.
-    SELECT t.package_id, t.digest
-    FROM top t
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(t.platforms) = 'array' THEN t.platforms ELSE '[]'::jsonb END) AS want(platform)
-        WHERE NOT EXISTS (
-            SELECT 1 FROM newest n
-            WHERE n.package_id = t.package_id AND n.digest = t.digest AND n.platform = want.platform
-        )
-    )
+    -- A digest is fully scanned when no scan the gate refuses is among its
+    -- newest, and every platform the newest scan lists has a newest scan of its
+    -- own; an index with one of two scanned is not. The newest scan overall
+    -- names the required platforms, as the gate reads it (evaluateScanRule):
+    -- newest created_at, the first platform by name on a tie. One aggregate, so
+    -- the planner has no join to misjudge.
+    SELECT g.package_id, g.digest
+    FROM (
+        SELECT package_id, digest,
+               bool_or(refused) AS refused,
+               jsonb_agg(platform) AS have,
+               (array_agg(platforms ORDER BY created_at DESC, platform))[1] AS required
+        FROM newest
+        GROUP BY package_id, digest
+    ) g
+    WHERE NOT g.refused
+      AND CASE WHEN jsonb_typeof(g.required) = 'array' THEN g.required ELSE '[]'::jsonb END <@ g.have
 )
 SELECT c.package_id,
        count(DISTINCT c.digest)::bigint AS subjects,
@@ -263,21 +281,27 @@ SELECT w.digest::text AS digest,
            ) st
        ), '[]'::jsonb)::jsonb AS stages,
        COALESCE((
-           SELECT jsonb_agg(sc.summary)
+           SELECT jsonb_agg(jsonb_build_object(
+                      'producer', e.metadata->'producer',
+                      'platform', e.metadata->'platform',
+                      'platforms', e.metadata->'platforms',
+                      -- The scans the gate refuses outright (evaluateScanRule).
+                      'refused', (jsonb_typeof(e.metadata->'vulnerabilities') IS DISTINCT FROM 'array')
+                          OR (coalesce(e.metadata->>'platform', '') <> ''
+                              AND coalesce(CASE WHEN jsonb_typeof(e.metadata->'platforms') = 'array' THEN jsonb_array_length(e.metadata->'platforms') END, 0) = 0),
+                      'created_at', e.created_at,
+                      'severity_counts', e.metadata->'severity_counts'))
            FROM (
-               SELECT DISTINCT ON (coalesce(e.metadata->>'platform', ''))
-                      jsonb_build_object(
-                          'producer', e.metadata->'producer',
-                          'platform', e.metadata->'platform',
-                          'platforms', e.metadata->'platforms',
-                          'created_at', e.created_at,
-                          'severity_counts', e.metadata->'severity_counts') AS summary
-               FROM evidence e
-               WHERE e.subject_digest = w.digest
-                 AND e.type = 'scan'
-                 AND e.metadata->>'producer' = 'sindri'
-               ORDER BY coalesce(e.metadata->>'platform', ''), e.created_at DESC, e.id DESC
-           ) sc
+               -- Pick the scans by id first: a scan's metadata can be large and
+               -- is read only for the ones picked.
+               SELECT DISTINCT ON (coalesce(p.metadata->>'platform', '')) p.id
+               FROM evidence p
+               WHERE p.subject_digest = w.digest
+                 AND p.type = 'scan'
+                 AND p.metadata->>'producer' = 'sindri'
+               ORDER BY coalesce(p.metadata->>'platform', ''), p.created_at DESC, p.id DESC
+           ) pk
+           JOIN evidence e ON e.id = pk.id
        ), '[]'::jsonb)::jsonb AS scans
 FROM (SELECT DISTINCT d AS digest FROM unnest(sqlc.arg('digests')::text[]) AS d) w
 JOIN blobs b ON b.digest = w.digest

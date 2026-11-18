@@ -72,6 +72,7 @@ type scanPoint struct {
 	At        time.Time
 	Counts    map[string]int
 	Platforms []string
+	Refused   bool
 }
 
 // sindriScans groups a subject's Sindri scans by platform, oldest first with
@@ -87,7 +88,7 @@ func sindriScans(evs []evidence.Evidence) map[string][]scanPoint {
 		for sev, n := range meta.SeverityCounts {
 			counts[strings.ToUpper(sev)] = n
 		}
-		byPlatform[meta.Platform] = append(byPlatform[meta.Platform], scanPoint{ID: ev.ID, At: ev.CreatedAt, Counts: counts, Platforms: meta.Platforms})
+		byPlatform[meta.Platform] = append(byPlatform[meta.Platform], scanPoint{ID: ev.ID, At: ev.CreatedAt, Counts: counts, Platforms: meta.Platforms, Refused: meta.refused()})
 	}
 	for _, scans := range byPlatform {
 		slices.SortFunc(scans, func(a, b scanPoint) int {
@@ -156,7 +157,7 @@ func newVerdict(states []lifecycle.State, repo string, position map[string]int32
 	for _, p := range platforms {
 		list := scans[p]
 		last := list[len(list)-1]
-		set.add(p, last.Platforms, last.At)
+		set.add(p, last.Platforms, last.At, last.Refused)
 		for sev, n := range last.Counts {
 			total[sev] += n
 		}

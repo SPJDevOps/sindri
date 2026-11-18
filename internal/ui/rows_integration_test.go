@@ -24,10 +24,10 @@ import (
 // names is the subject's own, which is all the foreign key asks.
 func (e *env) sindriScan(d model.Digest, platform string, counts map[string]int) {
 	e.t.Helper()
-	meta := fmt.Sprintf(`{"producer":"sindri","severity_counts":{"CRITICAL":%d,"HIGH":%d,"MEDIUM":%d,"LOW":%d,"UNKNOWN":%d}`,
+	meta := fmt.Sprintf(`{"producer":"sindri","vulnerabilities":[],"severity_counts":{"CRITICAL":%d,"HIGH":%d,"MEDIUM":%d,"LOW":%d,"UNKNOWN":%d}`,
 		counts["CRITICAL"], counts["HIGH"], counts["MEDIUM"], counts["LOW"], counts["UNKNOWN"])
 	if platform != "" {
-		meta += fmt.Sprintf(`,"platform":%q`, platform)
+		meta += fmt.Sprintf(`,"platform":%q,"platforms":[%q]`, platform, platform)
 	}
 	meta += "}"
 	if _, err := e.pool.Exec(e.t.Context(), `
@@ -46,7 +46,7 @@ func (e *env) indexScan(d model.Digest, platform string, platforms []string, cou
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	meta := fmt.Sprintf(`{"producer":"sindri","platform":%q,"platforms":%s,"severity_counts":{"CRITICAL":%d,"HIGH":%d,"MEDIUM":%d,"LOW":%d,"UNKNOWN":%d}}`,
+	meta := fmt.Sprintf(`{"producer":"sindri","platform":%q,"platforms":%s,"vulnerabilities":[],"severity_counts":{"CRITICAL":%d,"HIGH":%d,"MEDIUM":%d,"LOW":%d,"UNKNOWN":%d}}`,
 		platform, list, counts["CRITICAL"], counts["HIGH"], counts["MEDIUM"], counts["LOW"], counts["UNKNOWN"])
 	if _, err := e.pool.Exec(e.t.Context(), `
 		INSERT INTO evidence (subject_digest, type, media_type, blob_digest, metadata, created_by)
@@ -565,6 +565,39 @@ func TestUI_ProxyRowsTakeNothingFromAHostedRepositoryHoldingTheSameDigest(t *tes
 		}
 		if strings.Contains(body, "team-b") || strings.Contains(body, "internal-release") {
 			t.Errorf("%s names the hidden repository or its tag", path)
+		}
+	}
+}
+
+// A scan written before index scans listed their platforms is refused by the
+// gate ("does not list the platforms of its index"), so the page must not read
+// the digest as scanned or clean, in the strip or the row.
+func TestUI_ALegacyPerPlatformIndexScanNeverReadsAsScanned(t *testing.T) {
+	e := newEnv(t)
+	idx := e.pushIndex("team-a", "legacy", "multi", "legacy")
+	if _, err := e.pool.Exec(t.Context(), `DELETE FROM tags WHERE name <> 'multi' AND package_id IN (SELECT id FROM packages WHERE normalized_name = 'legacy')`); err != nil {
+		t.Fatalf("dropping child tags: %v", err)
+	}
+	for _, arch := range []string{"linux/amd64", "linux/arm64"} {
+		if _, err := e.pool.Exec(t.Context(), `
+			INSERT INTO evidence (subject_digest, type, media_type, blob_digest, metadata, created_by)
+			VALUES ($1, 'scan', 'application/json', $1, $2::jsonb, 'system:scanner')`, idx.String(),
+			fmt.Sprintf(`{"producer":"sindri","platform":%q,"vulnerabilities":[],"severity_counts":{}}`, arch)); err != nil {
+			t.Fatalf("recording a legacy scan: %v", err)
+		}
+	}
+	body := e.get("alice", artifactPath("team-a", "legacy", idx, "&tag=multi")).body
+	start := strings.Index(body, `<div class="pills verdict"`)
+	if start < 0 {
+		t.Fatalf("no verdict strip:\n%s", body)
+	}
+	strip := body[start : start+strings.Index(body[start:], "</div>")]
+	if !strings.Contains(strip, "not scanned") || strings.Contains(strip, "no findings") {
+		t.Errorf("the verdict strip reads a refused scan as scanned:\n%s", strip)
+	}
+	for _, c := range []struct{ path, name string }{{"/ui/r/team-a", "legacy"}, {"/ui/r/team-a/-/package?name=legacy", "multi"}} {
+		if row := rowFor(t, e.get("alice", c.path).body, c.name); !strings.Contains(row, "not scanned") || strings.Contains(row, "no findings") {
+			t.Errorf("%s reads a refused scan as scanned:\n%s", c.path, row)
 		}
 	}
 }

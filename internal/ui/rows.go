@@ -41,12 +41,19 @@ type scanSet struct {
 	required []string
 	at       time.Time
 	set      bool
+	// refused is set when any scan is one the gate refuses outright: it lists
+	// no vulnerabilities, or it is a platform scan with no platforms list
+	// (written before index scans listed them). Such a digest needs a new scan.
+	refused bool
 }
 
 // add records the newest scan of one platform. Scans must arrive in platform
 // order, as the queries return them, so that on a tie in time the first
 // platform names the required set, as the gate's loop does.
-func (s *scanSet) add(platform string, platforms []string, at time.Time) {
+func (s *scanSet) add(platform string, platforms []string, at time.Time, refused bool) {
+	if refused {
+		s.refused = true
+	}
 	if s.have == nil {
 		s.have = map[string]bool{}
 	}
@@ -56,10 +63,10 @@ func (s *scanSet) add(platform string, platforms []string, at time.Time) {
 	}
 }
 
-// complete reports whether there is a scan and every platform the newest one
+// complete reports whether there is a scan the gate would accept and every platform the newest one
 // lists has one. A subject nobody scanned is not complete.
 func (s *scanSet) complete() bool {
-	if !s.set {
+	if !s.set || s.refused {
 		return false
 	}
 	for _, p := range s.required {
@@ -85,12 +92,13 @@ func scanCounts(scans []json.RawMessage) (counts map[string]int, scanned bool) {
 			continue
 		}
 		var when struct {
-			At time.Time `json:"created_at"`
+			At      time.Time `json:"created_at"`
+			Refused bool      `json:"refused"`
 		}
 		if err := json.Unmarshal(raw, &when); err != nil {
 			continue
 		}
-		set.add(meta.Platform, meta.Platforms, when.At)
+		set.add(meta.Platform, meta.Platforms, when.At, when.Refused)
 		for sev, n := range meta.SeverityCounts {
 			counts[strings.ToUpper(sev)] += n
 		}

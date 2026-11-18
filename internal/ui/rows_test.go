@@ -23,6 +23,7 @@ func TestSeverityOf_SumsScansAndNeverLooksCleanWithoutOne(t *testing.T) {
 	clean := `{"producer":"sindri","severity_counts":{"HIGH":0}}`
 	amd := `{"producer":"sindri","platform":"linux/amd64","platforms":["linux/amd64","linux/arm64"],"created_at":"2026-01-01T00:00:00Z","severity_counts":{"HIGH":0}}`
 	armListed := `{"producer":"sindri","platform":"linux/arm64","platforms":["linux/amd64","linux/arm64"],"created_at":"2026-01-01T00:00:00Z","severity_counts":{"HIGH":1}}`
+	refused := `{"producer":"sindri","platform":"linux/amd64","refused":true,"severity_counts":{"HIGH":0}}`
 	client := `{"producer":"ci","severity_counts":{"CRITICAL":9}}`
 	tests := []struct {
 		name        string
@@ -38,6 +39,7 @@ func TestSeverityOf_SumsScansAndNeverLooksCleanWithoutOne(t *testing.T) {
 		{"AnIndexWithOnlyOneListedPlatformScannedIsNotScanned", []lifecycle.SubjectSummary{{Scans: scans(amd)}}, false, nil},
 		{"AnIndexWithEveryListedPlatformScannedIsScanned", []lifecycle.SubjectSummary{{Scans: scans(amd, armListed)}}, true,
 			[]severityCount{{"high", "sev-high", 1}}},
+		{"AScanTheGateRefusesIsNotScanned", []lifecycle.SubjectSummary{{Scans: scans(refused)}}, false, nil},
 		{"AClientScanDoesNotCount", []lifecycle.SubjectSummary{{Scans: scans(client)}}, false, nil},
 		{"AnUnscannedFileMakesTheVersionNotScanned", []lifecycle.SubjectSummary{{Scans: scans(clean)}, {}}, false, nil},
 		{"FindingsStillShowWhenAnotherFileIsUnscanned", []lifecycle.SubjectSummary{{Scans: scans(high)}, {}}, false,

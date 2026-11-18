@@ -13,9 +13,13 @@ import (
 )
 
 func sindriScan(id string, at time.Time, platform string, counts string) evidence.Evidence {
+	platforms := ""
+	if platform != "" {
+		platforms = `"platforms":["` + platform + `"],`
+	}
 	return evidence.Evidence{
 		ID: id, Type: model.EvidenceScan, CreatedAt: at,
-		Metadata: json.RawMessage(`{"producer":"sindri","platform":"` + platform + `","severity_counts":` + counts + `}`),
+		Metadata: json.RawMessage(`{"producer":"sindri","platform":"` + platform + `",` + platforms + `"vulnerabilities":[],"severity_counts":` + counts + `}`),
 	}
 }
 
@@ -172,7 +176,7 @@ func TestVerdict_APartlyScannedIndexIsNotScanned(t *testing.T) {
 	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	scan := func(id string, at time.Time, platform, platforms string) evidence.Evidence {
 		return evidence.Evidence{ID: id, Type: model.EvidenceScan, CreatedAt: at, Metadata: json.RawMessage(
-			`{"producer":"sindri","platform":"` + platform + `","platforms":` + platforms + `,"severity_counts":{"HIGH":0}}`)}
+			`{"producer":"sindri","platform":"` + platform + `","platforms":` + platforms + `,"vulnerabilities":[],"severity_counts":{"HIGH":0}}`)}
 	}
 	both := `["linux/amd64","linux/arm64"]`
 	tests := []struct {
@@ -194,6 +198,33 @@ func TestVerdict_APartlyScannedIndexIsNotScanned(t *testing.T) {
 			v := newVerdict(nil, "r", map[string]int32{}, tc.evs)
 			if v.Severity.Scanned != tc.scanned {
 				t.Errorf("scanned = %v, want %v", v.Severity.Scanned, tc.scanned)
+			}
+		})
+	}
+}
+
+// The gate refuses a scan with no vulnerabilities list, and a platform scan with
+// no platforms list (evaluateScanRule); a digest it would refuse never reads as
+// scanned, whatever the counts say.
+func TestVerdict_AScanTheGateWouldRefuseIsNotScanned(t *testing.T) {
+	at := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		metadata string
+		scanned  bool
+	}{
+		{"CompleteSingleImageScan", `{"producer":"sindri","vulnerabilities":[],"severity_counts":{}}`, true},
+		{"NoVulnerabilitiesList", `{"producer":"sindri","severity_counts":{"HIGH":0}}`, false},
+		{"NullVulnerabilitiesList", `{"producer":"sindri","vulnerabilities":null,"severity_counts":{"HIGH":0}}`, false},
+		{"PlatformScanWithoutPlatformsList", `{"producer":"sindri","platform":"linux/amd64","vulnerabilities":[],"severity_counts":{}}`, false},
+		{"PlatformScanWithEmptyPlatformsList", `{"producer":"sindri","platform":"linux/amd64","platforms":[],"vulnerabilities":[],"severity_counts":{}}`, false},
+		{"PlatformScanWithItsList", `{"producer":"sindri","platform":"linux/amd64","platforms":["linux/amd64"],"vulnerabilities":[],"severity_counts":{}}`, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := evidence.Evidence{ID: "a", Type: model.EvidenceScan, CreatedAt: at, Metadata: json.RawMessage(tc.metadata)}
+			if got := newVerdict(nil, "r", map[string]int32{}, []evidence.Evidence{ev}).Severity.Scanned; got != tc.scanned {
+				t.Errorf("scanned = %v, want %v", got, tc.scanned)
 			}
 		})
 	}
