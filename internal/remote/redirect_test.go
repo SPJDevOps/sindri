@@ -56,6 +56,7 @@ func newRedirectFixture(t *testing.T) *redirectFixture {
 	f.client = New(Options{
 		Registry:    &registry.Registry{},
 		Credentials: StaticCredentials{"mirror": {Username: "user", Password: "s3cret"}},
+		HTTPClient:  ownTransport(f.upstream),
 	})
 	f.remote = registry.Remote{UpstreamURL: f.upstream.URL, CredentialsRef: "mirror"}
 	return f
@@ -189,6 +190,7 @@ func TestDo_PinnedRedirectOutsideTheBasePathCarriesNoCredentials(t *testing.T) {
 			client := New(Options{
 				Registry:    &registry.Registry{},
 				Credentials: StaticCredentials{"mirror": {Username: "user", Password: "s3cret"}},
+				HTTPClient:  ownTransport(upstream),
 			})
 			resp, err := client.do(t.Context(), upstreamRequest{
 				method:    http.MethodGet,
@@ -208,4 +210,13 @@ func TestDo_PinnedRedirectOutsideTheBasePathCarriesNoCredentials(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ownTransport gives a test its own connection pool. A client left to
+// http.DefaultTransport shares it with every parallel test, and each
+// httptest.Server.Close calls CloseIdleConnections on it, which can break a
+// connection another test has just taken from the pool ("http:
+// CloseIdleConnections called").
+func ownTransport(srv *httptest.Server) *http.Client {
+	return &http.Client{Transport: srv.Client().Transport}
 }

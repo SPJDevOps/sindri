@@ -113,7 +113,7 @@ func TestDo_OCIRequestNeverCarriesATokenCredential(t *testing.T) {
 				auth.Store(r.Header.Get("Authorization"))
 			}))
 			t.Cleanup(srv.Close)
-			c := New(Options{Registry: &registry.Registry{}, Credentials: StaticCredentials{"mirror": tc.cred}})
+			c := New(Options{Registry: &registry.Registry{}, Credentials: StaticCredentials{"mirror": tc.cred}, HTTPClient: ownTransport(srv)})
 			ur := upstreamRequest{method: http.MethodGet, url: srv.URL + "/v2/x", remote: registry.Remote{UpstreamURL: srv.URL, CredentialsRef: "mirror"}}
 			if tc.oci {
 				ur.tokenKey = "host|mirror|x"
