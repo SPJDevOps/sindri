@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
@@ -171,6 +172,14 @@ func TestOCI_PushPullAndPlacementGate(t *testing.T) {
 // Postgres behind the server's router, and returns the handler.
 func newOCIClient(t *testing.T) http.Handler {
 	t.Helper()
+	h, _ := newOCIStack(t)
+	return h
+}
+
+// newOCIStack is newOCIClient that also returns the database, for a test that
+// checks what a request left in it.
+func newOCIStack(t *testing.T) (http.Handler, *db.DB) {
+	t.Helper()
 	url := testsupport.StartPostgres(t)
 	opts := testsupport.DBOptions(url)
 	if err := db.Migrate(t.Context(), opts, nil); err != nil {
@@ -208,7 +217,7 @@ func newOCIClient(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
-	return srv.Handler()
+	return srv.Handler(), database
 }
 
 func pushBlob(t *testing.T, h http.Handler, repo string, payload []byte, digest string) {
@@ -719,5 +728,34 @@ func TestOCI_ImageNameWithReferrersSegmentStillServesManifests(t *testing.T) {
 	idx, _ := listReferrers(t, client, "team", subject.Digest.String(), "")
 	if len(idx.Manifests) != 0 {
 		t.Fatalf("referrers = %v, want none", digestsOf(idx))
+	}
+}
+
+func TestOCI_PushingATagAdvancesTheRepositoryLastPublish(t *testing.T) {
+	h, database := newOCIStack(t)
+	createRepo(t, h, "team/app", "oci")
+
+	lastPublished := func() *time.Time {
+		t.Helper()
+		var at *time.Time
+		if err := database.Pool().QueryRow(t.Context(),
+			`SELECT last_published_at FROM repositories WHERE name = 'team/app'`).Scan(&at); err != nil {
+			t.Fatalf("reading last_published_at: %v", err)
+		}
+		return at
+	}
+
+	if got := lastPublished(); got != nil {
+		t.Fatalf("last_published_at of an empty repository = %v, want NULL", got)
+	}
+	pushImageManifest(t, h, "team/app", "v1", "a")
+	first := lastPublished()
+	if first == nil {
+		t.Fatal("last_published_at is NULL after a push")
+	}
+	pushImageManifest(t, h, "team/app", "v2", "b")
+	second := lastPublished()
+	if second == nil || !second.After(*first) {
+		t.Fatalf("last_published_at after a second push = %v, want later than %v", second, first)
 	}
 }

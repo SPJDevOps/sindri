@@ -1472,3 +1472,30 @@ func TestPublish_InvalidProvenanceHeaderIsRefused(t *testing.T) {
 		})
 	}
 }
+
+func TestPublish_AdvancesTheRepositoryLastPublish(t *testing.T) {
+	f := newFixture(t, testPublicURL)
+	lastPublished := func() *time.Time {
+		t.Helper()
+		var at *time.Time
+		if err := f.data.Pool().QueryRow(t.Context(),
+			`SELECT last_published_at FROM repositories WHERE name = $1`, testRepo).Scan(&at); err != nil {
+			t.Fatalf("reading last_published_at: %v", err)
+		}
+		return at
+	}
+
+	if got := lastPublished(); got != nil {
+		t.Fatalf("last_published_at of an empty repository = %v, want NULL", got)
+	}
+	f.mustPublish("stamped", "1.0.0")
+	first := lastPublished()
+	if first == nil {
+		t.Fatal("last_published_at is NULL after a publish")
+	}
+	f.mustPublish("stamped", "1.1.0")
+	second := lastPublished()
+	if second == nil || !second.After(*first) {
+		t.Fatalf("last_published_at after a second publish = %v, want later than %v", second, first)
+	}
+}
