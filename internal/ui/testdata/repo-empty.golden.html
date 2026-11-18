@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
+<title>t · Sindri</title>
+<link rel="icon" href="/ui/static/VERSION/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/ui/static/VERSION/favicon.png" type="image/png" sizes="32x32">
+<link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
+<script src="/ui/static/VERSION/htmx.min.js" defer></script>
+<script src="/ui/static/VERSION/sindri.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container">
+    <a class="wordmark" href="/ui/"><img class="mark" src="/ui/static/VERSION/favicon.svg" alt="" width="24" height="24">Sindri</a>
+    <nav class="nav" aria-label="Main">
+      <a href="/ui/">Repositories</a>
+      
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    <details class="menu">
+      <summary>Menu</summary>
+      <nav class="menu-panel" aria-label="Menu">
+      <a href="/ui/">Repositories</a>
+      
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    </details>
+  </div>
+</header>
+<main id="main">
+  <div class="container">
+    
+    
+<h1 class="page-title">team/app</h1>
+<div class="pills"><span class="pill">hosted</span><span class="pill">oci</span></div>
+<section class="section">
+  <dl class="facts">
+    
+    <dt>Managed by</dt><dd>config</dd>
+    <dt>Lifecycle stages</dt><dd><span class="hint">none defined on this server</span></dd>
+    
+  </dl>
+</section>
+
+
+<section class="section">
+  <h2 class="section-title">Images</h2>
+  
+  <div id="package-results">
+  
+
+  
+  <div class="rows"><div class="row empty">Nothing published here yet.</div></div>
+  
+  <p class="hint step">Push an image. Sign in first, as above</p>
+  <div class="cmd"><pre><code>docker tag IMAGE:TAG sindri.example.test/team/app/IMAGE:TAG
+docker push sindri.example.test/team/app/IMAGE:TAG</code></pre><button class="copy" type="button" data-copy="docker tag IMAGE:TAG sindri.example.test/team/app/IMAGE:TAG
+docker push sindri.example.test/team/app/IMAGE:TAG" aria-label="Copy command">Copy</button></div>
+
+  
+
+
+  </div>
+</section>
+
+
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <span>Sindri 0.0.0-test</span>
+    <span>Read-only view. Changes go through configuration and the API, never this page.</span>
+    <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
+  </div>
+</footer>
+<div class="live" id="live" role="status" aria-live="polite"></div>
+<dialog class="keys" id="keys" aria-labelledby="keys-title">
+  <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
+  <dl class="facts">
+    <dt><kbd>g</kbd> then <kbd>r</kbd></dt><dd>Go to repositories</dd>
+    <dt><kbd>?</kbd></dt><dd>Show or hide this list</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Close this list</dd>
+  </dl>
+  <form method="dialog"><button class="close" type="submit">Close</button></form>
+</dialog>
+</body>
+</html>

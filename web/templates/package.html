@@ -5,44 +5,59 @@
 {{if eq .Repo.Protocol "oci"}}
 <section class="section">
   <h2 class="section-title">Tags</h2>
-  <div class="rows" id="tags">
-  {{template "tag-rows" .}}
+  <div class="table-wrap">
+  <table>
+    <thead>{{template "tag-head" .}}</thead>
+    <tbody id="tags">
+    {{template "tag-rows" .}}
+    </tbody>
+  </table>
   </div>
 </section>
 {{else}}
-{{if .DistTags}}
-<section class="section">
-  <h2 class="section-title">Dist-tags</h2>
-  <div class="rows">
-  {{range .DistTags}}
-    <div class="row"><span class="primary mono">{{.Tag}}</span><span class="secondary mono">{{.Version}}</span></div>
-  {{end}}
-  </div>
-</section>
-{{end}}
 <section class="section">
   <h2 class="section-title">Versions</h2>
-  <div class="rows">
-  {{range .Versions}}
-    <div class="version-group">{{.Version}}<button class="copy" type="button" data-copy="{{.Version}}" aria-label="Copy version">Copy</button></div>
-    {{if .Deprecated}}
-    <div class="row"><span class="primary"><span class="pill revoke">deprecated</span> {{.Deprecated}}</span></div>
+  {{if .Versions}}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Version</th><th scope="col">Published</th>{{if not .Repo.Upstream}}<th scope="col" class="col-owners">Owners</th><th scope="col">Stage</th><th scope="col">Findings</th>{{end}}<th scope="col" class="num col-size">Size</th></tr></thead>
+    <tbody>
+    {{range .Versions}}
+      <tr>
+        <td><span class="mono">{{.Version}}</span>{{range .Tags}} <span class="pill">{{.}}</span>{{end}}{{if .Deprecated}} <span class="pill revoke">deprecated</span>{{end}}<button class="copy" type="button" data-copy="{{.Version}}" aria-label="Copy version">Copy</button>
+          {{if .Deprecated}}<span class="by">{{.Deprecated}}</span>{{end}}
+          <span class="by">{{range $i, $f := .Files}}{{if $i}} {{end}}<a href="{{$f.Href}}">{{$f.Filename}}</a>{{end}}</span></td>
+        <td>{{if .Published.IsZero}}-{{else}}{{ago .Published}}{{end}}</td>
+        {{if not $.Repo.Upstream}}<td class="col-owners">{{range $i, $o := .Owners}}{{if $i}}, {{end}}<span class="mono">{{$o}}</span>{{else}}-{{end}}</td>
+        <td>{{template "stage-pill" .Stage}}</td>
+        <td><div class="pills">{{template "severity-pills" .Severity}}</div></td>{{end}}
+        <td class="num col-size">{{bytes .Size}}</td>
+      </tr>
     {{end}}
-    {{range .Files}}
-    <div class="row"><a class="primary mono" href="{{.Href}}">{{.Filename}}</a><span class="secondary">{{bytes .Size}}</span></div>
-    {{end}}
-  {{else}}
-    <div class="row empty">No files.</div>
-  {{end}}
+    </tbody>
+  </table>
   </div>
+  {{else}}
+  <div class="rows"><div class="row empty">No files.</div></div>
+  {{end}}
 </section>
 {{end}}
 {{end}}
 
-{{define "tag-rows"}}{{range .Tags}}
-    <div class="row"><span class="primary"><span class="mono">{{.Name}}</span></span>{{if .Href}}<span class="secondary"><a class="mono" href="{{.Href}}" title="{{.Digest}}">{{short .Digest}}</a><button class="copy" type="button" data-copy="{{.Digest}}" aria-label="Copy digest">Copy</button></span>{{else}}<span class="secondary">unavailable</span>{{end}}</div>
+{{define "tag-head"}}<tr><th scope="col">Tag</th><th scope="col">Digest</th>{{if not .Repo.Upstream}}<th scope="col">First published</th><th scope="col" class="col-owners">Owners</th><th scope="col">Stage</th><th scope="col">Findings</th>{{end}}<th scope="col" class="num col-size">Size</th></tr>{{end}}
+
+{{define "tag-rows"}}{{$proxy := .Repo.Upstream}}{{range .Tags}}
+    <tr>
+      <td><span class="mono">{{.Name}}</span>{{if gt .Shared 1}} <span class="pill" title="{{.Digest}} is the target of {{.Shared}} tags of this image">shared digest</span>{{end}}</td>
+      <td>{{if .Href}}<a class="mono" href="{{.Href}}" title="{{.Digest}}">{{short .Digest}}</a><button class="copy" type="button" data-copy="{{.Digest}}" aria-label="Copy digest">Copy</button>{{else}}unavailable{{end}}</td>
+      {{if not $proxy}}<td>{{if .Published.IsZero}}-{{else}}{{ago .Published}}{{end}}</td>
+      <td class="col-owners">{{range $i, $o := .Owners}}{{if $i}}, {{end}}<span class="mono">{{$o}}</span>{{else}}-{{end}}</td>
+      <td>{{template "stage-pill" .Stage}}</td>
+      <td><div class="pills">{{template "severity-pills" .Severity}}</div></td>{{end}}
+      <td class="num col-size">{{if .Size}}{{bytes .Size}}{{else}}-{{end}}</td>
+    </tr>
 {{else}}{{if not .Cursor}}
-    <div class="row empty">No tags.</div>
+    <tr><td class="more-row" colspan="7"><div class="row empty">No tags.</div></td></tr>
 {{end}}{{end}}{{if .More}}
-    <div class="more"><button type="button" hx-get="{{.More}}" hx-target="closest .more" hx-swap="outerHTML">Load more</button></div>
+    <tr><td class="more-row" colspan="7"><div class="more"><button type="button" hx-get="{{.More}}" hx-target="closest tr" hx-swap="outerHTML">Load more</button></div></td></tr>
 {{end}}{{end}}

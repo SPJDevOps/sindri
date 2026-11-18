@@ -151,6 +151,22 @@
 </section>
 
 <section class="section">
+  <h2 class="section-title">Package rows</h2>
+  <p class="hint">A tag or version row. The stage pill (<code>stage-pill</code>) and the severity pills (<code>severity-pills</code>) are shared partials, so every row, header, and table shows a verdict the same way. Below 900px the size column (<code>.col-size</code>) goes, below 720px the owners (<code>.col-owners</code>); the pills never do. The last row of a paged table is <code>td.more-row</code>.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Version</th><th scope="col" class="col-owners">Owners</th><th scope="col">Stage</th><th scope="col">Findings</th><th scope="col" class="num col-size">Size</th></tr></thead>
+    <tbody>
+      <tr><td><span class="mono">1.2.0</span> <span class="pill">latest</span></td><td class="col-owners"><span class="mono">repository:team/app</span></td><td><span class="pill approve">prod</span></td><td><div class="pills"><span class="pill sev-critical">1 critical</span><span class="pill sev-high">3 high</span><span class="pill sev-low">7 low</span></div></td><td class="num col-size">4.0 KiB</td></tr>
+      <tr><td><span class="mono">1.1.0</span> <span class="pill revoke">deprecated</span><span class="by">use 1.2.0</span></td><td class="col-owners">-</td><td><span class="pill none">not promoted</span></td><td><div class="pills"><span class="pill sev-none">no findings</span></div></td><td class="num col-size">3.9 KiB</td></tr>
+      <tr><td><span class="mono">1.0.0</span></td><td class="col-owners">-</td><td><span class="pill approve">dev</span></td><td><div class="pills"><span class="pill none">not scanned</span></div></td><td class="num col-size">3.2 KiB</td></tr>
+      <tr><td class="more-row" colspan="5"><div class="more"><button type="button">Load more</button></div></td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="section">
   <h2 class="section-title">Command block</h2>
   <p class="hint">Mono, scrolls sideways, never wraps. The copy button is hidden until a script sets html.js-enhanced on the page.</p>
   <div class="cmd"><pre><code>docker pull registry.example.com/team/app@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</code></pre><button class="copy" type="button" data-copy="docker pull registry.example.com/team/app@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy the pull command">Copy</button></div>

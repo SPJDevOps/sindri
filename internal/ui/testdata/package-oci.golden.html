@@ -42,10 +42,55 @@
 
 <section class="section">
   <h2 class="section-title">Tags</h2>
-  <div class="rows" id="tags">
-  
-    <div class="row"><span class="primary"><span class="mono">1.0</span></span><span class="secondary"><a class="mono" href="/ui/r/team/app/-/artifact?digest=sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe">sha256:4b825dc642cb</a><button class="copy" type="button" data-copy="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy digest">Copy</button></span></div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Tag</th><th scope="col">Digest</th><th scope="col">First published</th><th scope="col" class="col-owners">Owners</th><th scope="col">Stage</th><th scope="col">Findings</th><th scope="col" class="num col-size">Size</th></tr></thead>
+    <tbody id="tags">
+    
+    <tr>
+      <td><span class="mono">1.0</span> <span class="pill" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe is the target of 2 tags of this image">shared digest</span></td>
+      <td><a class="mono" href="/ui/r/team/app/-/artifact?digest=sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe">sha256:4b825dc642cb</a><button class="copy" type="button" data-copy="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy digest">Copy</button></td>
+      <td><time datetime="2020-03-14T15:09:26Z" title="2020-03-14T15:09:26Z">14 Mar 2020</time></td>
+      <td class="col-owners"><span class="mono">repository:team/app</span></td>
+      <td><span class="pill approve">prod</span></td>
+      <td><div class="pills"><span class="pill sev-critical">1 critical</span><span class="pill sev-low">7 low</span></div></td>
+      <td class="num col-size">5.0 MiB</td>
+    </tr>
 
+    <tr>
+      <td><span class="mono">latest</span> <span class="pill" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe is the target of 2 tags of this image">shared digest</span></td>
+      <td><a class="mono" href="/ui/r/team/app/-/artifact?digest=sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe">sha256:4b825dc642cb</a><button class="copy" type="button" data-copy="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy digest">Copy</button></td>
+      <td><time datetime="2020-03-14T15:09:26Z" title="2020-03-14T15:09:26Z">14 Mar 2020</time></td>
+      <td class="col-owners"><span class="mono">repository:team/app</span></td>
+      <td><span class="pill approve">prod</span></td>
+      <td><div class="pills"><span class="pill sev-critical">1 critical</span><span class="pill sev-low">7 low</span></div></td>
+      <td class="num col-size">5.0 MiB</td>
+    </tr>
+
+    <tr>
+      <td><span class="mono">2.0-rc1</span></td>
+      <td><a class="mono" href="/ui/r/team/app/-/artifact?digest=sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebab0">sha256:4b825dc642cb</a><button class="copy" type="button" data-copy="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebab0" aria-label="Copy digest">Copy</button></td>
+      <td><time datetime="2020-03-14T15:09:26Z" title="2020-03-14T15:09:26Z">14 Mar 2020</time></td>
+      <td class="col-owners">-</td>
+      <td><span class="pill none">not promoted</span></td>
+      <td><div class="pills"><span class="pill sev-none">no findings</span></div></td>
+      <td class="num col-size">6.0 MiB</td>
+    </tr>
+
+    <tr>
+      <td><span class="mono">scratch</span></td>
+      <td><a class="mono" href="/ui/r/team/app/-/artifact?digest=sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebab1">sha256:4b825dc642cb</a><button class="copy" type="button" data-copy="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebab1" aria-label="Copy digest">Copy</button></td>
+      <td>-</td>
+      <td class="col-owners">-</td>
+      <td><span class="pill none">not promoted</span></td>
+      <td><div class="pills"><span class="pill none">not scanned</span></div></td>
+      <td class="num col-size">1.0 MiB</td>
+    </tr>
+
+    <tr><td class="more-row" colspan="7"><div class="more"><button type="button" hx-get="/ui/r/team/app/-/package?name=web&amp;cursor=scratch" hx-target="closest tr" hx-swap="outerHTML">Load more</button></div></td></tr>
+
+    </tbody>
+  </table>
   </div>
 </section>
 

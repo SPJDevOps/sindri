@@ -227,3 +227,31 @@ func TestInstallNotes_SayWhatTheCommandLeavesToConfiguration(t *testing.T) {
 		t.Errorf("loopback notes = %q, want no insecure-registries caution", got)
 	}
 }
+
+func TestPublishCommands_ShowTheFirstPublishOfAHostedRepositoryOnly(t *testing.T) {
+	in := func(proto model.Protocol, kind model.RepoType) cmdInput {
+		return cmdInput{Base: "https://sindri.example.com", Repo: "team/app", Protocol: proto, Kind: kind}
+	}
+	tests := []struct {
+		name string
+		in   cmdInput
+		want []string
+	}{
+		{"OCI", in(model.ProtocolOCI, model.RepoTypeHosted),
+			[]string{"docker tag IMAGE:TAG sindri.example.com/team/app/IMAGE:TAG\ndocker push sindri.example.com/team/app/IMAGE:TAG"}},
+		{"PyPI", in(model.ProtocolPyPI, model.RepoTypeHosted),
+			[]string{"python -m twine upload \\\n  --repository-url https://sindri.example.com/pypi/team/app/upload \\\n  -u token -p \"$SINDRI_TOKEN\" dist/*"}},
+		{"NPM", in(model.ProtocolNPM, model.RepoTypeHosted),
+			[]string{"npm publish --registry https://sindri.example.com/npm/team/app/"}},
+		{"ProxyHasNone", in(model.ProtocolOCI, model.RepoTypeProxy), nil},
+		{"VirtualHasNone", in(model.ProtocolNPM, model.RepoTypeVirtual), nil},
+		{"AnUnsafeNameHasNone", cmdInput{Base: "https://sindri.example.com", Repo: "team/app; rm -rf", Protocol: model.ProtocolOCI, Kind: model.RepoTypeHosted}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := texts(PublishCommands(tc.in)); !slices.Equal(got, tc.want) {
+				t.Errorf("PublishCommands = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -56,6 +56,12 @@ type SeedInfo struct {
 
 	// Tags on OCIImage in HostedOCI, more than one page of them.
 	OCITags int
+	// HugeTagImage is a second image of HostedOCI with HugeTags tags, each its
+	// own manifest with an identity, most with scans and approvals: the shape
+	// of a busy CI repository, for the pages that list tags and for the
+	// repository page that summarises every tag of an image.
+	HugeTagImage string
+	HugeTags     int
 	// Versions of PyPIPackage and NPMPackage, which are deliberately large.
 	HeavyVersions int
 }
@@ -67,6 +73,7 @@ const (
 	seedProxyPackages      = 50
 	seedHeavyVersions      = 120
 	seedHeavyTags          = 60
+	seedHugeTags           = 2000
 	seedKnownScanFindings  = 300
 	seedSubjectEveryNth    = 4
 	seedRevokeEveryNth     = 7
@@ -291,6 +298,7 @@ func (s *seeder) generate() {
 	s.info.PyPIRepo, s.info.PyPIPackage = repoName("pypi", "hosted", 1), "pkg-0001"
 	s.info.NPMRepo, s.info.NPMPackage = repoName("npm", "hosted", 1), "pkg-0001"
 	s.info.OCITags, s.info.HeavyVersions = seedHeavyTags, seedHeavyVersions
+	s.info.HugeTagImage, s.info.HugeTags = "pkg-0002", seedHugeTags
 
 	for _, p := range seedProtocols {
 		for _, r := range hosted[p.name] {
@@ -341,6 +349,9 @@ func (s *seeder) genPackage(r seedRepo, j int) {
 		if r.protocol == "oci" {
 			n = seedHeavyTags
 		}
+	}
+	if r.protocol == "oci" && r.typ == "hosted" && r.index == 1 && j == 2 {
+		n = seedHugeTags
 	}
 	for k := 0; k < n; k++ {
 		s.artifact++

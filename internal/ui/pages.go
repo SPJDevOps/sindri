@@ -194,24 +194,82 @@ type repoPage struct {
 	Upstream  string
 	IsVirtual bool
 	Members   []link
-	Packages  []link
-	Cursor    string
-	More      string
+	Facts     repoFacts
+	// The package list: the rows of this page, the matching total across
+	// pages, and the controls that narrow and order it.
+	Filter    pkgFilter
+	Total     int64
+	From, To  int
+	Rows      []pkgRow
+	Sorts     []optionView
+	ClearHref string
+	Pager     *pagerView
+	// Publish is the command that puts the first artifact into an empty hosted
+	// repository.
+	Publish []cmdStep
 	// Use is the "Set up your client" section.
 	Use *usePanel
 }
 
+// visibleRepos is the set of repository names the caller may read, for showing
+// only the owners they may see.
+func (h *handler) visibleRepos(r *http.Request) (map[string]bool, error) {
+	all, err := h.opts.Registry.AllRepositories(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	visible := make(map[string]bool, len(all))
+	for _, repo := range all {
+		if readable(r, repo) {
+			visible[repo.Name] = true
+		}
+	}
+	return visible, nil
+}
+
+// facts fills the header facts of a hosted or proxy repository: the lifecycle
+// stages that apply to a hosted one, and what a proxy has cached.
+func (h *handler) facts(r *http.Request, repo model.Repository) (repoFacts, error) {
+	ctx := r.Context()
+	f := repoFacts{IsHosted: repo.Type == model.RepoTypeHosted, IsProxy: repo.Type == model.RepoTypeProxy}
+	switch repo.Type {
+	case model.RepoTypeHosted:
+		stages, err := h.opts.Lifecycle.ListStages(ctx)
+		if err != nil {
+			return f, err
+		}
+		for _, st := range stages {
+			if repo.Lifecycle.AllowsStage(st.Name) {
+				f.Stages = append(f.Stages, st.Name)
+			}
+		}
+		f.NoStages = len(f.Stages) == 0
+	case model.RepoTypeProxy:
+		stats, err := h.opts.Registry.RemoteCacheStatsFor(ctx, repo.Name)
+		if err != nil {
+			return f, err
+		}
+		f.Entries, f.LastFetch = stats.Entries, stats.LastFetched
+	case model.RepoTypeVirtual:
+	}
+	return f, nil
+}
+
 func (h *handler) repositoryPage(w http.ResponseWriter, r *http.Request, repo model.Repository) {
 	view := viewRepo(repo)
+	filter := parsePkgFilter(r.URL.Query())
 	data := repoPage{
 		chrome: h.chrome(r, repo.Name, crumb{"repositories", Prefix + "/"}, crumb{repo.Name, ""}),
 		Repo:   view,
-		Cursor: r.URL.Query().Get("cursor"),
+		Filter: filter,
+		Sorts:  slices.Clone(packageSorts),
+	}
+	for i := range data.Sorts {
+		data.Sorts[i].Selected = data.Sorts[i].Value == filter.Sort
 	}
 	in := h.commandInput(r, repo)
 	data.Use = h.panel(r, "Set up your client", in, SetupCommands(in), ociNotes(in))
-	switch repo.Type {
-	case model.RepoTypeVirtual:
+	if repo.Type == model.RepoTypeVirtual {
 		data.IsVirtual = true
 		members, err := h.readableMembers(r, repo.Name)
 		if err != nil {
@@ -223,37 +281,127 @@ func (h *handler) repositoryPage(w http.ResponseWriter, r *http.Request, repo mo
 		}
 		h.render(w, r, "repo", "", http.StatusOK, data)
 		return
-	case model.RepoTypeProxy:
-		if remote, err := h.opts.Registry.GetRemote(r.Context(), repo.Name); err == nil {
-			data.Upstream = model.RedactUserinfo(remote.UpstreamURL)
-		}
-	case model.RepoTypeHosted:
 	}
 
-	page, err := h.opts.Registry.ListPackages(r.Context(), registry.ListPackagesParams{
-		Repo: repo.Name, After: data.Cursor, Limit: pageSize,
-	})
-	if err != nil {
-		if errors.Is(err, registry.ErrInvalidInput) {
-			h.notFound(w, r)
-			return
-		}
+	var err error
+	if data.Facts, err = h.facts(r, repo); err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	for _, p := range page.Items {
-		data.Packages = append(data.Packages, link{Name: packageLabel(repo, p.NormalizedName), Href: packageHref(repo.Name, p.NormalizedName)})
+	if repo.Type == model.RepoTypeProxy {
+		if remote, err := h.opts.Registry.GetRemote(r.Context(), repo.Name); err == nil {
+			data.Upstream = model.RedactUserinfo(remote.UpstreamURL)
+		}
 	}
-	if page.NextCursor != "" {
-		data.More = repoHref(repo.Name) + "?" + url.Values{"cursor": {page.NextCursor}}.Encode()
+
+	page := max(filter.Page, 1)
+	list, err := h.packageRows(r, repo, filter, page)
+	if err != nil {
+		h.fail(w, r, err)
+		return
 	}
-	h.render(w, r, "repo", "package-rows", http.StatusOK, data)
+	if len(list.Rows) == 0 && list.Total > 0 && page > 1 {
+		// A page past the end of what the filter now keeps: show the last.
+		page = int((list.Total + pageSize - 1) / pageSize)
+		if list, err = h.packageRows(r, repo, filter, page); err != nil {
+			h.fail(w, r, err)
+			return
+		}
+	}
+	filter.Page = page
+	data.Filter = filter
+	data.Total = list.Total
+	data.Rows = list.Rows
+	data.ClearHref = repoHref(repo.Name)
+	if filter.Sort != sortName {
+		data.ClearHref = pkgFilter{Sort: filter.Sort}.href(repo.Name)
+	}
+	if len(data.Rows) > 0 {
+		data.From = (page-1)*pageSize + 1
+		data.To = data.From + len(data.Rows) - 1
+	}
+	if pages := int((list.Total + pageSize - 1) / pageSize); pages > 1 {
+		pv := &pagerView{Page: page, Pages: pages}
+		if page > 1 {
+			prev := filter
+			prev.Page = page - 1
+			pv.Prev = prev.href(repo.Name)
+		}
+		if page < pages {
+			next := filter
+			next.Page = page + 1
+			pv.Next = next.href(repo.Name)
+		}
+		data.Pager = pv
+	}
+	if list.Total == 0 && !filter.Active() && repo.Type == model.RepoTypeHosted {
+		data.Publish = PublishCommands(in)
+	}
+	// A history restore asks for the whole page even though htmx sent it.
+	partial := "package-results"
+	if r.Header.Get("HX-History-Restore-Request") == "true" {
+		partial = ""
+	}
+	h.render(w, r, "repo", partial, http.StatusOK, data)
+}
+
+// packageRows loads one page of a repository's packages with each row's figures.
+// Hosted rows also carry a worst severity, from the scans of the versions that
+// count as current; proxy content has no scan and no stage, so its rows show
+// none (security rule 8: the page never presents upstream content as vetted).
+func (h *handler) packageRows(r *http.Request, repo model.Repository, filter pkgFilter, page int) (pkgList, error) {
+	ctx := r.Context()
+	list, err := h.opts.Registry.ListPackageRows(ctx, registry.PackageRowsParams{
+		Repo: repo.Name, NameContains: filter.Q, Sort: filter.registrySort(),
+		Limit: pageSize, Offset: int32((page - 1) * pageSize), //nolint:gosec // G115: a page number is bounded by the row count
+	})
+	if err != nil {
+		return pkgList{}, err
+	}
+	out := pkgList{Total: list.Total, Rows: make([]pkgRow, 0, len(list.Rows))}
+	hosted := repo.Type == model.RepoTypeHosted
+	var sums map[model.Digest]lifecycle.SubjectSummary
+	if hosted {
+		var digests []model.Digest
+		for _, row := range list.Rows {
+			digests = append(digests, row.Current...)
+		}
+		if sums, err = h.opts.Lifecycle.Summaries(ctx, digests, []string{repo.Name}); err != nil {
+			return pkgList{}, err
+		}
+	}
+	for _, row := range list.Rows {
+		pr := pkgRow{
+			Name: packageLabel(repo, row.Name), Href: packageHref(repo.Name, row.Name),
+			Latest: row.Latest, Versions: row.Versions, Published: row.LastPublished,
+			HasSeverity: hosted,
+		}
+		if hosted {
+			pr.Severity = worstOf(severityOf(pickSummaries(sums, row.Current)))
+		}
+		out.Rows = append(out.Rows, pr)
+	}
+	return out, nil
+}
+
+// pkgList is one page of package rows and the total across pages.
+type pkgList struct {
+	Rows  []pkgRow
+	Total int64
 }
 
 type tagRow struct {
 	Name   string
 	Digest string
 	Href   string
+	// Shared is how many tags of the image share this digest, this one included.
+	Shared int64
+	// Published is the digest's first publish; zero for proxy content.
+	Published time.Time
+	Owners    []string
+	Stage     string
+	Severity  severityView
+	Size      int64
 }
 
 type fileRow struct {
@@ -262,15 +410,18 @@ type fileRow struct {
 	Href     string
 }
 
-type versionGroup struct {
+// versionRow is one version of an npm or PyPI package: the row's verdict is that
+// of all its files together.
+type versionRow struct {
 	Version    string
-	Deprecated string // an npm deprecation message; empty otherwise
+	Tags       []string // the dist-tags that point here
+	Deprecated string   // an npm deprecation message; empty otherwise
+	Published  time.Time
+	Owners     []string
+	Stage      string
+	Severity   severityView
+	Size       int64
 	Files      []fileRow
-}
-
-type distTagRow struct {
-	Tag     string
-	Version string
 }
 
 type packagePage struct {
@@ -278,16 +429,15 @@ type packagePage struct {
 	Repo     repoView
 	Package  string
 	Tags     []tagRow
-	DistTags []distTagRow
-	Versions []versionGroup
+	Versions []versionRow
 	Cursor   string
 	More     string
 	// Use is the pull or install section.
 	Use *usePanel
 }
 
-// packagePage lists an OCI image's tags, or the files of a PyPI project or npm
-// package by version.
+// packagePage lists an OCI image's tags, or the versions of a PyPI project or
+// npm package, each with its verdict.
 func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model.Repository) {
 	name := r.URL.Query().Get("name")
 	if name == "" || repo.Type == model.RepoTypeVirtual {
@@ -313,12 +463,17 @@ func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model
 			h.notFound(w, r)
 			return
 		}
+		var ins []versionIn
 		for _, f := range files {
-			if n := len(data.Versions); n == 0 || data.Versions[n-1].Version != f.Version {
-				data.Versions = append(data.Versions, versionGroup{Version: f.Version})
+			if n := len(ins); n == 0 || ins[n-1].Version != f.Version {
+				ins = append(ins, versionIn{Version: f.Version, Published: f.PublishedAt})
 			}
-			g := &data.Versions[len(data.Versions)-1]
-			g.Files = append(g.Files, fileRow{Filename: f.Filename, Size: f.Size, Href: artifactHref(repo.Name, name, f.Digest)})
+			g := &ins[len(ins)-1]
+			g.Files = append(g.Files, f)
+		}
+		if data.Versions, err = h.versionRows(r, repo, name, ins, nil); err != nil {
+			h.fail(w, r, err)
+			return
 		}
 		in := h.commandInput(r, repo)
 		in.Package = name
@@ -339,8 +494,9 @@ func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model
 		h.registryError(w, r, err)
 		return
 	}
-	for _, tag := range tags.Items {
-		data.Tags = append(data.Tags, tagRow{Name: tag.Name, Digest: tag.Digest.String(), Href: artifactTagHref(repo.Name, name, tag.Digest, tag.Name)})
+	if data.Tags, err = h.tagRows(r, repo, name, tags.Items); err != nil {
+		h.fail(w, r, err)
+		return
 	}
 	if len(data.Tags) > 0 {
 		in := h.commandInput(r, repo)
@@ -353,33 +509,136 @@ func (h *handler) packagePage(w http.ResponseWriter, r *http.Request, repo model
 	h.render(w, r, "package", "tag-rows", http.StatusOK, data)
 }
 
+// tagRows builds the rows of one page of tags from one batch of summaries. The
+// digests came from the repository's own tag rows, so they are placed in it
+// (invariant I2). Proxy content has no identity, so its rows carry a digest and
+// a size and nothing about owners, stage, or scans.
+func (h *handler) tagRows(r *http.Request, repo model.Repository, image string, tags []registry.TagTarget) ([]tagRow, error) {
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	hosted := repo.Type == model.RepoTypeHosted
+	digests := make([]model.Digest, len(tags))
+	for i, t := range tags {
+		digests[i] = t.Digest
+	}
+	scope := []string{}
+	if hosted {
+		scope = []string{repo.Name}
+	}
+	sums, err := h.opts.Lifecycle.Summaries(r.Context(), digests, scope)
+	if err != nil {
+		return nil, err
+	}
+	var visible map[string]bool
+	if hosted {
+		if visible, err = h.visibleRepos(r); err != nil {
+			return nil, err
+		}
+	}
+	rows := make([]tagRow, 0, len(tags))
+	for _, t := range tags {
+		row := tagRow{
+			Name: t.Name, Digest: t.Digest.String(), Shared: t.Shared,
+			Href: artifactTagHref(repo.Name, image, t.Digest, t.Name),
+		}
+		if s, ok := sums[t.Digest]; ok {
+			row.Size = s.TotalSize
+			if hosted {
+				one := []lifecycle.SubjectSummary{s}
+				row.Published = s.CreatedAt
+				row.Owners = ownersOf(one, visible)
+				row.Stage = stageOf(one, repo.Name)
+				row.Severity = severityOf(one)
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+// versionIn is one version of a package and its files, as either protocol
+// reports them.
+type versionIn struct {
+	Version    string
+	Deprecated string
+	Published  time.Time
+	Files      []registry.PackageFile
+}
+
+// versionRows builds the version table, highest version first, from one batch
+// of summaries for every file. distTags maps a version to the dist-tags that
+// point at it.
+func (h *handler) versionRows(r *http.Request, repo model.Repository, pkg string, ins []versionIn, distTags map[string][]string) ([]versionRow, error) {
+	hosted := repo.Type == model.RepoTypeHosted
+	var digests []model.Digest
+	for _, v := range ins {
+		for _, f := range v.Files {
+			digests = append(digests, f.Digest)
+		}
+	}
+	var sums map[model.Digest]lifecycle.SubjectSummary
+	var visible map[string]bool
+	if hosted {
+		var err error
+		if sums, err = h.opts.Lifecycle.Summaries(r.Context(), digests, []string{repo.Name}); err != nil {
+			return nil, err
+		}
+		if visible, err = h.visibleRepos(r); err != nil {
+			return nil, err
+		}
+	}
+	cmp := model.VersionComparator(repo.Protocol)
+	slices.SortStableFunc(ins, func(a, b versionIn) int { return cmp(b.Version, a.Version) })
+	rows := make([]versionRow, 0, len(ins))
+	for _, v := range ins {
+		row := versionRow{Version: v.Version, Tags: distTags[v.Version], Deprecated: v.Deprecated, Published: v.Published}
+		var fileDigests []model.Digest
+		for _, f := range v.Files {
+			row.Size += f.Size
+			row.Files = append(row.Files, fileRow{Filename: f.Filename, Size: f.Size, Href: artifactHref(repo.Name, pkg, f.Digest)})
+			fileDigests = append(fileDigests, f.Digest)
+		}
+		if hosted {
+			own := pickSummaries(sums, fileDigests)
+			row.Owners = ownersOf(own, visible)
+			row.Stage = stageOf(own, repo.Name)
+			row.Severity = severityOf(own)
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
 // npmPackagePage lists what the registry holds for an npm package: every
-// version with its tarball and deprecation, and the dist-tags. A hosted
-// repository has dist-tags; a proxy's rows are versions it has cached, with none.
-// Nothing here contacts an upstream.
+// version with its tarball, deprecation, and verdict, and the dist-tags as
+// pills on the versions they point at. A hosted repository has dist-tags; a
+// proxy's rows are versions it has cached, with none. Nothing here contacts an
+// upstream.
 func (h *handler) npmPackagePage(w http.ResponseWriter, r *http.Request, repo model.Repository, name string, data packagePage) {
 	pkg, err := h.opts.Registry.GetNPMPackage(r.Context(), repo.Name, name)
 	if err != nil {
 		h.registryError(w, r, err)
 		return
 	}
+	ins := make([]versionIn, 0, len(pkg.Versions))
 	for _, v := range pkg.Versions {
-		data.Versions = append(data.Versions, versionGroup{
-			Version:    v.Version,
-			Deprecated: v.Deprecated,
-			Files: []fileRow{{
-				Filename: v.File.Filename, Size: v.File.Size,
-				Href: artifactHref(repo.Name, name, v.File.Digest),
-			}},
-		})
+		ins = append(ins, versionIn{Version: v.Version, Deprecated: v.Deprecated, Published: v.PublishedAt, Files: []registry.PackageFile{v.File}})
 	}
+	tagsOf := map[string][]string{}
 	for tag, version := range pkg.DistTags {
-		data.DistTags = append(data.DistTags, distTagRow{Tag: tag, Version: version})
+		tagsOf[version] = append(tagsOf[version], tag)
 	}
-	slices.SortFunc(data.DistTags, func(a, b distTagRow) int { return strings.Compare(a.Tag, b.Tag) })
+	for _, tags := range tagsOf {
+		slices.Sort(tags)
+	}
+	if data.Versions, err = h.versionRows(r, repo, name, ins, tagsOf); err != nil {
+		h.fail(w, r, err)
+		return
+	}
 	in := h.commandInput(r, repo)
-	// The version list is not in semver order, so the page pins only what
-	// the registry names: the latest dist-tag. Without one, the client picks.
+	// The page pins only what the registry names: the latest dist-tag. Without
+	// one, the client picks.
 	in.Package, in.Version = pkg.Name, pkg.DistTags["latest"]
 	data.Use = h.panel(r, "Install", in, InstallCommands(in), installNotes(in))
 	h.render(w, r, "package", "", http.StatusOK, data)

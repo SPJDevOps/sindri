@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
+<title>t · Sindri</title>
+<link rel="icon" href="/ui/static/VERSION/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/ui/static/VERSION/favicon.png" type="image/png" sizes="32x32">
+<link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
+<script src="/ui/static/VERSION/htmx.min.js" defer></script>
+<script src="/ui/static/VERSION/sindri.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container">
+    <a class="wordmark" href="/ui/"><img class="mark" src="/ui/static/VERSION/favicon.svg" alt="" width="24" height="24">Sindri</a>
+    <nav class="nav" aria-label="Main">
+      <a href="/ui/">Repositories</a>
+      
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    <details class="menu">
+      <summary>Menu</summary>
+      <nav class="menu-panel" aria-label="Menu">
+      <a href="/ui/">Repositories</a>
+      
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    </details>
+  </div>
+</header>
+<main id="main">
+  <div class="container">
+    
+    
+<h1 class="page-title">internal-npm</h1>
+<div class="pills"><span class="pill">hosted</span><span class="pill">npm</span></div>
+<section class="section">
+  <dl class="facts">
+    
+    <dt>Managed by</dt><dd>api</dd>
+    <dt>Lifecycle stages</dt><dd><span class="pill">dev</span> <span class="pill">prod</span> </dd>
+    
+  </dl>
+</section>
+
+
+<section class="section">
+  <h2 class="section-title">Packages</h2>
+  
+  <form class="filter-form" method="get" action="/ui/r/internal-npm" role="search" aria-label="Filter packages"
+        hx-get="/ui/r/internal-npm" hx-target="#package-results" hx-swap="innerHTML" hx-push-url="true" hx-sync="this:replace"
+        hx-trigger="input changed delay:200ms from:#package-q, change, search, submit">
+    <input type="search" id="package-q" name="q" value="" maxlength="100" placeholder="Filter by name" aria-label="Filter by name" autocomplete="off">
+    <select name="sort" aria-label="Sort by"><option value="name">Name</option><option value="published">Last publish</option></select>
+    <button type="submit">Filter</button>
+  </form>
+  
+  <div id="package-results">
+  
+
+  <div class="list-bar">
+    <p class="hint" role="status">1 in total</p>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Name</th><th scope="col">Latest</th><th scope="col" class="num">Versions</th><th scope="col">Last publish</th><th scope="col">Worst severity</th></tr></thead>
+    <tbody>
+    
+      <tr><td><a class="mono" href="/ui/r/internal-npm/-/package?name=%40acme%2Fui">@acme/ui</a></td><td class="mono">1.1.0</td><td class="num">2</td><td><time datetime="2020-03-14T15:09:26Z" title="2020-03-14T15:09:26Z">14 Mar 2020</time></td><td><div class="pills"><span class="pill none">not scanned</span></div></td></tr>
+    
+    </tbody>
+  </table>
+  </div>
+  
+
+
+  </div>
+</section>
+
+
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <span>Sindri 0.0.0-test</span>
+    <span>Read-only view. Changes go through configuration and the API, never this page.</span>
+    <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
+  </div>
+</footer>
+<div class="live" id="live" role="status" aria-live="polite"></div>
+<dialog class="keys" id="keys" aria-labelledby="keys-title">
+  <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
+  <dl class="facts">
+    <dt><kbd>g</kbd> then <kbd>r</kbd></dt><dd>Go to repositories</dd>
+    <dt><kbd>?</kbd></dt><dd>Show or hide this list</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Close this list</dd>
+  </dl>
+  <form method="dialog"><button class="close" type="submit">Close</button></form>
+</dialog>
+</body>
+</html>

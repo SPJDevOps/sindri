@@ -298,8 +298,6 @@ a.stat:hover { background: var(--surface-2); color: var(--text); text-decoration
 .row .primary { min-width: 0; overflow-wrap: anywhere; }
 .row .secondary { flex: none; color: var(--text-faint); font-size: var(--text-sm); }
 .row.empty { color: var(--text-faint); justify-content: center; }
-.version-group { padding: var(--space-3) var(--space-4) var(--space-1); font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-muted); border-top: 1px solid var(--border); }
-.version-group:first-child { border-top: 0; }
 
 /* Pagination and "load more". The pager is plain links; load more is the
  * htmx button, which htmx marks with .htmx-request while it fetches. */
@@ -415,8 +413,8 @@ html.js-enhanced .cmd .copy { display: inline-flex; }
 .cmd .copy { border-radius: 0; margin-left: 0; }
 html.js-enhanced .copy { display: inline-block; }
 html.js-enhanced .cmd .copy { display: inline-flex; }
-html.js-enhanced :is(.row, dd, td, .pills, .version-group) .copy { opacity: 0; }
-html.js-enhanced :is(.row, dd, td, .pills, .version-group):is(:hover, :focus-within) .copy,
+html.js-enhanced :is(.row, dd, td, .pills) .copy { opacity: 0; }
+html.js-enhanced :is(.row, dd, td, .pills):is(:hover, :focus-within) .copy,
 html.js-enhanced .copy:focus-visible { opacity: 1; }
 @media (hover: none) { html.js-enhanced .copy { opacity: 1 !important; } }
 .copy:hover { color: var(--accent); }
@@ -529,3 +527,12 @@ code.command { display: inline-block; margin-top: var(--space-1); overflow-wrap:
 /* Numeric columns align right; a proxy's row keeps the upstream accent. */
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 tr.upstream td:first-child { box-shadow: inset 2px 0 0 var(--upstream); }
+
+/* Package rows: columns drop in a fixed order as the screen narrows, size
+ * first and then owners. A state pill (stage, severity, deprecated) is never
+ * dropped. The "load more" row spans the table and is its own border. */
+@media (max-width: 899px) { .col-size { display: none; } }
+@media (max-width: 719px) { .col-owners { display: none; } }
+td.more-row { padding: 0; height: auto; }
+td.more-row .more { border-top: 0; }
+td .pills { margin-top: 0; }

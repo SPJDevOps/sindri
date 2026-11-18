@@ -85,6 +85,7 @@ Each is shown, in every state below, on the reference page.
 | Group | `.group` `summary` | a native `<details open>` with the count in a `.pill`; open; closed |
 | List bar | `.list-bar` | the status line and the view switch (`.filters`) on one row |
 | Repository table | `table` `.num` `tr.upstream` | right-aligned numeric columns; a proxy row keeps the `--upstream` accent |
+| Package rows | `table` `.col-size` `.col-owners` `td.more-row`; partials `stage-pill`, `severity-pills` | a tag or version row with owners, stage, findings, and size; a stage pill (`.approve`, or `.none` "not promoted"); severity pills, `.sev-none` "no findings", or `.none` "not scanned"; size goes below 900px and owners below 720px, the pills never |
 | Command block | `.cmd` `pre` `.copy` | the copy button is hidden unless `html.js-enhanced` is set |
 | Use panel | `.use` `.tabs` `.step` `.cmd` | one client tab current; a step with and without a caption; notes; the publicUrl fallback hint |
 | Stat tile | `.stats` `.stat` `.stat-label` `.stat-value` | neutral; `.approve`; `.revoke`; `.upstream`; link (`a.stat`) |

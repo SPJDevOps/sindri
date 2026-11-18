@@ -1,6 +1,15 @@
 {{define "content"}}
 <h1 class="page-title">{{.Repo.Name}}</h1>
-<div class="pills"><span class="pill{{if .Repo.Upstream}} upstream{{end}}">{{.Repo.Type}}</span><span class="pill">{{.Repo.Protocol}}</span>{{if .Repo.Locked}}<span class="pill">locked</span>{{end}}<span class="pill">managed by {{.Repo.ManagedBy}}</span></div>{{with .Use}}
+<div class="pills"><span class="pill{{if .Repo.Upstream}} upstream{{end}}">{{.Repo.Type}}</span><span class="pill">{{.Repo.Protocol}}</span>{{if .Repo.Locked}}<span class="pill">locked</span>{{end}}</div>
+<section class="section">
+  <dl class="facts">
+    {{if .Upstream}}<dt>Upstream</dt><dd class="mono">{{.Upstream}}</dd>{{end}}
+    <dt>Managed by</dt><dd>{{.Repo.ManagedBy}}</dd>
+    {{if .Facts.IsHosted}}<dt>Lifecycle stages</dt><dd>{{range .Facts.Stages}}<span class="pill">{{.}}</span> {{else}}<span class="hint">none defined on this server</span>{{end}}</dd>{{end}}
+    {{if .Facts.IsProxy}}<dt>Cached entries</dt><dd>{{.Facts.Entries}}</dd>
+    <dt>Last successful fetch</dt><dd>{{if .Facts.LastFetch.IsZero}}<span class="hint">never</span>{{else}}{{ago .Facts.LastFetch}}{{end}}</dd>{{end}}
+  </dl>
+</section>{{with .Use}}
 {{template "use" .}}{{end}}
 {{if .Upstream}}
 <div class="section callout upstream"><strong>Proxy of {{.Upstream}}.</strong> Content here was fetched from outside and cached. It carries no owner, provenance, or lifecycle state, and it can never be promoted.</div>
@@ -20,17 +29,48 @@
 {{else}}
 <section class="section">
   <h2 class="section-title">{{if eq .Repo.Protocol "oci"}}Images{{else}}Packages{{end}}</h2>
-  <div class="rows" id="packages">
-  {{template "package-rows" .}}
+  {{if or .Total .Filter.Active}}
+  <form class="filter-form" method="get" action="{{.ClearHref}}" role="search" aria-label="Filter packages"
+        hx-get="{{.ClearHref}}" hx-target="#package-results" hx-swap="innerHTML" hx-push-url="true" hx-sync="this:replace"
+        hx-trigger="input changed delay:200ms from:#package-q, change, search, submit">
+    <input type="search" id="package-q" name="q" value="{{.Filter.Q}}" maxlength="100" placeholder="Filter by name" aria-label="Filter by name" autocomplete="off">
+    <select name="sort" aria-label="Sort by">{{range .Sorts}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+    <button type="submit">Filter</button>
+  </form>
+  {{end}}
+  <div id="package-results">
+  {{template "package-results" .}}
   </div>
 </section>
 {{end}}
 {{end}}
 
-{{define "package-rows"}}{{range .Packages}}
-    <div class="row"><a class="primary mono" href="{{.Href}}">{{.Name}}</a></div>
-{{else}}{{if not .Cursor}}
-    <div class="row empty">Nothing published here yet.</div>
-{{end}}{{end}}{{if .More}}
-    <div class="more"><button type="button" hx-get="{{.More}}" hx-target="closest .more" hx-swap="outerHTML">Load more</button></div>
-{{end}}{{end}}
+{{define "package-results"}}
+{{if not .Total}}
+  {{if .Filter.Active}}
+  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No package matches this filter. <a href="{{.ClearHref}}">Clear the filter</a></p></div></div>
+  {{else if .Repo.Upstream}}
+  <div class="rows"><div class="row empty">Nothing cached yet: content appears on first pull.</div></div>
+  {{else}}
+  <div class="rows"><div class="row empty">Nothing published here yet.</div></div>
+  {{if .Publish}}{{template "commands" .Publish}}{{end}}
+  {{end}}
+{{else}}
+  <div class="list-bar">
+    <p class="hint" role="status">{{if .Filter.Active}}{{.Total}} matching{{else}}{{.Total}} in total{{end}}{{if .Pager}}; showing {{.From}} to {{.To}}{{end}}</p>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Name</th><th scope="col">Latest</th><th scope="col" class="num">{{if eq .Repo.Protocol "oci"}}Tags{{else}}Versions{{end}}</th><th scope="col">Last publish</th>{{if not .Repo.Upstream}}<th scope="col">Worst severity</th>{{end}}</tr></thead>
+    <tbody>
+    {{range .Rows}}
+      <tr><td><a class="mono" href="{{.Href}}">{{.Name}}</a></td><td class="mono">{{if .Latest}}{{.Latest}}{{else}}-{{end}}</td><td class="num">{{.Versions}}</td><td>{{if .Published.IsZero}}-{{else}}{{ago .Published}}{{end}}</td>{{if .HasSeverity}}<td><div class="pills">{{template "severity-pills" .Severity}}</div></td>{{end}}</tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{with .Pager}}
+  <nav class="pager" aria-label="Pages">{{if .Prev}}<a href="{{.Prev}}" rel="prev">Previous</a>{{else}}<span class="off" aria-disabled="true">Previous</span>{{end}}<span class="where">Page {{.Page}} of {{.Pages}}</span>{{if .Next}}<a href="{{.Next}}" rel="next">Next</a>{{else}}<span class="off" aria-disabled="true">Next</span>{{end}}</nav>
+  {{end}}
+{{end}}
+{{end}}

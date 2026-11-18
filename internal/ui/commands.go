@@ -357,6 +357,32 @@ func (in cmdInput) npmSetup() []cmdStep {
 	}
 }
 
+// PublishCommands are the commands that put the first artifact into an empty
+// hosted repository. They take no client choice: the page shows them where the
+// list would be, and a proxy or virtual repository has none, since nothing is
+// published into either.
+func PublishCommands(in cmdInput) []cmdStep {
+	if !in.valid() || in.Kind != model.RepoTypeHosted {
+		return nil
+	}
+	switch in.Protocol {
+	case model.ProtocolOCI:
+		ref := in.ociRef() + "/IMAGE:TAG"
+		return []cmdStep{
+			{Caption: "Push an image. Sign in first, as above", Text: "docker tag IMAGE:TAG " + ref + "\ndocker push " + ref},
+		}
+	case model.ProtocolPyPI:
+		return []cmdStep{
+			{Caption: "Publish a distribution", Text: "python -m twine upload \\\n  --repository-url " + in.Base + "/pypi/" + in.Repo + "/upload \\\n  -u token -p \"$SINDRI_TOKEN\" dist/*"},
+		}
+	case model.ProtocolNPM:
+		return []cmdStep{
+			{Caption: "Publish a package, with the token in .npmrc as above", Text: "npm publish --registry " + in.npmRegistry()},
+		}
+	}
+	return nil
+}
+
 // manageInput is what the management commands for one artifact need.
 type manageInput struct {
 	Base       string

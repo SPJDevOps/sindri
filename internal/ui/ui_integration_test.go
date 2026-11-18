@@ -453,7 +453,7 @@ func TestUI_NPMPackagePageShowsVersionsFilesDistTagsAndDeprecation(t *testing.T)
 		t.Fatalf("package page via its listed link: %d\n%s", page.status, page.body)
 	}
 	for _, want := range []string{
-		"@acme/ui", "Dist-tags", "beta", "2.0.0-beta.1", "latest", "1.0.0",
+		"@acme/ui", `<span class="pill">beta</span>`, "2.0.0-beta.1", `<span class="pill">latest</span>`, "1.0.0",
 		"ui-1.0.0.tgz", "ui-2.0.0-beta.1.tgz", "deprecated", msg,
 	} {
 		if !strings.Contains(page.body, want) {
@@ -462,6 +462,9 @@ func TestUI_NPMPackagePageShowsVersionsFilesDistTagsAndDeprecation(t *testing.T)
 	}
 	if strings.Contains(page.body, "No tags") {
 		t.Error("package page falls through to the OCI tag listing")
+	}
+	if strings.Contains(page.body, "Dist-tags") {
+		t.Error("the separate dist-tags section is back; dist-tags are pills on their versions")
 	}
 
 	var file string
@@ -601,28 +604,37 @@ func TestUI_OCIImageWithoutVersionsIsListed(t *testing.T) {
 	}
 }
 
-func TestUI_LoadMoreReturnsOnlyRows(t *testing.T) {
+// The repository page pages its rows with plain links, and an htmx request for
+// a later page gets only the results.
+func TestUI_PackagePagerReturnsOnlyResultsForHTMX(t *testing.T) {
 	e := newEnv(t)
 	for i := range pageSize + 5 {
 		e.push("team-a", "img"+string(rune('a'+i/26))+string(rune('a'+i%26)), "1.0", "x")
 	}
+	rowOf := regexp.MustCompile(`<tr><td><a class="mono" href="/ui/r/team-a/-/package`)
 	first := e.get("alice", "/ui/r/team-a")
-	more := regexp.MustCompile(`hx-get="([^"]+)"`).FindStringSubmatch(first.body)
-	if more == nil {
-		t.Fatal("a repository with more than one page of images has no load-more control")
+	if got := len(rowOf.FindAllString(first.body, -1)); got != pageSize {
+		t.Fatalf("first page has %d rows, want %d", got, pageSize)
 	}
-	next := e.get("alice", strings.ReplaceAll(more[1], "&amp;", "&"), "HX-Request", "true")
-	if next.status != http.StatusOK {
-		t.Fatalf("load more: %d", next.status)
+	next := regexp.MustCompile(`href="([^"]+)" rel="next"`).FindStringSubmatch(first.body)
+	if next == nil {
+		t.Fatal("a repository with more than one page of images has no next-page link")
 	}
-	if strings.Contains(next.body, "<html") || strings.Contains(next.body, "site-header") {
-		t.Fatal("load more returned a whole page, not rows")
+	later := e.get("alice", next[1], "HX-Request", "true")
+	if later.status != http.StatusOK {
+		t.Fatalf("next page: %d", later.status)
 	}
-	if got := strings.Count(next.body, `class="row"`); got != 5 {
-		t.Fatalf("load more returned %d rows, want the 5 left", got)
+	if strings.Contains(later.body, "<html") || strings.Contains(later.body, "site-header") || strings.Contains(later.body, "filter-form") {
+		t.Fatal("an htmx request for a later page returned more than the results")
 	}
-	if next.header.Get("Vary") == "" || !strings.Contains(next.header.Get("Vary"), "HX-Request") {
+	if got := len(rowOf.FindAllString(later.body, -1)); got != 5 {
+		t.Fatalf("second page has %d rows, want the 5 left", got)
+	}
+	if !strings.Contains(later.header.Get("Vary"), "HX-Request") {
 		t.Fatal("pages that differ by HX-Request must say so in Vary")
+	}
+	if past := e.get("alice", "/ui/r/team-a?page=99"); past.status != http.StatusOK || !strings.Contains(past.body, "Page 2 of 2") {
+		t.Fatalf("a page past the end should show the last one: %d", past.status)
 	}
 }
 
