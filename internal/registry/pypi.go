@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -25,6 +26,9 @@ type PackageFile struct {
 	MediaType string
 	Size      int64
 	Metadata  json.RawMessage
+	// PublishedAt is when the file's version was published; the zero time for
+	// a version that predates the column. Only ListPackageFiles sets it.
+	PublishedAt time.Time
 }
 
 // requirePyPIRepo loads a hosted PyPI repository by name.
@@ -96,6 +100,8 @@ func (r *Registry) ListPackageFiles(ctx context.Context, repo, pkg string) ([]Pa
 			MediaType: row.MediaType,
 			Size:      row.BlobSize,
 			Metadata:  meta,
+
+			PublishedAt: row.PublishedAt.Time,
 		})
 	}
 	return out, nil

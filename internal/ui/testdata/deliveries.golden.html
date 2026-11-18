@@ -40,12 +40,12 @@
 <h1 class="page-title">Notification deliveries</h1>
 <p class="lead">Newest first.</p>
 
-<p class="filters" aria-label="Filter by state"><a class="filter" href="/ui/system/notifications">all</a><span class="filter active">failed</span></p>
+<div class="filters" role="group" aria-label="Filter by state"><a class="filter" href="/ui/system/notifications">all</a><span class="filter active" aria-current="true">failed</span></div>
 
 <section class="section">
   
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Notification deliveries">
+  <table><caption class="sr-only">Notification deliveries</caption>
     <thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Webhook</th><th scope="col">Subject</th><th scope="col">Repository</th><th scope="col">State</th><th scope="col">Response</th><th scope="col">Attempts</th><th scope="col">Next retry</th><th scope="col">Error</th></tr></thead>
     <tbody>
     
@@ -91,7 +91,7 @@
     <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
   </div>
 </footer>
-<div class="live" id="live" role="status" aria-live="polite"></div>
+<div class="live" id="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <dialog class="keys" id="keys" aria-labelledby="keys-title">
   <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
   <dl class="facts">

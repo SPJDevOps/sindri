@@ -59,12 +59,20 @@ func scalePages(info testsupport.SeedInfo) []scalePage {
 		{"repositories, a later page", "admin", "/ui/?page=3", 6},
 		{"repositories, table view", "admin", "/ui/?view=table", 6},
 		{"repositories, tiles of the first page", "admin", "/ui/?view=tiles", 6},
-		{"hosted repository", "admin", "/ui/r/" + info.HostedOCI, 5},
-		{"proxy repository", "admin", "/ui/r/" + info.ProxyOCI, 6},
+		{"hosted repository", "admin", "/ui/r/" + info.HostedOCI, 8},
+		{"hosted repository, filtered and sorted", "admin", "/ui/r/" + info.HostedOCI + "?q=pkg-00&sort=published", 8},
+		{"hosted repository, a later page", "admin", "/ui/r/" + info.HostedOCI + "?page=3", 8},
+		{"repository of 50 images of 200 tags", "admin", "/ui/r/" + info.ManyImagesRepo, 8},
+		{"repository of 50 images of 200 tags, as alice", "alice", "/ui/r/" + info.ManyImagesRepo, 8},
+		{"hosted pypi repository", "admin", "/ui/r/" + info.PyPIRepo, 8},
+		{"hosted npm repository", "admin", "/ui/r/" + info.NPMRepo, 9},
+		{"proxy repository", "admin", "/ui/r/" + info.ProxyOCI, 7},
 		{"virtual repository", "admin", "/ui/r/" + info.VirtualOCI, 4},
-		{"oci package", "admin", pkg(info.HostedOCI, info.OCIImage), 5},
-		{"pypi package", "admin", pkg(info.PyPIRepo, info.PyPIPackage), 5},
-		{"npm package", "admin", pkg(info.NPMRepo, info.NPMPackage), 7},
+		{"oci package", "admin", pkg(info.HostedOCI, info.OCIImage), 6},
+		{"oci package of 2,000 tags", "admin", pkg(info.HostedOCI, info.HugeTagImage), 6},
+		{"oci package of 2,000 tags, a later page", "admin", pkg(info.HostedOCI, info.HugeTagImage) + "&cursor=v1.1000", 6},
+		{"pypi package", "admin", pkg(info.PyPIRepo, info.PyPIPackage), 6},
+		{"npm package", "admin", pkg(info.NPMRepo, info.NPMPackage), 8},
 		{"oci artifact", "admin", artifact(info.HostedOCI, info.OCIImage, info.OCIDigest), 22},
 		{"pypi artifact", "admin", artifact(info.PyPIRepo, info.PyPIPackage, info.PyPIDigest), 19},
 		{"npm artifact", "admin", artifact(info.NPMRepo, info.NPMPackage, info.NPMDigest), 21},
@@ -74,9 +82,10 @@ func scalePages(info testsupport.SeedInfo) []scalePage {
 		{"repositories, filtered", "alice", "/ui/", 6},
 		{"repositories, filtered by text and type, as alice", "alice", "/ui/?q=oci-00&type=hosted", 6},
 		{"repositories, a later page, as alice", "alice", "/ui/?page=2&view=table", 6},
-		{"hosted repository, filtered", "alice", "/ui/r/" + info.HostedOCI, 5},
+		{"hosted repository, filtered", "alice", "/ui/r/" + info.HostedOCI, 8},
 		{"virtual repository, filtered", "alice", "/ui/r/" + info.VirtualOCI, 4},
-		{"oci package, filtered", "alice", pkg(info.HostedOCI, info.OCIImage), 5},
+		{"oci package, filtered", "alice", pkg(info.HostedOCI, info.OCIImage), 6},
+		{"oci package of 2,000 tags, as alice", "alice", pkg(info.HostedOCI, info.HugeTagImage), 6},
 		{"oci artifact, filtered", "alice", artifact(info.HostedOCI, info.OCIImage, info.OCIDigest), 21},
 		{"oci artifact, writer", "seeder", artifact(info.HostedOCI, info.OCIImage, info.OCIDigest), 21},
 		{"pypi artifact, writer", "seeder", artifact(info.PyPIRepo, info.PyPIPackage, info.PyPIDigest), 20},
@@ -162,5 +171,24 @@ func TestScale_NonAdminRowsExerciseTheFilters(t *testing.T) {
 	}
 	if r := e.get("alice", page); strings.Contains(r.body, "/promote") || strings.Contains(r.body, "/revoke") {
 		t.Error("alice, who may not write, is offered a promote or revoke command")
+	}
+}
+
+// Seeded scans are written as the worker writes them, so the gate accepts them
+// and the pages read the seeded digests as scanned. A per-platform scan with no
+// platforms list, or any scan with no vulnerabilities list, would be refused.
+func TestScale_SeededScansAreOnesTheGateAccepts(t *testing.T) {
+	e, _, _ := seededEnv(t)
+	var scans, refused int
+	if err := e.pool.QueryRow(t.Context(), `
+		SELECT count(*), count(*) FILTER (WHERE
+			jsonb_typeof(metadata->'vulnerabilities') IS DISTINCT FROM 'array'
+			OR (coalesce(metadata->>'platform', '') <> ''
+			    AND coalesce(CASE WHEN jsonb_typeof(metadata->'platforms') = 'array' THEN jsonb_array_length(metadata->'platforms') END, 0) = 0))
+		FROM evidence WHERE type = 'scan' AND metadata->>'producer' = 'sindri'`).Scan(&scans, &refused); err != nil {
+		t.Fatalf("counting seeded scans: %v", err)
+	}
+	if scans == 0 || refused != 0 {
+		t.Errorf("%d seeded Sindri scans, %d of them ones the gate refuses", scans, refused)
 	}
 }

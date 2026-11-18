@@ -38,7 +38,7 @@
     
     
 <div class="rows"><div class="empty-state">
-  <div class="big">500</div>
+  <h1 class="big"><span aria-hidden="true">500</span><span class="sr-only">Server error</span></h1>
   <p>Something went wrong on the server.</p>
   <p class="hint">If it keeps happening, give this request id to whoever runs this server.</p>
   <div class="cmd error-id"><pre id="request-id">7f3c9a2e-4d1b-4c8e-9a55-0b1f6d2e8a34</pre><button class="copy" type="button" data-copy-target="request-id" aria-label="Copy request id">Copy</button></div>
@@ -54,7 +54,7 @@
     <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
   </div>
 </footer>
-<div class="live" id="live" role="status" aria-live="polite"></div>
+<div class="live" id="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <dialog class="keys" id="keys" aria-labelledby="keys-title">
   <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
   <dl class="facts">

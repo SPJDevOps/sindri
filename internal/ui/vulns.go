@@ -18,8 +18,11 @@ const maxVulnRows = 500
 // page reads (internal/scan evidenceMetadata). Pointer-free on purpose: older
 // scans lack the detail fields, which then render as dashes.
 type scanMetadata struct {
-	Producer           string         `json:"producer"`
-	Platform           string         `json:"platform"`
+	Producer string `json:"producer"`
+	Platform string `json:"platform"`
+	// Platforms is what an index scan lists: every child platform its job
+	// meant to scan (ADR 30). The gate refuses an index missing one.
+	Platforms          []string       `json:"platforms"`
 	DBUpdatedAt        string         `json:"db_updated_at"`
 	SeverityCounts     map[string]int `json:"severity_counts"`
 	Vulnerabilities    []vulnMetadata `json:"vulnerabilities"`
@@ -32,6 +35,14 @@ type vulnMetadata struct {
 	Package   string `json:"package"`
 	Installed string `json:"installed"`
 	Fixed     string `json:"fixed"`
+}
+
+// refused reports whether the severity gate refuses this scan outright
+// (lifecycle evaluateScanRule): it lists no vulnerabilities, or it is a
+// platform scan with no platforms list. Either needs a new scan, so the page
+// must not read the digest as scanned.
+func (m scanMetadata) refused() bool {
+	return m.Vulnerabilities == nil || (m.Platform != "" && len(m.Platforms) == 0)
 }
 
 // parseSindriScan reads the metadata of a scan Sindri's own worker produced.

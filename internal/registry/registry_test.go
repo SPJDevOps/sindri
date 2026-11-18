@@ -138,3 +138,26 @@ func TestValidateCreateParams_ProxyUpstreamWithCredentialsIsRefused(t *testing.T
 		})
 	}
 }
+
+func TestCurrentVersion_PrefersTheLatestTagThenTheHighestVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol model.Protocol
+		latest   string
+		versions []string
+		want     string
+	}{
+		{"NPMLatestTagWins", model.ProtocolNPM, "1.9.0", []string{"1.10.0", "1.9.0", "2.0.0-rc.1"}, "1.9.0"},
+		{"NPMWithoutATagTakesTheHighestSemver", model.ProtocolNPM, "", []string{"1.9.0", "1.10.0"}, "1.10.0"},
+		{"NPMTagNamingAMissingVersionIsIgnored", model.ProtocolNPM, "3.0.0", []string{"1.9.0", "1.10.0"}, "1.10.0"},
+		{"PyPITakesTheHighestPEP440", model.ProtocolPyPI, "", []string{"1.0rc1", "1.0", "1.0.post1"}, "1.0.post1"},
+		{"NoVersions", model.ProtocolNPM, "1.0.0", nil, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CurrentVersion(tc.protocol, tc.latest, tc.versions); got != tc.want {
+				t.Errorf("CurrentVersion = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

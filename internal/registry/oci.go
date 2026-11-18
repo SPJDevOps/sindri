@@ -693,6 +693,8 @@ func (r *Registry) ListTags(ctx context.Context, p ListTagsParams) (Page[string]
 type TagTarget struct {
 	Name   string
 	Digest model.Digest
+	// Shared is how many tags of the image point at Digest, this one included.
+	Shared int64
 }
 
 // ListTagTargets is ListTags with each tag's digest, in one query. A tag row
@@ -725,7 +727,7 @@ func (r *Registry) ListTagTargets(ctx context.Context, p ListTagsParams) (Page[T
 		if err != nil {
 			return Page[TagTarget]{}, fmt.Errorf("stored digest of tag %s: %w", row.Name, err)
 		}
-		page.Items = append(page.Items, TagTarget{Name: row.Name, Digest: digest})
+		page.Items = append(page.Items, TagTarget{Name: row.Name, Digest: digest, Shared: row.Shared})
 	}
 	return page, nil
 }

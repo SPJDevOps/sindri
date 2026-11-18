@@ -50,6 +50,40 @@
   localTimes();
   document.addEventListener("htmx:afterSwap", localTimes);
 
+  // htmx swaps. "Load more" moves focus to the first new row and says how
+  // many arrived; a filter swap says its result line. The one live region
+  // is cleared first so that an identical message is announced again.
+  const say = (msg) => {
+    if (!live) return;
+    live.textContent = "";
+    setTimeout(() => { live.textContent = msg; }, 50);
+  };
+  let more = null;
+  document.addEventListener("htmx:beforeRequest", (ev) => {
+    const el = ev.detail.elt;
+    const body = el.matches && el.matches("[data-more]") ? el.closest("tbody") : null;
+    more = body ? { body, from: body.rows.length - 1, noun: el.dataset.more } : null;
+  });
+  document.addEventListener("htmx:afterSwap", (ev) => {
+    if (more) {
+      const fresh = Array.from(more.body.rows).slice(more.from).filter((tr) => !tr.querySelector("td.more-row"));
+      const n = fresh.length;
+      if (n) {
+        fresh[0].tabIndex = -1;
+        fresh[0].focus();
+        say(n + " more " + (n === 1 ? more.noun.replace(/s$/, "") : more.noun) + " loaded");
+      }
+      more = null;
+      return;
+    }
+    const el = ev.detail.elt;
+    const target = ev.detail.target;
+    if (el && el.matches && el.matches(".filter-form") && target) {
+      const line = target.querySelector(".list-bar .hint, .empty-state p");
+      if (line) say(line.textContent.trim().replace(/\s+/g, " "));
+    }
+  });
+
   // Keyboard: g then r goes to the repositories, ? lists the keys.
   const dialog = document.getElementById("keys");
   let armed = 0;

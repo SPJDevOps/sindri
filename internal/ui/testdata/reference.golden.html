@@ -59,8 +59,8 @@
 <section class="section">
   <h2 class="section-title">Data table</h2>
   <p class="hint">States: sortable header (unsorted, ascending, descending), default rows at 36px, and the dense variant at 28px.</p>
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Sortable data table example">
+  <table><caption class="sr-only">Sortable data table example</caption>
     <thead><tr><th scope="col" aria-sort="ascending"><a class="sort" href="#table">Name</a></th><th scope="col" aria-sort="descending"><a class="sort" href="#table">Size</a></th><th scope="col"><a class="sort" href="#table">Created</a></th><th scope="col">State</th></tr></thead>
     <tbody>
       <tr><td class="mono">web</td><td>4.0 KiB</td><td>2 days ago</td><td><span class="pill approve">approved</span></td></tr>
@@ -69,8 +69,8 @@
   </table>
   </div>
   <p class="hint">Dense:</p>
-  <div class="table-wrap">
-  <table class="dense">
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Dense data table example">
+  <table class="dense"><caption class="sr-only">Dense data table example</caption>
     <thead><tr><th scope="col">ID</th><th scope="col">Severity</th><th scope="col">Package</th></tr></thead>
     <tbody>
       <tr><td class="mono">CVE-2020-0001</td><td><span class="pill sev-critical">critical</span></td><td class="mono">openssl</td></tr>
@@ -112,7 +112,7 @@
 <section class="section">
   <h2 class="section-title">Filter bar</h2>
   <p class="hint">States: link, current (a span, so it cannot be followed).</p>
-  <p class="filters" aria-label="Filter by state"><span class="filter active">all</span><a class="filter" href="#filters">failed</a><a class="filter" href="#filters">pending</a></p>
+  <div class="filters" role="group" aria-label="Filter by state"><span class="filter active" aria-current="true">all</span><a class="filter" href="#filters">failed</a><a class="filter" href="#filters">pending</a></div>
 </section>
 
 <section class="section" id="filter-form">
@@ -139,8 +139,8 @@
 <section class="section">
   <h2 class="section-title">Repository table</h2>
   <p class="hint">The data table with right-aligned numeric columns (<code>.num</code>). A proxy's row (<code>tr.upstream</code>) keeps the upstream accent; the name cell may carry a <code>.by</code> line.</p>
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Repository table example">
+  <table><caption class="sr-only">Repository table example</caption>
     <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col" class="num">Packages</th></tr></thead>
     <tbody>
       <tr><td><a class="mono" href="#group">team/app</a></td><td><span class="pill">hosted</span></td><td class="num">12</td></tr>
@@ -151,8 +151,68 @@
 </section>
 
 <section class="section">
+  <h2 class="section-title">Package rows</h2>
+  <p class="hint">A tag or version row. The stage pill (<code>stage-pill</code>) and the severity pills (<code>severity-pills</code>) are shared partials, so every row, header, and table shows a verdict the same way. Below 900px the size column (<code>.col-size</code>) goes, below 720px the owners (<code>.col-owners</code>); the pills never do. The last row of a paged table is <code>td.more-row</code>.</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Package rows example">
+  <table><caption class="sr-only">Package rows example</caption>
+    <thead><tr><th scope="col">Version</th><th scope="col" class="col-owners">Owners</th><th scope="col">Stage</th><th scope="col">Findings</th><th scope="col" class="num col-size">Size</th></tr></thead>
+    <tbody>
+      <tr><td><span class="mono">1.2.0</span> <span class="pill">latest</span></td><td class="col-owners"><span class="mono">repository:team/app</span></td><td><span class="pill approve">prod</span></td><td><div class="pills"><span class="pill sev-critical">1 critical</span><span class="pill sev-high">3 high</span><span class="pill sev-low">7 low</span></div></td><td class="num col-size">4.0 KiB</td></tr>
+      <tr><td><span class="mono">1.1.0</span> <span class="pill revoke">deprecated</span><span class="by">use 1.2.0</span></td><td class="col-owners">-</td><td><span class="pill none">not promoted</span></td><td><div class="pills"><span class="pill sev-none">no findings</span></div></td><td class="num col-size">3.9 KiB</td></tr>
+      <tr><td><span class="mono">1.0.0</span></td><td class="col-owners">-</td><td><span class="pill approve">dev</span></td><td><div class="pills"><span class="pill none">not scanned</span></div></td><td class="num col-size">3.2 KiB</td></tr>
+      <tr><td class="more-row" colspan="5"><div class="more"><button type="button">Load more</button></div></td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="section">
+  <h2 class="section-title">Artifact header</h2>
+  <p class="hint">The title leads with the name and puts the short digest second (<code>.sub</code>). The verdict strip (<code>.pills.verdict</code>) is at most four pills: stage or "revoked from", worst severity, scan age, and "new findings since approval" (<code>.pill.new</code>). Upstream content has no strip. The section navigation (<code>.section-nav</code>) sticks below the strip; under 720px the links give way to a native <code>&lt;details class="sections-menu"&gt;</code>. Both are always in the markup.</p>
+  <div class="pills verdict" role="group" aria-label="Verdict"><span class="pill revoke">revoked from prod</span><span class="pill sev-critical">1 critical</span><span class="pill sev-high">3 high</span><span class="pill sev-low">7 low</span><span class="pill">scanned 3 days ago</span><span class="pill new">new findings since approval</span></div>
+  <div class="pills verdict" role="group" aria-label="Verdict"><span class="pill approve">prod</span><span class="pill sev-none">no findings</span><span class="pill">scanned 2 hours ago</span></div>
+  <div class="pills verdict" role="group" aria-label="Verdict"><span class="pill none">not promoted</span><span class="pill none">not scanned</span></div>
+  <div class="section-nav">
+    <nav class="sections" aria-label="Sections example"><a href="#reference">Overview</a><a href="#reference">Lifecycle</a><a href="#reference">Vulnerabilities</a><a href="#reference">Evidence</a></nav>
+    <details class="sections-menu">
+      <summary>Sections</summary>
+      <nav class="sections-panel" aria-label="Sections menu example"><a href="#reference">Overview</a><a href="#reference">Lifecycle</a><a href="#reference">Vulnerabilities</a><a href="#reference">Evidence</a></nav>
+    </details>
+  </div>
+  <dl class="facts">
+    <dt>Names</dt><dd><span class="name"><a class="mono" href="#reference">web:1.0</a></span><span class="name"><a class="mono" href="#reference">web:latest</a></span></dd>
+    <dt>Also placed in</dt><dd><a class="mono" href="#reference">team/mirror</a></dd>
+  </dl>
+  <h3 class="sub-title">Sub-heading inside a section</h3>
+</section>
+
+<section class="section">
+  <h2 class="section-title">Layers and size bar</h2>
+  <p class="hint">A layer row carries the share of the whole as <code>.bar</code> inside <code>.bar-track</code>, widened by a <code>data-w</code> attribute from 1 to 10 in tenths, because a page may carry no inline style. The build step (<code>.build-step</code>) is shown where the image config is present.</p>
+  <div class="rows">
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:4b825dc642cb</a> <span class="pill">config</span></span><span class="secondary">1.2 KiB</span></div>
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:aaaaaaaaaaaa</a><span class="build-step mono">/bin/sh -c apk add --no-cache ca-certificates</span></span><span class="secondary">4.0 MiB<span class="bar-track" aria-hidden="true"><span class="bar" data-w="1"></span></span></span></div>
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:bbbbbbbbbbbb</a></span><span class="secondary">9.0 MiB<span class="bar-track" aria-hidden="true"><span class="bar" data-w="2"></span></span></span></div>
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:cccccccccccc</a></span><span class="secondary">12 MiB<span class="bar-track" aria-hidden="true"><span class="bar" data-w="3"></span></span></span></div>
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:dddddddddddd</a></span><span class="secondary">16 MiB<span class="bar-track" aria-hidden="true"><span class="bar" data-w="4"></span></span></span></div>
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:eeeeeeeeeeee</a></span><span class="secondary">20 MiB<span class="bar-track" aria-hidden="true"><span class="bar" data-w="5"></span></span></span></div>
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:ffffffffffff</a></span><span class="secondary">24 MiB<span class="bar-track" aria-hidden="true"><span class="bar" data-w="6"></span></span></span></div>
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:111111111111</a></span><span class="secondary">28 MiB<span class="bar-track" aria-hidden="true"><span class="bar" data-w="7"></span></span></span></div>
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:222222222222</a></span><span class="secondary">32 MiB<span class="bar-track" aria-hidden="true"><span class="bar" data-w="8"></span></span></span></div>
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:333333333333</a></span><span class="secondary">36 MiB<span class="bar-track" aria-hidden="true"><span class="bar" data-w="9"></span></span></span></div>
+    <div class="row"><span class="primary"><a class="mono" href="#reference">sha256:444444444444</a></span><span class="secondary">40 MiB<span class="bar-track" aria-hidden="true"><span class="bar" data-w="10"></span></span></span></div>
+  </div>
+  <details class="raw">
+    <summary>Raw manifest</summary>
+    <pre class="document">{
+  "schemaVersion": 2
+}</pre>
+  </details>
+</section>
+
+<section class="section">
   <h2 class="section-title">Command block</h2>
-  <p class="hint">Mono, scrolls sideways, never wraps. The copy button is hidden until a script sets html.js-enhanced on the page.</p>
+  <p class="hint">Mono, wraps long lines and keeps newlines; the copy button stays top right. The copy button is hidden until a script sets html.js-enhanced on the page.</p>
   <div class="cmd"><pre><code>docker pull registry.example.com/team/app@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</code></pre><button class="copy" type="button" data-copy="docker pull registry.example.com/team/app@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy the pull command">Copy</button></div>
 </section>
 
@@ -192,7 +252,7 @@
 <section class="section">
   <h2 class="section-title">Empty state</h2>
   <p class="hint">States: full (a whole list is empty), inline (one row, see Row list).</p>
-  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No repository you may read. Repositories are declared in sindri.yaml or created through the API.</p></div></div>
+  <div class="rows"><div class="empty-state"><div class="big" aria-hidden="true">0</div><p>No repository you may read. Repositories are declared in sindri.yaml or created through the API.</p></div></div>
 </section>
 
 <section class="section">
@@ -227,7 +287,7 @@
     <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
   </div>
 </footer>
-<div class="live" id="live" role="status" aria-live="polite"></div>
+<div class="live" id="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <dialog class="keys" id="keys" aria-labelledby="keys-title">
   <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
   <dl class="facts">

@@ -56,6 +56,18 @@ type SeedInfo struct {
 
 	// Tags on OCIImage in HostedOCI, more than one page of them.
 	OCITags int
+	// HugeTagImage is a second image of HostedOCI with HugeTags tags, each its
+	// own manifest with an identity, most with scans and approvals: the shape
+	// of a busy CI repository, for the pages that list tags and for the
+	// repository page that summarises every tag of an image.
+	HugeTagImage string
+	HugeTags     int
+	// ManyImagesRepo is a hosted OCI repository whose first ManyImages images
+	// each have ManyImagesTags tags: the shape that makes a repository page's
+	// cost depend on tags, not on the rows it lists.
+	ManyImagesRepo string
+	ManyImages     int
+	ManyImagesTags int
 	// Versions of PyPIPackage and NPMPackage, which are deliberately large.
 	HeavyVersions int
 }
@@ -67,6 +79,9 @@ const (
 	seedProxyPackages      = 50
 	seedHeavyVersions      = 120
 	seedHeavyTags          = 60
+	seedHugeTags           = 2000
+	seedManyImages         = 50
+	seedManyImagesTags     = 200
 	seedKnownScanFindings  = 300
 	seedSubjectEveryNth    = 4
 	seedRevokeEveryNth     = 7
@@ -291,6 +306,8 @@ func (s *seeder) generate() {
 	s.info.PyPIRepo, s.info.PyPIPackage = repoName("pypi", "hosted", 1), "pkg-0001"
 	s.info.NPMRepo, s.info.NPMPackage = repoName("npm", "hosted", 1), "pkg-0001"
 	s.info.OCITags, s.info.HeavyVersions = seedHeavyTags, seedHeavyVersions
+	s.info.HugeTagImage, s.info.HugeTags = "pkg-0002", seedHugeTags
+	s.info.ManyImagesRepo, s.info.ManyImages, s.info.ManyImagesTags = repoName("oci", "hosted", 2), seedManyImages, seedManyImagesTags
 
 	for _, p := range seedProtocols {
 		for _, r := range hosted[p.name] {
@@ -341,6 +358,12 @@ func (s *seeder) genPackage(r seedRepo, j int) {
 		if r.protocol == "oci" {
 			n = seedHeavyTags
 		}
+	}
+	if r.protocol == "oci" && r.typ == "hosted" && r.index == 1 && j == 2 {
+		n = seedHugeTags
+	}
+	if r.protocol == "oci" && r.typ == "hosted" && r.index == 2 && j <= seedManyImages {
+		n = seedManyImagesTags
 	}
 	for k := 0; k < n; k++ {
 		s.artifact++
@@ -412,21 +435,24 @@ func (s *seeder) genSubject(r seedRepo, digest, kind, pkg string, known bool, k 
 	case known && kind == "oci-manifest":
 		// Two platforms, one with many findings, and an older scan of the
 		// first, so the page's "newest per platform" choice is exercised.
-		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/amd64", 12, 2, 0, n-1), "sindri", n*10+1, created.Add(2*time.Minute))
-		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/amd64", seedKnownScanFindings, 7, 5, n), "sindri", n*10+2, created.Add(3*time.Minute))
-		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/arm64", 40, 3, 0, n), "sindri", n*10+3, created.Add(4*time.Minute))
+		knownPlatforms := []string{"linux/amd64", "linux/arm64"}
+		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/amd64", knownPlatforms, 12, 2, 0, n-1), "sindri", n*10+1, created.Add(2*time.Minute))
+		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/amd64", knownPlatforms, seedKnownScanFindings, 7, 5, n), "sindri", n*10+2, created.Add(3*time.Minute))
+		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/arm64", knownPlatforms, 40, 3, 0, n), "sindri", n*10+3, created.Add(4*time.Minute))
 	case known:
-		s.addEvidence(digest, "scan", "application/json", scanMetadata("", 25, 2, 0, n), "sindri", n*10+1, created.Add(2*time.Minute))
+		s.addEvidence(digest, "scan", "application/json", scanMetadata("", nil, 25, 2, 0, n), "sindri", n*10+1, created.Add(2*time.Minute))
 	case n%10 < 7:
 		platform := ""
+		var platforms []string
 		if kind == "oci-manifest" {
 			platform = "linux/amd64"
+			platforms = []string{platform}
 		}
 		findings := 0
 		if n%3 != 0 {
 			findings = 1 + n%6
 		}
-		s.addEvidence(digest, "scan", "application/json", scanMetadata(platform, findings, 0, 0, n), "sindri", n*10+1, created.Add(2*time.Minute))
+		s.addEvidence(digest, "scan", "application/json", scanMetadata(platform, platforms, findings, 0, 0, n), "sindri", n*10+1, created.Add(2*time.Minute))
 	}
 	if known || n%3 == 0 {
 		s.addEvidence(digest, "signature", "application/vnd.dev.cosign.simplesigning.v1+json", `{}`, "ci", n*10+4, created.Add(5*time.Minute))
@@ -457,8 +483,10 @@ func (s *seeder) addEvidence(subject, typ, media, metadata, by string, n int, at
 }
 
 // scanMetadata is what the worker writes on a Sindri scan's evidence: the
-// fields the UI reads, with findings listed as the worker lists them.
-func scanMetadata(platform string, findings, critical, high, salt int) string {
+// fields the UI reads, with findings listed as the worker lists them. A
+// per-platform scan carries platforms, the sorted list of every platform of its
+// job, as internal/scan writes it; without it the gate refuses the scan.
+func scanMetadata(platform string, platforms []string, findings, critical, high, salt int) string {
 	type vuln struct {
 		ID        string `json:"id"`
 		Severity  string `json:"severity"`
@@ -494,6 +522,7 @@ func scanMetadata(platform string, findings, critical, high, salt int) string {
 	}
 	if platform != "" {
 		meta["platform"] = platform
+		meta["platforms"] = platforms
 	}
 	b, err := json.Marshal(meta)
 	if err != nil {

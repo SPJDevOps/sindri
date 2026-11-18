@@ -890,6 +890,8 @@ M12 window. SIN-118, an optional `format: slack` on a webhook so a notification 
 straight to a Slack incoming webhook, waits for what adopters ask for in that window; it
 needs its own ADR, because ADR 34 left Slack formatting out. SIN-80 shipped in Sprint 10, SIN-83 and SIN-86 (the gate scripts' leaked
 Docker volumes) in Sprint 12, and SIN-73, 75, 81, 82, 84, 85 and 116 shipped in Sprint 13 as v1.5.1.
+SIN-122, from the v1.8.0 review, joins the hardening epic: a proxy's artifact page must never
+show a hosted subject's state.
 
 ---
 
@@ -1499,16 +1501,25 @@ it clean?" without a click into each artifact, and every page passes one accessi
 check. Sprint 15, second half, under epic SIN-89.
 
 **Scope.**
-- [ ] Repository and package rows: latest version or tag, version count, last publish,
-  highest approved stage, and worst severity per row, with filter and sort. The per-page
-  query ceilings from SIN-100 hold on the seeded set (SIN-97)
-- [ ] Artifact page: a verdict strip under the title (highest stage, worst severity, scan
-  age, new findings since approval), the names that point at the digest, and sections with
-  an in-page nav. Upstream artifacts show no verdict. Signature state waits for SIN-42
-  (SIN-93)
-- [ ] Accessibility and small-screen pass over every page to WCAG 2.2 AA, with a mechanical
-  test over the golden pages in `make test` and a dated manual checklist in `web/DESIGN.md`
-  (SIN-99)
+- [x] Repository and package rows: latest version or tag, version count, last publish,
+  stage, and worst severity per row, with filter and sort as GET forms. Worst severity counts
+  only current versions (every OCI tag target, npm's `latest`, PyPI's highest version) and is
+  aggregated per package in SQL. A proxy's rows read nothing from hosted subjects, and its
+  header shows cached entries and the last successful fetch. Versions order by semver and
+  PEP 440 (`model`), and dist-tags are pills on their version. No migration: publisher is the
+  subject's owners and a tag's time is its digest's first publish (SIN-97)
+- [x] Artifact page: a verdict strip under the title (stage or "revoked from X", worst
+  severity, scan age, and new CRITICAL or HIGH findings since approval), the names that point
+  at the digest, "Also placed in" over readable repositories only, sections with a sticky
+  in-page nav, a platform table on an index, and layers with size bars and build steps.
+  Upstream artifacts show no verdict. Rows and the strip share one stage rule, and a scan the
+  promotion gate would refuse (an incomplete index, or a pre-1.3 scan) never reads as
+  scanned. Command blocks wrap instead of scrolling. Signature state waits for SIN-42 (SIN-93)
+- [x] Accessibility and small-screen pass over every page to WCAG 2.2 AA: landmarks, a
+  breadcrumb list, `aria-current`, table captions, a live region for htmx swaps, a solid
+  focus ring and 3:1 control borders, 24px targets, reduced motion, and forced colours. A
+  mechanical test over every golden page runs in `make test`. The manual checklist is in
+  `web/DESIGN.md`, waiting for its first dated pass (SIN-99)
 
 **Out of scope.** Vulnerabilities panel v2 and the CVE overview (SIN-94, 103), which need a
 queryable shape for findings first. Search (SIN-101) and home (SIN-102).
@@ -1520,6 +1531,18 @@ make test-integration        # TestScale_* covers the new row columns
 # by hand: make ui-preview, and make ui-seed + make run, in Safari, light and dark
 git tag v1.8.0 && git push origin v1.8.0   # the release workflow is green
 ```
+
+**Gate run, 2026-11-18.** On the branch: `make ci` and `make test-integration` passed. On the
+seeded set every page stayed within its query ceiling: repository pages in 4 to 8 queries,
+artifact pages in 17 to 21. The slowest p95 was 63ms, for a repository of 50 images with 200
+tags each. The rows and the artifact page were reviewed by eye in Safari. A final review found
+a proxy page showing a hosted repository's tag and publish time for a shared digest. It also
+found rows calling a revoked digest "not promoted", and a partly scanned index reading as
+clean. Each fix has a test shown to fail without it. The same review led to SIN-122, below.
+
+Follow-ups filed: SIN-120 (a proxy's last upstream error), SIN-121 (PyPI yanked state,
+PEP 592), and SIN-122 (a proxy's artifact page shows a hosted subject's identity and
+lifecycle when the digest is shared). None is scheduled.
 
 ---
 
@@ -1602,6 +1625,8 @@ shared look, UX, and size targets, and each ticket gets a milestone when it is p
   repository list at scale (SIN-96), repository and package rows (SIN-97), sign-in and
   error pages (SIN-98), accessibility (SIN-99), test harness (SIN-100). SIN-90, 91, and 100
   come first; the rest build on them.
+  SIN-90 to 93 and 96 to 100 shipped in v1.7.0 and v1.8.0. Left over from SIN-97: a proxy's
+  last upstream error (SIN-120) and PyPI yanked state (SIN-121), each needing stored data.
 - **New views:** search (SIN-101), home (SIN-102), vulnerability overview and CVE page
   (SIN-103), environments (SIN-104), activity (SIN-105), "me" (SIN-106), system page
   (SIN-107), resolution explainer (SIN-108), compare (SIN-109).

@@ -231,3 +231,51 @@ func TestStylesheet_IsSmallAndEveryClassIsUsed(t *testing.T) {
 		}
 	}
 }
+
+// DESIGN.md lists the pairs that matter most, but a colour that carries text
+// must also read on every ground it can land on, listed or not.
+func TestDesignContrast_EveryTextTokenPassesOnEverySurface(t *testing.T) {
+	light, dark := colourTokens(t)
+	texts := []string{
+		"--text", "--text-muted", "--text-faint", "--accent", "--accent-hover", "--upstream", "--approved",
+		"--revoked", "--sev-critical", "--sev-high", "--sev-medium", "--sev-low", "--sev-unknown", "--new",
+	}
+	for _, theme := range []struct {
+		name   string
+		tokens map[string]string
+	}{{"light", light}, {"dark", dark}} {
+		for _, fg := range texts {
+			for _, bg := range []string{"--bg", "--surface", "--surface-2"} {
+				if got := ratio(t, theme.tokens[fg], theme.tokens[bg]); got < minContrast {
+					t.Errorf("%s on %s in %s: contrast %.2f is below %.1f", fg, bg, theme.name, got, minContrast)
+				}
+			}
+		}
+	}
+}
+
+// WCAG 1.4.11 asks 3:1 for a focus indicator and for the boundary of a text
+// box or select, which has nothing else to identify it. The ring is solid
+// --accent and the controls' border is --border-control.
+func TestDesignContrast_FocusRingAndControlBordersReachThreeToOne(t *testing.T) {
+	light, dark := colourTokens(t)
+	for _, theme := range []struct {
+		name   string
+		tokens map[string]string
+	}{{"light", light}, {"dark", dark}} {
+		for _, fg := range []string{"--accent", "--border-control"} {
+			for _, bg := range []string{"--bg", "--surface", "--surface-2"} {
+				if got := ratio(t, theme.tokens[fg], theme.tokens[bg]); got < minFillContrast {
+					t.Errorf("%s on %s in %s: contrast %.2f is below %.1f", fg, bg, theme.name, got, minFillContrast)
+				}
+			}
+		}
+	}
+	css, err := fs.ReadFile(web.Static(), "sindri.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`:focus-visible[^{]*\{\s*outline:\s*2px solid var\(--accent\);`).Match(css) {
+		t.Error("sindri.css: the :focus-visible rule is not a solid 2px --accent outline")
+	}
+}

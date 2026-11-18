@@ -154,6 +154,7 @@ var funcs = template.FuncMap{
 	"short": shortDigest,
 	"bytes": humanBytes,
 	"ago":   func(t time.Time) template.HTML { return timeTag(t, ago(t)) },
+	"stage": func(name string, revoked bool) stageView { return stageView{Name: name, Revoked: revoked} },
 	"when":  func(t time.Time) template.HTML { return timeTag(t, t.UTC().Format(time.RFC3339)) },
 }
 
@@ -197,6 +198,10 @@ type chrome struct {
 	Crumbs  []crumb
 	// Admin shows the System link.
 	Admin bool
+	// NavRepos and NavSystem are the aria-current value of that header
+	// link: "page" on the page itself, "true" below it, empty elsewhere.
+	NavRepos  string
+	NavSystem string
 }
 
 type crumb struct {
@@ -214,7 +219,22 @@ func (h *handler) chrome(r *http.Request, title string, crumbs ...crumb) chrome 
 		DocsURL: h.opts.DocsURL,
 		Crumbs:  crumbs,
 		Admin:   p.Admin,
+	}.nav(r.URL.Path)
+}
+
+// nav marks which header link the request's path belongs to.
+func (c chrome) nav(path string) chrome {
+	switch {
+	case path == Prefix || path == Prefix+"/":
+		c.NavRepos = "page"
+	case strings.HasPrefix(path, Prefix+"/r/"):
+		c.NavRepos = "true"
+	case path == Prefix+"/system":
+		c.NavSystem = "page"
+	case strings.HasPrefix(path, Prefix+"/system/"):
+		c.NavSystem = "true"
 	}
+	return c
 }
 
 // render executes a whole page, or only the named partial when htmx asked
@@ -241,7 +261,11 @@ func (h *handler) render(w http.ResponseWriter, r *http.Request, page, partial s
 }
 
 func (h *handler) notFound(w http.ResponseWriter, r *http.Request) {
-	h.render(w, r, "notfound", "", http.StatusNotFound, h.chrome(r, "Not found"))
+	// The page must not depend on the path, or its bytes would tell a missing
+	// repository from one the caller may not read: no header link is current.
+	c := h.chrome(r, "Not found")
+	c.NavRepos, c.NavSystem = "", ""
+	h.render(w, r, "notfound", "", http.StatusNotFound, c)
 }
 
 // fail logs err and answers with an error page that names the request, never

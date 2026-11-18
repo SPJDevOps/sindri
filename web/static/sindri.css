@@ -37,6 +37,7 @@
   --surface-2: #f4f4f5;
   --border: #e4e4e7;
   --border-strong: #d4d4d8;
+  --border-control: #868b95;
   --text: #18181b;
   --text-muted: #5b6270;
   --text-faint: #666d7a;
@@ -98,6 +99,7 @@
     --surface-2: #1e2126;
     --border: #282c33;
     --border-strong: #363b44;
+    --border-control: #6b7280;
     --text: #ededef;
     --text-muted: #9aa1ab;
     --text-faint: #8a919c;
@@ -117,7 +119,7 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: var(--space-16); }
 body {
   margin: 0;
   min-height: 100vh;
@@ -133,7 +135,8 @@ h1, h2, h3, p, ul, ol, dl, dd, figure, pre { margin: 0; }
 ul, ol { padding: 0; list-style: none; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 2px; }
-:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 2px; }
+:focus-visible, .tile:focus-visible, .stat:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+::placeholder { color: var(--text-faint); opacity: 1; }
 code, .mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 
 /* Layout -------------------------------------------------------------- */
@@ -141,7 +144,7 @@ code, .mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 .container { width: 100%; max-width: 64rem; margin: 0 auto; padding: 0 var(--gutter); }
 main { flex: 1; padding: var(--space-10) 0 var(--space-16); }
 
-.skip { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.skip, .live, .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .skip:focus { width: auto; height: auto; overflow: visible; clip-path: none; z-index: 10; top: var(--space-2); left: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); }
 
 .site-header { position: relative; border-bottom: 1px solid var(--border); background: var(--bg); }
@@ -159,7 +162,9 @@ main { flex: 1; padding: var(--space-10) 0 var(--space-16); }
 .wordmark:hover { color: var(--text); text-decoration: none; }
 .mark { display: block; width: 24px; height: 24px; }
 .nav { display: flex; align-items: center; gap: var(--space-6); color: var(--text-muted); }
+.nav a, .nav .signout, .menu-panel a, .menu-panel .signout, .site-footer a, .crumbs a { display: inline-flex; align-items: center; min-height: var(--target); }
 .nav a { color: var(--text-muted); }
+.nav a[aria-current], .menu-panel a[aria-current] { color: var(--text); }
 .nav a:hover { color: var(--text); text-decoration: none; }
 .who { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-faint); overflow-wrap: anywhere; }
 .signout {
@@ -190,9 +195,10 @@ main { flex: 1; padding: var(--space-10) 0 var(--space-16); }
 
 /* Headings and meta ---------------------------------------------------- */
 
-.crumbs { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-faint); margin-bottom: var(--space-3); overflow-wrap: anywhere; }
+.crumbs { display: block; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-faint); margin-bottom: var(--space-3); overflow-wrap: anywhere; }
 .crumbs a { color: var(--text-muted); }
-.crumbs .sep { padding: 0 6px; }
+.crumbs ol { display: flex; flex-wrap: wrap; align-items: center; }
+.crumbs li + li::before { content: "/"; padding: 0 6px; }
 .page-title {
   font-family: var(--font-display);
   font-size: var(--text-3xl);
@@ -298,8 +304,6 @@ a.stat:hover { background: var(--surface-2); color: var(--text); text-decoration
 .row .primary { min-width: 0; overflow-wrap: anywhere; }
 .row .secondary { flex: none; color: var(--text-faint); font-size: var(--text-sm); }
 .row.empty { color: var(--text-faint); justify-content: center; }
-.version-group { padding: var(--space-3) var(--space-4) var(--space-1); font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-muted); border-top: 1px solid var(--border); }
-.version-group:first-child { border-top: 0; }
 
 /* Pagination and "load more". The pager is plain links; load more is the
  * htmx button, which htmx marks with .htmx-request while it fetches. */
@@ -383,9 +387,10 @@ th[aria-sort] .sort { color: var(--text); }
  * hidden until a script marks the page html.js-enhanced. */
 
 .cmd { display: flex; align-items: stretch; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); }
-.cmd pre { flex: 1; min-width: 0; overflow-x: auto; white-space: pre; padding: var(--space-2) var(--space-3); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.6; user-select: all; }
+.cmd pre { flex: 1; min-width: 0; overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-2) var(--space-3); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.6; user-select: all; }
 .cmd .copy {
   display: none;
+  align-self: flex-start;
   align-items: center;
   min-height: var(--target);
   padding: 0 var(--space-3);
@@ -411,17 +416,15 @@ html.js-enhanced .cmd .copy { display: inline-flex; }
 /* Inline copy buttons: quiet text, shown on hover and focus, always shown on
  * touch screens, and absent entirely without the script. */
 
-.copy { display: none; margin-left: var(--space-2); padding: 0 var(--space-2); font: 500 var(--text-xs)/1.8 var(--font-sans); color: var(--text-muted); background: none; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; vertical-align: baseline; }
+.copy { display: none; margin-left: var(--space-2); padding: 0 var(--space-2); font: 500 var(--text-xs)/1.8 var(--font-sans); color: var(--text-muted); background: none; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; vertical-align: baseline; min-height: var(--target); }
 .cmd .copy { border-radius: 0; margin-left: 0; }
 html.js-enhanced .copy { display: inline-block; }
 html.js-enhanced .cmd .copy { display: inline-flex; }
-html.js-enhanced :is(.row, dd, td, .pills, .version-group) .copy { opacity: 0; }
-html.js-enhanced :is(.row, dd, td, .pills, .version-group):is(:hover, :focus-within) .copy,
+html.js-enhanced :is(.row, dd, td, .pills) .copy { opacity: 0; }
+html.js-enhanced :is(.row, dd, td, .pills):is(:hover, :focus-within) .copy,
 html.js-enhanced .copy:focus-visible { opacity: 1; }
 @media (hover: none) { html.js-enhanced .copy { opacity: 1 !important; } }
 .copy:hover { color: var(--accent); }
-
-.live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* Keyboard shortcuts overlay: a native dialog opened with showModal. */
 
@@ -446,7 +449,7 @@ pre.document {
 .empty-state { padding: var(--space-12) var(--space-4); text-align: center; color: var(--text-muted); }
 .error-id { max-width: 28rem; margin: 0 auto var(--space-4); text-align: left; }
 .empty-state p + p, .empty-state p + .error-id { margin-top: var(--space-3); }
-.empty-state .big { font-family: var(--font-display); font-size: var(--text-4xl); color: var(--text-faint); line-height: 1; }
+.empty-state .big { font-weight: 400; font-family: var(--font-display); font-size: var(--text-4xl); color: var(--text-faint); line-height: 1; }
 
 /* Phone width: 16px gutters, stacked rows, no sideways scroll ------------ */
 
@@ -459,6 +462,7 @@ pre.document {
   .facts { grid-template-columns: minmax(0, 1fr); }
   .facts dd { border-top: 0; padding-top: 0; }
   .site-footer .container { flex-direction: column; gap: var(--space-1); }
+  th, td { padding-left: var(--space-2); padding-right: var(--space-2); overflow-wrap: anywhere; }
 }
 
 /* Status dot with label: ok, warn, bad, none. Shared by the System page's
@@ -512,6 +516,7 @@ code.command { display: inline-block; margin-top: var(--space-1); overflow-wrap:
   font-size: var(--text-sm);
   padding: 0 var(--space-3);
 }
+.filter-form :is(input, select) { border-color: var(--border-control); }
 .filter-form input[type="search"] { flex: 1 1 16em; min-width: 0; }
 .filter-form button { cursor: pointer; color: var(--text-muted); }
 .filter-form button:hover { border-color: var(--accent); color: var(--accent); }
@@ -529,3 +534,68 @@ code.command { display: inline-block; margin-top: var(--space-1); overflow-wrap:
 /* Numeric columns align right; a proxy's row keeps the upstream accent. */
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 tr.upstream td:first-child { box-shadow: inset 2px 0 0 var(--upstream); }
+
+/* Package rows: columns drop in a fixed order as the screen narrows, size
+ * first and then owners. A state pill (stage, severity, deprecated) is never
+ * dropped. The "load more" row spans the table and is its own border. */
+@media (max-width: 899px) { .col-size { display: none; } }
+@media (max-width: 719px) { .col-owners { display: none; } }
+td.more-row { padding: 0; height: auto; }
+td.more-row .more { border-top: 0; }
+td .pills { margin-top: 0; }
+
+/* Artifact page: the name's digest, the verdict strip, the in-page section
+ * navigation, the size bar, and the raw document. The bar's width is a data
+ * attribute in tenths, so the page needs no inline style (ADR 21). */
+.page-title .sub { margin-left: var(--space-2); font-size: var(--text-base); font-weight: 400; letter-spacing: 0; color: var(--text-faint); }
+.sub-title { margin: var(--space-6) 0 var(--space-2); font-size: var(--text-base); font-weight: 600; }
+.name { display: inline-block; }
+.name + .name { margin-left: var(--space-3); }
+main [id] { scroll-margin-top: var(--space-16); }
+
+.section-nav { position: sticky; top: 0; z-index: 4; margin-top: var(--space-6); background: var(--bg); border-bottom: 1px solid var(--border); }
+.sections { display: flex; flex-wrap: wrap; gap: var(--space-5); }
+.sections a { display: inline-flex; align-items: center; min-height: var(--row-h-dense); color: var(--text-muted); }
+.sections a:hover { color: var(--text); text-decoration: none; }
+.sections-menu { display: none; padding: var(--space-1) 0; }
+.sections-menu summary { display: inline-flex; align-items: center; min-height: var(--target); padding: 0 var(--space-2); color: var(--text-muted); cursor: pointer; list-style: none; border: 1px solid var(--border-strong); border-radius: var(--radius); }
+.sections-menu summary::-webkit-details-marker { display: none; }
+.sections-menu[open] summary { color: var(--text); }
+.sections-panel { position: absolute; z-index: 5; top: 100%; left: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); min-width: 12rem; padding: var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.sections-panel a { color: var(--text-muted); }
+@media (max-width: 719px) {
+  .sections { display: none; }
+  .sections-menu { display: block; }
+}
+
+.build-step { display: block; margin-top: 2px; font-size: var(--text-sm); color: var(--text-faint); }
+.bar-track { display: inline-block; width: 6rem; height: 4px; margin-left: var(--space-3); vertical-align: middle; background: var(--surface-2); border-radius: var(--radius); }
+.bar { display: block; height: 100%; background: var(--accent); border-radius: var(--radius); }
+.bar[data-w="1"] { width: 10%; }
+.bar[data-w="2"] { width: 20%; }
+.bar[data-w="3"] { width: 30%; }
+.bar[data-w="4"] { width: 40%; }
+.bar[data-w="5"] { width: 50%; }
+.bar[data-w="6"] { width: 60%; }
+.bar[data-w="7"] { width: 70%; }
+.bar[data-w="8"] { width: 80%; }
+.bar[data-w="9"] { width: 90%; }
+.bar[data-w="10"] { width: 100%; }
+
+.raw > summary { min-height: var(--target); cursor: pointer; font-family: var(--font-display); font-size: var(--text-xl); font-weight: 600; letter-spacing: -0.02em; }
+.raw[open] > summary { margin-bottom: var(--space-3); }
+
+/* Reduced motion and forced colours (Windows high contrast). Backgrounds
+ * vanish under forced colours, so the bar, the dots, and the current tab
+ * say it with system colours, borders, and an underline instead. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+@media (forced-colors: active) {
+  .bar { background: Highlight; }
+  .bar-track { border: 1px solid CanvasText; background: Canvas; }
+  .dot { background: CanvasText; }
+  .tabs a[aria-current], .nav a[aria-current], .menu-panel a[aria-current] { text-decoration: underline; }
+  .filter.active { border-width: 2px; }
+  :focus-visible { outline-color: Highlight; }
+}

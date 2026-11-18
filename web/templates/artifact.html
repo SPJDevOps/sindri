@@ -1,6 +1,17 @@
 {{define "content"}}
-<h1 class="page-title mono" title="{{.Digest}}">{{short .Digest}}</h1>
-<div class="pills">{{if .Kind}}<span class="pill">{{.Kind}}</span>{{end}}{{if .Upstream}}<span class="pill upstream">upstream content</span>{{end}}</div>{{with .Use}}
+<h1 class="page-title{{if not .Name}} mono{{end}}" title="{{.Digest}}">{{if .Name}}{{.Name}} <span class="sub mono">{{short .Digest}}</span>{{else}}{{short .Digest}}{{end}}</h1>
+<div class="pills">{{if .Kind}}<span class="pill">{{.Kind}}</span>{{end}}{{if .Upstream}}<span class="pill upstream">upstream content</span>{{end}}</div>{{with .Verdict}}
+<div class="pills verdict" role="group" aria-label="Verdict">{{template "stage-pill" (stage .Stage .Revoked)}}{{template "severity-pills" .Severity}}{{if not .ScannedAt.IsZero}}<span class="pill">scanned {{ago .ScannedAt}}</span>{{end}}{{if .NewFindings}}<span class="pill new">new findings since approval</span>{{end}}</div>{{end}}
+
+{{if gt (len .Sections) 1}}<div class="section-nav">
+  <nav class="sections" aria-label="Sections">{{template "section-links" .Sections}}</nav>
+  <details class="sections-menu">
+    <summary>Sections</summary>
+    <nav class="sections-panel" aria-label="Sections menu">{{template "section-links" .Sections}}</nav>
+  </details>
+</div>{{end}}
+
+<div id="overview">{{with .Use}}
 {{template "use" .}}{{end}}
 
 <section class="section">
@@ -9,6 +20,8 @@
     <dt>Size</dt><dd>{{bytes .Size}}</dd>
     {{if .MediaType}}<dt>Media type</dt><dd class="mono">{{.MediaType}}</dd>{{end}}
     <dt>Repository</dt><dd><a class="mono" href="{{.RepoHref}}">{{.Repo}}</a></dd>
+    {{if .Names}}<dt>Names</dt><dd>{{range .Names}}<span class="name"><a class="mono" href="{{.Href}}">{{.Label}}</a>{{with .Detail}} <span class="hint mono">{{.}}</span>{{end}}</span>{{end}}</dd>{{end}}
+    {{if .AlsoIn}}<dt>Also placed in</dt><dd>{{range $i, $r := .AlsoIn}}{{if $i}}, {{end}}<a class="mono" href="{{$r.Href}}">{{$r.Name}}</a>{{end}}{{if .AlsoInMore}} <span class="hint">and more not shown</span>{{end}}</dd>{{end}}
     {{if .HasIdentity}}
     <dt>Owners</dt><dd>{{range $i, $o := .Owners}}{{if $i}}, {{end}}<span class="mono">{{$o}}</span>{{else}}<span class="hint">none you may see</span>{{end}}</dd>
     <dt>First published</dt><dd>{{ago .CreatedAt}}</dd>
@@ -18,12 +31,14 @@
 
 {{if not .HasIdentity}}
 <div class="section callout{{if .Upstream}} upstream{{end}}">{{if .Upstream}}<strong>Fetched from an upstream.</strong> Proxy content is external and stays external: it has no owner, provenance, evidence, or lifecycle state, and it is never promoted.{{else}}<strong>No identity.</strong> This blob is a layer or a document inside an artifact. Identity, evidence, and lifecycle state belong to the manifest or distribution that names it.{{end}}</div>
-{{else}}
-<section class="section">
+{{end}}
+</div>
+{{if .HasIdentity}}
+<section class="section" id="lifecycle">
   <h2 class="section-title">Lifecycle</h2>
   {{if .Stages}}
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Lifecycle state of this artifact per environment and repository">
+  <table><caption class="sr-only">Lifecycle state of this artifact per environment and repository</caption>
     <thead><tr><th scope="col">Environment</th>{{range .StateRepos}}<th scope="col" class="mono">{{.}}</th>{{end}}</tr></thead>
     <tbody>
     {{range .Stages}}
@@ -34,28 +49,19 @@
   </div>
   {{else}}
   <p class="hint">No lifecycle stages are defined on this server.</p>
-  {{end}}
-</section>{{if .Manage}}
-
-<section class="section">
-  <h2 class="section-title">Manage</h2>
+  {{end}}{{if .Manage}}
+  <h3 class="sub-title">Manage</h3>
   <p class="hint">The page is read-only. These calls change state through the management API with your own token{{if .TokenDocs}}; <a href="{{.TokenDocs}}" rel="noreferrer noopener">how tokens work</a>{{end}}.</p>
-  {{template "commands" .Manage}}
-</section>{{end}}
-
-<section class="section">
-  <h2 class="section-title">Evidence</h2>
+  {{template "commands" .Manage}}{{end}}{{if .Deliveries}}
+  <h3 class="sub-title">Notifications</h3>
   <div class="rows">
-  {{range .Evidence}}
-    <div class="row"><span class="primary"><span class="pill">{{.Type}}</span> <span class="mono">{{.MediaType}}</span>{{with .Scan}}<span class="findings">{{if .Clean}}<span class="pill sev-none">no findings</span>{{else}}{{range .Counts}}<span class="pill {{.Class}}">{{.N}} {{.Severity}}</span>{{end}}{{end}}{{with .Platform}}<span class="mono hint">{{.}}</span>{{end}}</span>{{end}}</span><span class="secondary">{{bytes .Size}} · {{.CreatedBy}} · {{ago .CreatedAt}}</span></div>
-  {{else}}
-    <div class="row empty">No evidence attached.</div>
+  {{range .Deliveries}}
+    <div class="row"><span class="primary"><span class="dot {{.Dot}}" aria-hidden="true"></span>Notification to <span class="mono">{{.Webhook}}</span>: <span class="mono">{{.Event}}</span>, {{.State}}{{if .Status}} ({{.Status}}){{end}}</span><span class="secondary">{{ago .At}}</span></div>
   {{end}}
-  </div>
+  </div>{{end}}
 </section>
 
-{{if .Vulns}}
-<section class="section">
+<section class="section" id="vulnerabilities">
   <h2 class="section-title">Vulnerabilities</h2>
   {{range .Vulns}}
   <div class="vuln-panel">
@@ -64,8 +70,8 @@
     {{if .Clean}}
     <p class="hint">No findings</p>
     {{else}}
-    <div class="table-wrap">
-    <table>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="{{if .Platform}}Vulnerabilities in {{.Platform}}{{else}}Vulnerabilities{{end}}">
+    <table><caption class="sr-only">{{if .Platform}}Vulnerabilities in {{.Platform}}{{else}}Vulnerabilities{{end}}</caption>
       <thead><tr><th scope="col">ID</th><th scope="col">Severity</th><th scope="col">Package</th><th scope="col">Installed</th><th scope="col">Fixed</th></tr></thead>
       <tbody>
       {{range .Rows}}
@@ -77,22 +83,23 @@
     {{if .Hidden}}<p class="hint">{{.Hidden}} more not shown; the full report is evidence {{.EvidenceID}} in the API</p>{{end}}
     {{end}}
   </div>
+  {{else}}
+  <p class="hint">Sindri has not scanned this digest. A digest that was never scanned is not a clean one.</p>
   {{end}}
 </section>
-{{end}}
 
-{{if .Deliveries}}
-<section class="section">
-  <h2 class="section-title">Notifications</h2>
+<section class="section" id="evidence">
+  <h2 class="section-title">Evidence</h2>
   <div class="rows">
-  {{range .Deliveries}}
-    <div class="row"><span class="primary"><span class="dot {{.Dot}}" aria-hidden="true"></span>Notification to <span class="mono">{{.Webhook}}</span>: <span class="mono">{{.Event}}</span>, {{.State}}{{if .Status}} ({{.Status}}){{end}}</span><span class="secondary">{{ago .At}}</span></div>
+  {{range .Evidence}}
+    <div class="row"><span class="primary"><span class="pill">{{.Type}}</span> <span class="mono">{{.MediaType}}</span>{{with .Scan}}<span class="findings">{{if .Clean}}<span class="pill sev-none">no findings</span>{{else}}{{range .Counts}}<span class="pill {{.Class}}">{{.N}} {{.Severity}}</span>{{end}}{{end}}{{with .Platform}}<span class="mono hint">{{.}}</span>{{end}}</span>{{end}}</span><span class="secondary">{{bytes .Size}} · {{.CreatedBy}} · {{ago .CreatedAt}}</span></div>
+  {{else}}
+    <div class="row empty">No evidence attached.</div>
   {{end}}
   </div>
 </section>
-{{end}}
 
-<section class="section">
+<section class="section" id="provenance">
   <h2 class="section-title">Provenance</h2>
   <div class="rows">
   {{range .Provenance}}
@@ -105,21 +112,38 @@
 </section>
 {{end}}
 
-{{if .Children}}
-<section class="section">
-  <h2 class="section-title">{{if .IsIndex}}Platform manifests{{else}}Config and layers{{end}}</h2>
+{{if or .Layers .Platforms}}
+<section class="section" id="contents">
+  <h2 class="section-title">Contents</h2>
+  {{if .IsIndex}}
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Platforms in this image index">
+  <table><caption class="sr-only">Platforms in this image index</caption>
+    <thead><tr><th scope="col">Platform</th><th scope="col">Digest</th>{{if not .Upstream}}<th scope="col">Stage</th><th scope="col">Findings</th>{{end}}<th scope="col" class="num col-size">Size</th></tr></thead>
+    <tbody>
+    {{range .Platforms}}
+      <tr><td class="mono">{{.Platform}}</td><td><a class="mono" href="{{.Href}}" title="{{.Digest}}">{{short .Digest}}</a></td>{{if .HasVerdict}}<td>{{template "stage-pill" .Stage}}</td><td><div class="pills">{{template "severity-pills" .Severity}}</div></td>{{end}}<td class="num col-size">{{bytes .Size}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
   <div class="rows">
-  {{range .Children}}
-    <div class="row"><a class="primary mono" href="{{.Href}}" title="{{.Digest}}">{{.Digest}}</a><span class="secondary">{{bytes .Size}}</span></div>
+  {{range .Layers}}
+    <div class="row"><span class="primary"><a class="mono" href="{{.Href}}" title="{{.Digest}}">{{short .Digest}}</a>{{if .IsConfig}} <span class="pill">config</span>{{end}}{{with .Step}}<span class="build-step mono">{{.}}</span>{{end}}</span><span class="secondary">{{bytes .Size}}{{if .Bucket}}<span class="bar-track" aria-hidden="true"><span class="bar" data-w="{{.Bucket}}"></span></span>{{end}}</span></div>
   {{end}}
   </div>
+  {{end}}
 </section>
 {{end}}
 
 {{if .Document}}
-<section class="section">
-  <h2 class="section-title">Manifest</h2>
-  <pre class="document">{{.Document}}</pre>
+<section class="section" id="raw">
+  <details class="raw">
+    <summary>Raw {{if .IsIndex}}index{{else}}manifest{{end}}</summary>
+    <pre class="document">{{.Document}}</pre>
+  </details>
 </section>
 {{end}}
 {{end}}
+
+{{define "section-links"}}{{range .}}<a href="#{{.ID}}">{{.Label}}</a>{{end}}{{end}}
