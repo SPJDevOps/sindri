@@ -839,7 +839,7 @@ publish is scanned, and promotion is refused above a severity.
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
 | 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 ✅ |
 | 14, Nov 16–22 | Notifications ✅ | SIN-117, 112 | v1.6.0 ✅ |
-| 15, Nov 17–29 | UI first look ✅ | SIN-90, 91, 100, 98, 92, 96 | v1.7.0 ✅ |
+| 15, Nov 17–29 | UI first look ✅ | SIN-90, 91, 100, 98, 92, 96, 119 | v1.7.0, v1.7.1 ✅ |
 | 16–17, two weeks from the announcement | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
@@ -1456,6 +1456,32 @@ seeded UI were reviewed by eye in Safari. CI on main first failed on a test-only
 fixed in #75. The re-run on main
 and the release workflow passed on e7152bc, and v1.7.0 is published with binaries, the 1.7.0
 and 1.7.0-trivy images (amd64 and arm64), the 1.7.0 chart, and the docs site.
+
+---
+
+### v1.7.1 — Repository last publish, stored ✅
+
+**Goal.** Keep the repository list inside its p95 budget. v1.7.0 computed each row's last
+publish as `max(versions.published_at)` over every version of the page's repositories: about
+17ms of a 21ms query on the seeded set, and a p95 of 205–212ms on a loaded CI runner, over the
+200ms budget (SIN-119).
+
+**Scope.**
+- [x] Migration 00016 adds `repositories.last_published_at`, backfilled from versions. Triggers
+  on `versions` and `tags` keep it current on every write path, including proxy fills and an
+  older binary after a rollback. It never decreases. A tag counts when it is created or moves
+  to another digest, not when an unchanged tag is re-pushed or refreshed. The triggers exist
+  before the backfill runs, so a publish during the upgrade is not missed
+- [x] `ListRepositoryStats` reads the column. OCI repositories now show a last publish after
+  their next tag push; before, they always showed none
+
+**Gate run, 2026-11-18.** `make ci` and `make test-integration` passed, including tests for
+the backfill, each protocol's publish, a proxy fill, a delete, older and undated versions, 8
+concurrent publishers into one repository, and a same-digest tag update, which was shown to
+fail without its fix (★). The repository list's p95 on the seeded set fell from 28ms to 9.4ms
+locally, and from 51ms to 36ms under `-race`. CI on main and the release
+workflow passed on ed6a038, and v1.7.1 is published with binaries, the 1.7.1 and 1.7.1-trivy
+images (amd64 and arm64), the 1.7.1 chart, and the docs site.
 
 ---
 
