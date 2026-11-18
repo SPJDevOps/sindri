@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -653,10 +654,44 @@ type stateCell struct {
 	At     time.Time
 }
 
-type childRow struct {
-	Digest string
-	Size   int64
+// layerRow is the config or one layer of an image manifest. Bucket is the
+// layer's share of all the layers, in tenths, rounded up, for the size bar: the
+// stylesheet widens the bar by class, because the page may carry no inline
+// style (ADR 21). Step is the build step the image config records for the
+// layer, when the config could be read.
+type layerRow struct {
+	Digest   string
+	Href     string
+	Size     int64
+	Bucket   int
+	Step     string
+	IsConfig bool
+}
+
+// platformRow is one child of an image index: its platform, and for a hosted
+// repository the same stage and severity pills the tag rows use.
+type platformRow struct {
+	Platform   string
+	Digest     string
+	Href       string
+	Size       int64
+	HasVerdict bool
+	Stage      string
+	Severity   severityView
+}
+
+// nameView is one name that points at the digest in this repository: a tag, or
+// a package version.
+type nameView struct {
+	Label  string
 	Href   string
+	Detail string
+}
+
+// sectionLink is one entry of the in-page navigation.
+type sectionLink struct {
+	ID    string
+	Label string
 }
 
 // evidenceRow is one evidence document. Scan is set only on a scan Sindri's
@@ -706,8 +741,21 @@ func newEvidenceRow(ev evidence.Evidence) evidenceRow {
 
 type artifactPage struct {
 	chrome
-	Repo        string
-	RepoHref    string
+	Repo     string
+	RepoHref string
+	// Name is what the title leads with when the page knows one: the image and
+	// tag, or the package and version. The short digest follows it.
+	Name string
+	// Verdict is the strip under the title, for a hosted artifact with an
+	// identity. Upstream content never has one.
+	Verdict *verdictView
+	// Names are the tags or versions in this repository that point here; AlsoIn
+	// are the other repositories the caller may read that place the digest.
+	Names  []nameView
+	found  []registry.DigestName
+	AlsoIn []link
+	// Sections is the in-page navigation, listing only the sections drawn.
+	Sections    []sectionLink
 	Digest      string
 	Size        int64
 	MediaType   string
@@ -722,7 +770,8 @@ type artifactPage struct {
 	Evidence    []evidenceRow
 	Vulns       []vulnPanel
 	IsIndex     bool
-	Children    []childRow
+	Layers      []layerRow
+	Platforms   []platformRow
 	Document    string
 	// Deliveries are the webhook deliveries about this digest, for administrators.
 	Deliveries []deliveryRow
@@ -766,10 +815,27 @@ func (h *handler) artifactPage(w http.ResponseWriter, r *http.Request, repo mode
 		data.Size = info.Size
 	}
 
+	all, err := h.opts.Registry.AllRepositories(ctx)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	visible := map[string]bool{}
+	for _, other := range all {
+		if readable(r, other) {
+			visible[other.Name] = true
+		}
+	}
+
+	if err := h.names(r, &data, repo, image, digest, all, visible); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
 	subject, err := h.opts.Lifecycle.GetSubject(ctx, digest)
 	switch {
 	case err == nil:
-		if err := h.identity(r, &data, subject); err != nil {
+		if err := h.identity(r, &data, subject, visible); err != nil {
 			h.fail(w, r, err)
 			return
 		}
@@ -780,31 +846,126 @@ func (h *handler) artifactPage(w http.ResponseWriter, r *http.Request, repo mode
 	}
 
 	if repo.Protocol == model.ProtocolOCI && data.Size <= maxDocument {
-		h.manifest(r, &data, repo.Name, image, digest)
+		if err := h.manifest(r, &data, repo, image, digest); err != nil {
+			h.fail(w, r, err)
+			return
+		}
 	}
 	if data.Deliveries, err = h.artifactDeliveries(r, digest); err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	h.commands(r, &data, repo, image, digest)
+	data.Sections = sectionsOf(&data)
 	h.render(w, r, "artifact", "", http.StatusOK, data)
+}
+
+// names fills in what points at the digest inside this repository, the title
+// that leads with the best of them, and the other repositories the caller may
+// read that place it. Both lookups are one query each. The second lists every
+// placing repository, so it filters to the readable ones before anything is
+// named or counted: a repository the caller cannot read does not appear, and
+// does not change what appears.
+func (h *handler) names(r *http.Request, data *artifactPage, repo model.Repository, image string, digest model.Digest, all []model.Repository, visible map[string]bool) error {
+	ctx := r.Context()
+	found, err := h.opts.Registry.NamesFor(ctx, repo.Name, digest)
+	if err != nil {
+		return err
+	}
+	data.found = found
+	for _, n := range found {
+		v := nameView{Href: packageHref(repo.Name, n.Package)}
+		if n.IsTag {
+			v.Label = packageLabel(repo, n.Package) + ":" + n.Ref
+		} else {
+			v.Label = n.Display + " " + n.Ref
+			v.Detail = n.Filename
+		}
+		data.Names = append(data.Names, v)
+	}
+	if best, ok := bestName(repo, found, image, r.URL.Query().Get("tag")); ok {
+		if best.IsTag {
+			data.Name = packageLabel(repo, best.Package) + ":" + best.Ref
+		} else {
+			data.Name = best.Display + " " + best.Ref
+		}
+	} else if image != "" && repo.Protocol == model.ProtocolOCI {
+		data.Name = packageLabel(repo, image)
+	}
+	if data.Name != "" {
+		data.Title = data.Name + " " + shortDigest(digest.String())
+	}
+
+	placed, err := h.opts.Registry.PlacedIn(ctx, digest)
+	if err != nil {
+		return err
+	}
+	types := make(map[string]model.RepoType, len(all))
+	for _, other := range all {
+		types[other.Name] = other.Type
+	}
+	for _, name := range placed {
+		if name == repo.Name || !visible[name] {
+			continue
+		}
+		data.AlsoIn = append(data.AlsoIn, link{Name: name, Type: string(types[name]), Href: repoHref(name)})
+	}
+	return nil
+}
+
+// looseName folds the spellings of one package name together, enough to match
+// the URL's image against a stored normalized name.
+func looseName(s string) string {
+	return strings.NewReplacer("_", "-", ".", "-").Replace(strings.ToLower(s))
+}
+
+// bestName picks the name the title leads with: the tag the URL names when it
+// still points here, else a name of the image the URL names, else the first.
+func bestName(repo model.Repository, names []registry.DigestName, image, tag string) (registry.DigestName, bool) {
+	if len(names) == 0 {
+		return registry.DigestName{}, false
+	}
+	sameImage := func(n registry.DigestName) bool {
+		return image != "" && looseName(n.Package) == looseName(image)
+	}
+	if tag != "" {
+		for _, n := range names {
+			if n.IsTag && n.Ref == tag && (image == "" || sameImage(n)) {
+				return n, true
+			}
+		}
+	}
+	for _, n := range names {
+		if sameImage(n) {
+			return n, true
+		}
+	}
+	return names[0], true
+}
+
+// sectionsOf lists the sections the page draws, in order, for the in-page
+// navigation. It must agree with the template: a link to a section that is not
+// there is a dead link.
+func sectionsOf(data *artifactPage) []sectionLink {
+	s := []sectionLink{{"overview", "Overview"}}
+	if data.HasIdentity {
+		s = append(s, sectionLink{"lifecycle", "Lifecycle"}, sectionLink{"vulnerabilities", "Vulnerabilities"},
+			sectionLink{"evidence", "Evidence"}, sectionLink{"provenance", "Provenance"})
+	}
+	if len(data.Layers) > 0 || len(data.Platforms) > 0 {
+		s = append(s, sectionLink{"contents", "Contents"})
+	}
+	if data.Document != "" {
+		s = append(s, sectionLink{"raw", "Raw"})
+	}
+	return s
 }
 
 // identity fills in what a hosted publish recorded, limited to repositories
 // the caller may read: a subject placed in two teams' repositories shows each
 // team only its own owner and its own lifecycle state.
-func (h *handler) identity(r *http.Request, data *artifactPage, s lifecycle.Subject) error {
+func (h *handler) identity(r *http.Request, data *artifactPage, s lifecycle.Subject, visible map[string]bool) error {
 	ctx := r.Context()
-	all, err := h.opts.Registry.AllRepositories(ctx)
-	if err != nil {
-		return err
-	}
-	visible := map[string]bool{}
-	for _, repo := range all {
-		if readable(r, repo) {
-			visible[repo.Name] = true
-		}
-	}
 
 	data.HasIdentity = true
 	data.Kind = string(s.Kind)
@@ -834,7 +995,9 @@ func (h *handler) identity(r *http.Request, data *artifactPage, s lifecycle.Subj
 	if err != nil {
 		return err
 	}
+	position := make(map[string]int32, len(stages))
 	for _, stage := range stages {
+		position[stage.Name] = stage.Position
 		row := stageRow{Name: stage.Name}
 		for _, repo := range data.StateRepos {
 			var cell stateCell
@@ -858,40 +1021,45 @@ func (h *handler) identity(r *http.Request, data *artifactPage, s lifecycle.Subj
 		data.Evidence = append(data.Evidence, newEvidenceRow(e))
 	}
 	data.Vulns = newVulnPanels(ev)
+	if !data.Upstream {
+		v := newVerdict(s.States, data.Repo, position, ev)
+		data.Verdict = &v
+	}
 	return nil
 }
 
-// manifest shows an OCI manifest or index and links its children, when the
-// digest is one. GetManifest checks placement again, which is the point: the
-// page never reads bytes any other way.
-func (h *handler) manifest(r *http.Request, data *artifactPage, repo, image string, d model.Digest) {
-	man, err := h.opts.Registry.GetManifest(r.Context(), repo, image, d.String())
+// maxStep bounds a build step shown on the page; an image config may carry a
+// whole shell script in one.
+const maxStep = 160
+
+// manifest shows an OCI manifest or index and its contents, when the digest is
+// one. GetManifest checks placement again, which is the point: the page never
+// reads bytes any other way. An error is a failed lookup of row data; a body
+// that is not a manifest just leaves the sections out.
+func (h *handler) manifest(r *http.Request, data *artifactPage, repo model.Repository, image string, d model.Digest) error {
+	ctx := r.Context()
+	man, err := h.opts.Registry.GetManifest(ctx, repo.Name, image, d.String())
 	if err != nil {
-		return
+		return nil //nolint:nilerr // not a manifest, or not readable as one: the page shows the digest alone
 	}
 	switch man.MediaType {
 	case ocispec.MediaTypeImageIndex, "application/vnd.docker.distribution.manifest.list.v2+json":
 		var idx ocispec.Index
 		if json.Unmarshal(man.Body, &idx) != nil {
-			return
+			return nil //nolint:nilerr // not an index after all: the page shows the digest alone
 		}
 		data.IsIndex = true
-		for _, m := range idx.Manifests {
-			h.addChild(data, repo, image, m)
+		if err := h.platforms(r, data, repo, image, idx.Manifests); err != nil {
+			return err
 		}
 	case ocispec.MediaTypeImageManifest, "application/vnd.docker.distribution.manifest.v2+json":
 		var m ocispec.Manifest
 		if json.Unmarshal(man.Body, &m) != nil {
-			return
+			return nil //nolint:nilerr // not a manifest after all: the page shows the digest alone
 		}
-		if m.Config.Digest != "" {
-			h.addChild(data, repo, image, m.Config)
-		}
-		for _, l := range m.Layers {
-			h.addChild(data, repo, image, l)
-		}
+		h.layers(r, data, repo, image, m)
 	default:
-		return
+		return nil
 	}
 	data.MediaType = man.MediaType
 	var pretty bytes.Buffer
@@ -900,14 +1068,146 @@ func (h *handler) manifest(r *http.Request, data *artifactPage, repo, image stri
 	} else {
 		data.Document = string(man.Body)
 	}
+	return nil
 }
 
-func (h *handler) addChild(data *artifactPage, repo, image string, desc ocispec.Descriptor) {
-	d, err := model.ParseDigest(desc.Digest.String())
-	if err != nil {
-		return
+// platforms builds the table of an index: one row per child, with its platform
+// and, for a hosted repository, its own stage and findings from one batch
+// summary of every child. Index children are placed in the repository when the
+// index is pushed (invariant I2), and the lookup is by those digests only.
+func (h *handler) platforms(r *http.Request, data *artifactPage, repo model.Repository, image string, children []ocispec.Descriptor) error {
+	hosted := repo.Type == model.RepoTypeHosted
+	digests := make([]model.Digest, 0, len(children))
+	parsed := make([]model.Digest, len(children))
+	for i, c := range children {
+		d, err := model.ParseDigest(c.Digest.String())
+		if err != nil {
+			continue
+		}
+		parsed[i] = d
+		digests = append(digests, d)
 	}
-	data.Children = append(data.Children, childRow{Digest: d.String(), Size: desc.Size, Href: artifactHref(repo, image, d)})
+	var sums map[model.Digest]lifecycle.SubjectSummary
+	if hosted {
+		var err error
+		if sums, err = h.opts.Lifecycle.Summaries(r.Context(), digests, []string{repo.Name}); err != nil {
+			return err
+		}
+	}
+	for i, c := range children {
+		d := parsed[i]
+		if !d.Valid() {
+			continue
+		}
+		row := platformRow{Platform: platformLabel(c.Platform), Digest: d.String(), Size: c.Size, Href: artifactHref(repo.Name, image, d)}
+		if hosted {
+			own := pickSummaries(sums, []model.Digest{d})
+			row.HasVerdict = true
+			row.Stage = stageOf(own, repo.Name)
+			row.Severity = severityOf(own)
+		}
+		data.Platforms = append(data.Platforms, row)
+	}
+	return nil
+}
+
+// platformLabel is os/architecture/variant, or a note when the child names no
+// platform.
+func platformLabel(p *ocispec.Platform) string {
+	if p == nil || (p.OS == "" && p.Architecture == "") {
+		return "no platform"
+	}
+	label := p.OS + "/" + p.Architecture
+	if p.Variant != "" {
+		label += "/" + p.Variant
+	}
+	return label
+}
+
+// layers builds the config and layer rows of an image manifest, with each
+// layer's share for the size bar and, where the image config is a small
+// document the registry holds, the build step that made it. Reading the config
+// is one blob read for the whole page, not one per layer.
+func (h *handler) layers(r *http.Request, data *artifactPage, repo model.Repository, image string, m ocispec.Manifest) {
+	var total int64
+	for _, l := range m.Layers {
+		total += l.Size
+	}
+	steps := h.buildSteps(r, repo.Name, m.Config)
+	add := func(desc ocispec.Descriptor, isConfig bool, step string) {
+		d, err := model.ParseDigest(desc.Digest.String())
+		if err != nil {
+			return
+		}
+		row := layerRow{Digest: d.String(), Size: desc.Size, Href: artifactHref(repo.Name, image, d), IsConfig: isConfig, Step: step}
+		if !isConfig {
+			row.Bucket = sizeBucket(desc.Size, total)
+		}
+		data.Layers = append(data.Layers, row)
+	}
+	if m.Config.Digest != "" {
+		add(m.Config, true, "")
+	}
+	for i, l := range m.Layers {
+		step := ""
+		if i < len(steps) {
+			step = steps[i]
+		}
+		add(l, false, step)
+	}
+}
+
+// sizeBucket is size's share of total in tenths, rounded up, 1 to 10; 0 for
+// an empty layer. The stylesheet draws the bar from it.
+func sizeBucket(size, total int64) int {
+	if size <= 0 || total <= 0 {
+		return 0
+	}
+	return int(min(10, (size*10+total-1)/total))
+}
+
+// buildSteps reads the image config and returns the build step of each layer,
+// in layer order, from the history entries that made a layer. It returns nil
+// for a config that is large, absent, or not an image config: the steps are a
+// convenience and never fail the page.
+func (h *handler) buildSteps(r *http.Request, repo string, cfg ocispec.Descriptor) []string {
+	if cfg.Digest == "" || cfg.Size <= 0 || cfg.Size > maxDocument {
+		return nil
+	}
+	d, err := model.ParseDigest(cfg.Digest.String())
+	if err != nil {
+		return nil
+	}
+	_, body, err := h.opts.Registry.GetBlob(r.Context(), repo, d)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(body, maxDocument+1))
+	if err != nil || len(raw) > maxDocument {
+		return nil
+	}
+	var img ocispec.Image
+	if json.Unmarshal(raw, &img) != nil {
+		return nil
+	}
+	var steps []string
+	for _, hist := range img.History {
+		if hist.EmptyLayer {
+			continue
+		}
+		steps = append(steps, truncateStep(hist.CreatedBy))
+	}
+	return steps
+}
+
+// truncateStep shortens a build step to one line of at most maxStep runes.
+func truncateStep(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > maxStep {
+		return string(r[:maxStep-1]) + "…"
+	}
+	return s
 }
 
 // registryError turns "not here" into the not-found page and anything else
@@ -950,29 +1250,20 @@ func (h *handler) commands(r *http.Request, data *artifactPage, repo model.Repos
 			}
 		}
 		steps = PullCommands(in)
-	case model.ProtocolPyPI:
-		files, err := h.opts.Registry.ListPackageFiles(ctx, repo.Name, image)
-		if err != nil {
-			break
-		}
-		for _, f := range files {
-			if f.Digest == digest {
-				in.Version = f.Version
-				steps = InstallCommands(in)
-				break
+	case model.ProtocolPyPI, model.ProtocolNPM:
+		// The names already say which version of the URL's package holds this
+		// file, so no second lookup is needed, and a link naming a package that
+		// does not hold it still prints no command.
+		for _, n := range data.found {
+			if n.IsTag || looseName(n.Package) != looseName(image) {
+				continue
 			}
-		}
-	case model.ProtocolNPM:
-		pkg, err := h.opts.Registry.GetNPMPackage(ctx, repo.Name, image)
-		if err != nil {
-			break
-		}
-		for _, v := range pkg.Versions {
-			if v.File.Digest == digest {
-				in.Package, in.Version = pkg.Name, v.Version
-				steps = InstallCommands(in)
-				break
+			in.Version = n.Ref
+			if repo.Protocol == model.ProtocolNPM {
+				in.Package = n.Display
 			}
+			steps = InstallCommands(in)
+			break
 		}
 	}
 	title := "Install"

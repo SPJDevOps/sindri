@@ -86,6 +86,11 @@ Each is shown, in every state below, on the reference page.
 | List bar | `.list-bar` | the status line and the view switch (`.filters`) on one row |
 | Repository table | `table` `.num` `tr.upstream` | right-aligned numeric columns; a proxy row keeps the `--upstream` accent |
 | Package rows | `table` `.col-size` `.col-owners` `td.more-row`; partials `stage-pill`, `severity-pills` | a tag or version row with owners, stage, findings, and size; a stage pill (`.approve`, or `.none` "not promoted"); severity pills, `.sev-none` "no findings", or `.none` "not scanned"; size goes below 900px and owners below 720px, the pills never |
+| Verdict strip | `.pills.verdict`; partials `stage-pill`, `severity-pills` | at most four pills under the artifact title: stage (`.approve`, `.none` "not promoted", or `.revoke` "revoked from X"), worst severity or "not scanned", scan age, `.new` "new findings since approval"; none on upstream content |
+| Section navigation | `.section-nav` `.sections` `.sections-menu` `.sections-panel` | sticky links to the artifact page's sections; under 720px a native `<details>` holds the same links; no script |
+| Size bar | `.bar-track` `.bar` `[data-w]` | a layer's share of the image in tenths, 1 to 10, set by attribute because the page may carry no inline style |
+| Layer and name lines | `.build-step` `.name` `.sub-title` `.sub` | a layer's build step; a name that points at the digest; a sub-heading; the short digest after the title |
+| Raw document | `.raw` | a collapsed `<details>` holding the manifest or index JSON |
 | Command block | `.cmd` `pre` `.copy` | the copy button is hidden unless `html.js-enhanced` is set |
 | Use panel | `.use` `.tabs` `.step` `.cmd` | one client tab current; a step with and without a caption; notes; the publicUrl fallback hint |
 | Stat tile | `.stats` `.stat` `.stat-label` `.stat-value` | neutral; `.approve`; `.revoke`; `.upstream`; link (`a.stat`) |

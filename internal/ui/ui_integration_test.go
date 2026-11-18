@@ -354,7 +354,7 @@ func TestUI_ArtifactPageShowsLifecycleEvidenceAndProvenance(t *testing.T) {
 		"application/spdx+json", "user:ci", // evidence metadata
 		"https://git.example.com/story", // provenance
 		"approved", "not promoted",      // prod approved, dev not
-		"Config and layers", `"schemaVersion": 2`, // the manifest and its children
+		"Contents", `"schemaVersion": 2`, // the layers and the manifest
 	} {
 		if !strings.Contains(r.body, want) {
 			t.Errorf("artifact page lacks %q", want)

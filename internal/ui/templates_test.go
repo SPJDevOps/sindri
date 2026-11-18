@@ -256,6 +256,11 @@ func TestTemplates_Golden(t *testing.T) {
 			},
 			Use: panelFor("Install", "/ui/r/internal-npm/-/package", npmIn, InstallCommands(npmIn), installNotes(npmIn))}},
 		"artifact": {"artifact", artifactPage{chrome: base, Repo: "team/app", RepoHref: "/ui/r/team/app",
+			Name: "web:1.0",
+			Verdict: &verdictView{Stage: "prod", ScannedAt: long, NewFindings: true,
+				Severity: severityView{Scanned: true, Counts: []severityCount{{Severity: "critical", Class: "sev-critical", N: 1}}}},
+			Names:  []nameView{{Label: "web:1.0", Href: "/ui/r/team/app/-/package?name=web"}, {Label: "web:latest", Href: "/ui/r/team/app/-/package?name=web"}},
+			AlsoIn: []link{{Name: "team/mirror", Type: "hosted", Href: "/ui/r/team/mirror"}},
 			Digest: digest, Size: 1234, MediaType: "application/vnd.oci.image.manifest.v1+json", Kind: "oci-manifest",
 			HasIdentity: true, Owners: []string{"repository:team/app"}, CreatedAt: long,
 			Provenance: []lifecycle.Provenance{{Provenance: model.Provenance{SourceType: "oci-push", SourceRef: "https://git.example.com/app", BuildRef: "4b825dc"}, RecordedAt: long}},
@@ -277,10 +282,49 @@ func TestTemplates_Golden(t *testing.T) {
 				{ID: "ev-2", Type: model.EvidenceScan, CreatedAt: long, Metadata: json.RawMessage(`{"producer":"sindri","platform":"linux/arm64","severity_counts":{"CRITICAL":0,"HIGH":0,"MEDIUM":0,"LOW":0,"UNKNOWN":0},"vulnerabilities":[]}`)},
 			}),
 			Deliveries: []deliveryRow{{Webhook: "chat", Event: "finding.new", State: "delivered", Dot: "ok", Status: "200", At: long}},
-			Children:   []childRow{{Digest: digest, Size: 99, Href: "/y"}},
-			Document:   "{\n  \"schemaVersion\": 2\n}",
-			Use:        panelFor("Pull", "/ui/r/team/app/-/artifact", pullIn, PullCommands(pullIn), nil),
-			Manage:     manage, TokenDocs: "https://docs.example.test/sindri/quickstart.html"}},
+			Layers: []layerRow{
+				{Digest: digest, Size: 1234, Href: "/c", IsConfig: true},
+				{Digest: digest[:len(digest)-1] + "0", Size: 3 << 20, Href: "/l1", Bucket: 3, Step: "/bin/sh -c apk add --no-cache ca-certificates"},
+				{Digest: digest[:len(digest)-1] + "1", Size: 7 << 20, Href: "/l2", Bucket: 7},
+			},
+			Document: "{\n  \"schemaVersion\": 2\n}",
+			Use:      panelFor("Pull", "/ui/r/team/app/-/artifact", pullIn, PullCommands(pullIn), nil),
+			Manage:   manage, TokenDocs: "https://docs.example.test/sindri/quickstart.html"}},
+		"artifact-index": {"artifact", artifactPage{chrome: base, Repo: "team/app", RepoHref: "/ui/r/team/app",
+			Name: "web:2.0", Verdict: &verdictView{Stage: "dev", Revoked: true, Severity: severityView{}},
+			Names:  []nameView{{Label: "web:2.0", Href: "/ui/r/team/app/-/package?name=web"}},
+			Digest: digest, Size: 480, MediaType: "application/vnd.oci.image.index.v1+json", Kind: "oci-index",
+			HasIdentity: true, Owners: []string{"repository:team/app"}, CreatedAt: long, IsIndex: true,
+			StateRepos: []string{"team/app"},
+			Stages:     []stageRow{{Name: "dev", Cells: []stateCell{{Action: "revoke", Actor: "user:alice", At: long}}}},
+			Platforms: []platformRow{
+				{Platform: "linux/amd64", Digest: digest[:len(digest)-1] + "0", Href: "/a", Size: 5 << 20, HasVerdict: true, Stage: "dev",
+					Severity: severityView{Scanned: true, Counts: []severityCount{{Severity: "high", Class: "sev-high", N: 2}}}},
+				{Platform: "linux/arm64/v8", Digest: digest[:len(digest)-1] + "1", Href: "/b", Size: 5 << 20, HasVerdict: true, Severity: severityView{Scanned: true}},
+				{Platform: "no platform", Digest: digest[:len(digest)-1] + "2", Href: "/c", Size: 800, HasVerdict: true},
+			},
+			Document: "{\n  \"schemaVersion\": 2\n}",
+			Use:      panelFor("Pull", "/ui/r/team/app/-/artifact", pullIn, PullCommands(pullIn), nil)}},
+		"artifact-pypi": {"artifact", artifactPage{chrome: base, Repo: "internal-py", RepoHref: "/ui/r/internal-py",
+			Name:    "demo 1.0",
+			Verdict: &verdictView{Stage: "dev", ScannedAt: long, Severity: severityView{Scanned: true}},
+			Names:   []nameView{{Label: "demo 1.0", Href: "/ui/r/internal-py/-/package?name=demo", Detail: "demo-1.0.tar.gz"}},
+			Digest:  digest, Size: 2048, Kind: "pypi-distribution",
+			HasIdentity: true, Owners: []string{"repository:internal-py"}, CreatedAt: long,
+			StateRepos: []string{"internal-py"},
+			Stages:     []stageRow{{Name: "dev", Cells: []stateCell{{Action: "approve", Actor: "user:alice", At: long}}}},
+			Evidence:   []evidenceRow{},
+			Use:        panelFor("Install", "/ui/r/internal-py/-/artifact", pypiIn, InstallCommands(pypiIn), installNotes(pypiIn))}},
+		"artifact-npm": {"artifact", artifactPage{chrome: base, Repo: "internal-npm", RepoHref: "/ui/r/internal-npm",
+			Name:    "@acme/ui 1.1.0",
+			Verdict: &verdictView{Severity: severityView{}},
+			Names:   []nameView{{Label: "@acme/ui 1.1.0", Href: "/ui/r/internal-npm/-/package?name=%40acme%2Fui", Detail: "ui-1.1.0.tgz"}},
+			Digest:  digest, Size: 4096, Kind: "npm-tarball",
+			HasIdentity: true, Owners: []string{"repository:internal-npm"}, CreatedAt: long,
+			StateRepos: []string{"internal-npm"},
+			Stages:     []stageRow{{Name: "dev", Cells: []stateCell{{}}}},
+			Provenance: []lifecycle.Provenance{{Provenance: model.Provenance{SourceType: "npm-publish"}, RecordedAt: long}},
+			Use:        panelFor("Install", "/ui/r/internal-npm/-/artifact", npmIn, InstallCommands(npmIn), installNotes(npmIn))}},
 		"artifact-upstream": {"artifact", artifactPage{chrome: base, Repo: "hub", RepoHref: "/ui/r/hub",
 			Digest: digest, Size: 1234, Upstream: true,
 			Use: panelFor("Pull", "/ui/r/hub/-/artifact", hubIn, PullCommands(hubIn), append([]string{"Pulls through the proxy, which fetches from the upstream on a miss."}, ociNotes(hubIn)...))}},
@@ -308,6 +352,11 @@ func TestTemplates_Golden(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			if page, ok := tc.data.(artifactPage); ok {
+				// The navigation is derived from what the page draws, as in the handler.
+				page.Sections = sectionsOf(&page)
+				tc.data = page
+			}
 			var buf bytes.Buffer
 			if err := pages[tc.page].ExecuteTemplate(&buf, "layout", tc.data); err != nil {
 				t.Fatalf("rendering: %v", err)

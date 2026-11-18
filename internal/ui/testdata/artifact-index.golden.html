@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
+<title>t · Sindri</title>
+<link rel="icon" href="/ui/static/VERSION/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/ui/static/VERSION/favicon.png" type="image/png" sizes="32x32">
+<link rel="stylesheet" href="/ui/static/VERSION/sindri.css">
+<script src="/ui/static/VERSION/htmx.min.js" defer></script>
+<script src="/ui/static/VERSION/sindri.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container">
+    <a class="wordmark" href="/ui/"><img class="mark" src="/ui/static/VERSION/favicon.svg" alt="" width="24" height="24">Sindri</a>
+    <nav class="nav" aria-label="Main">
+      <a href="/ui/">Repositories</a>
+      
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    <details class="menu">
+      <summary>Menu</summary>
+      <nav class="menu-panel" aria-label="Menu">
+      <a href="/ui/">Repositories</a>
+      
+      <span class="who" title="Signed in as user:alice">user:alice</span>
+      <button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button></nav>
+    </details>
+  </div>
+</header>
+<main id="main">
+  <div class="container">
+    
+    
+<h1 class="page-title" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe">web:2.0 <span class="sub mono">sha256:4b825dc642cb</span></h1>
+<div class="pills"><span class="pill">oci-index</span></div>
+<div class="pills verdict" role="group" aria-label="Verdict"><span class="pill revoke">revoked from dev</span><span class="pill none">not scanned</span></div>
+
+<div class="section-nav">
+  <nav class="sections" aria-label="Sections"><a href="#overview">Overview</a><a href="#lifecycle">Lifecycle</a><a href="#vulnerabilities">Vulnerabilities</a><a href="#evidence">Evidence</a><a href="#provenance">Provenance</a><a href="#contents">Contents</a><a href="#raw">Raw</a></nav>
+  <details class="sections-menu">
+    <summary>Sections</summary>
+    <nav class="sections-panel" aria-label="Sections menu"><a href="#overview">Overview</a><a href="#lifecycle">Lifecycle</a><a href="#vulnerabilities">Vulnerabilities</a><a href="#evidence">Evidence</a><a href="#provenance">Provenance</a><a href="#contents">Contents</a><a href="#raw">Raw</a></nav>
+  </details>
+</div>
+
+<div id="overview">
+<section class="section use" aria-labelledby="use-title">
+  <h2 class="section-title" id="use-title">Pull</h2>
+  <nav class="tabs" aria-label="Client"><a href="/ui/r/team/app/-/artifact?client=docker" aria-current="page">docker</a><a href="/ui/r/team/app/-/artifact?client=podman">podman</a><a href="/ui/r/team/app/-/artifact?client=crane">crane</a></nav>
+  
+  
+  <div class="cmd"><pre><code>docker pull sindri.example.test/team/app/web@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</code></pre><button class="copy" type="button" data-copy="docker pull sindri.example.test/team/app/web@sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy command">Copy</button></div>
+
+  <p class="hint step">Or by tag, which can move</p>
+  <div class="cmd"><pre><code>docker pull sindri.example.test/team/app/web:1.0</code></pre><button class="copy" type="button" data-copy="docker pull sindri.example.test/team/app/web:1.0" aria-label="Copy command">Copy</button></div>
+
+  
+  
+</section>
+
+<section class="section">
+  <dl class="facts">
+    <dt>Digest</dt><dd><span class="mono">sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe</span><button class="copy" type="button" data-copy="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebabe" aria-label="Copy digest">Copy</button></dd>
+    <dt>Size</dt><dd>480 B</dd>
+    <dt>Media type</dt><dd class="mono">application/vnd.oci.image.index.v1&#43;json</dd>
+    <dt>Repository</dt><dd><a class="mono" href="/ui/r/team/app">team/app</a></dd>
+    <dt>Names</dt><dd><span class="name"><a class="mono" href="/ui/r/team/app/-/package?name=web">web:2.0</a></span></dd>
+    
+    
+    <dt>Owners</dt><dd><span class="mono">repository:team/app</span></dd>
+    <dt>First published</dt><dd><time datetime="2020-03-14T15:09:26Z" title="2020-03-14T15:09:26Z">14 Mar 2020</time></dd>
+    
+  </dl>
+</section>
+
+
+</div>
+
+<section class="section" id="lifecycle">
+  <h2 class="section-title">Lifecycle</h2>
+  
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Environment</th><th scope="col" class="mono">team/app</th></tr></thead>
+    <tbody>
+    
+      <tr><th scope="row" class="mono">dev</th><td><span class="pill revoke">revoked</span><span class="by">user:alice · <time datetime="2020-03-14T15:09:26Z" title="2020-03-14T15:09:26Z">14 Mar 2020</time></span></td></tr>
+    
+    </tbody>
+  </table>
+  </div>
+  
+</section>
+
+<section class="section" id="vulnerabilities">
+  <h2 class="section-title">Vulnerabilities</h2>
+  
+  <p class="hint">Sindri has not scanned this digest. A digest that was never scanned is not a clean one.</p>
+  
+</section>
+
+<section class="section" id="evidence">
+  <h2 class="section-title">Evidence</h2>
+  <div class="rows">
+  
+    <div class="row empty">No evidence attached.</div>
+  
+  </div>
+</section>
+
+<section class="section" id="provenance">
+  <h2 class="section-title">Provenance</h2>
+  <div class="rows">
+  
+    <div class="row empty">No provenance recorded.</div>
+  
+  </div>
+  <p class="hint">Provenance is what the publisher claimed at push time. Sindri records it; it does not verify it.</p>
+</section>
+
+
+
+<section class="section" id="contents">
+  <h2 class="section-title">Contents</h2>
+  
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th scope="col">Platform</th><th scope="col">Digest</th><th scope="col">Stage</th><th scope="col">Findings</th><th scope="col" class="num col-size">Size</th></tr></thead>
+    <tbody>
+    
+      <tr><td class="mono">linux/amd64</td><td><a class="mono" href="/a" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebab0">sha256:4b825dc642cb</a></td><td><span class="pill approve">dev</span></td><td><div class="pills"><span class="pill sev-high">2 high</span></div></td><td class="num col-size">5.0 MiB</td></tr>
+    
+      <tr><td class="mono">linux/arm64/v8</td><td><a class="mono" href="/b" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebab1">sha256:4b825dc642cb</a></td><td><span class="pill none">not promoted</span></td><td><div class="pills"><span class="pill sev-none">no findings</span></div></td><td class="num col-size">5.0 MiB</td></tr>
+    
+      <tr><td class="mono">no platform</td><td><a class="mono" href="/c" title="sha256:4b825dc642cb6eb9a060e54bf8d69288fbee4904cafebabedeadbeefcafebab2">sha256:4b825dc642cb</a></td><td><span class="pill none">not promoted</span></td><td><div class="pills"><span class="pill none">not scanned</span></div></td><td class="num col-size">800 B</td></tr>
+    
+    </tbody>
+  </table>
+  </div>
+  
+</section>
+
+
+
+<section class="section" id="raw">
+  <details class="raw">
+    <summary>Raw index</summary>
+    <pre class="document">{
+  &#34;schemaVersion&#34;: 2
+}</pre>
+  </details>
+</section>
+
+
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <span>Sindri 0.0.0-test</span>
+    <span>Read-only view. Changes go through configuration and the API, never this page.</span>
+    <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
+  </div>
+</footer>
+<div class="live" id="live" role="status" aria-live="polite"></div>
+<dialog class="keys" id="keys" aria-labelledby="keys-title">
+  <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
+  <dl class="facts">
+    <dt><kbd>g</kbd> then <kbd>r</kbd></dt><dd>Go to repositories</dd>
+    <dt><kbd>?</kbd></dt><dd>Show or hide this list</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Close this list</dd>
+  </dl>
+  <form method="dialog"><button class="close" type="submit">Close</button></form>
+</dialog>
+</body>
+</html>
