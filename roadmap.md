@@ -839,7 +839,7 @@ publish is scanned, and promotion is refused above a severity.
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
 | 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 ✅ |
 | 14, Nov 16–22 | Notifications ✅ | SIN-117, 112 | v1.6.0 ✅ |
-| 15, Nov 17–29 | UI first look | SIN-90, 91, 100, 98, 92 | v1.7.0 |
+| 15, Nov 17–29 | UI first look ✅ | SIN-90, 91, 100, 98, 92, 96 | v1.7.0 ✅ |
 | 16–17, two weeks from the announcement | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
@@ -874,7 +874,9 @@ Sprint 15 started early on Nov 17 and still ends on Nov 29. Decisions made at it
 screenshots stay a person's job, reviewed in Safari against `make ui-preview` and a seeded
 `make run`, with no headless browser in CI. A new server-level setting, `ui.docsUrl`, points
 the footer's docs link at a self-hosted copy for air-gapped sites. The mark is a Tektur "S"
-on the accent. The component reference page is rendered only in tests.
+on the accent. The component reference page is rendered only in tests. SIN-96, the
+repository list at scale, was pulled in on Nov 17 after a review of the seeded UI. Its work
+is recorded under [v1.7.0 — UI first look](#v170--ui-first-look-) below.
 
 Not scheduled: SIN-56, 58, 65, 74, and 76 from the hardening epic, kept as filler for the
 M12 window. SIN-118, an optional `format: slack` on a webhook so a notification can post
@@ -1398,6 +1400,62 @@ URL's path and query nor the secret appeared in `config show` or the server log.
 was checked by its integration tests, not in a browser. CI on main and the release workflow
 passed on 35c7556, and v1.6.0 is published with binaries, the 1.6.0 and 1.6.0-trivy images
 (amd64 and arm64), the 1.6.0 chart, and the docs site.
+
+---
+
+### v1.7.0 — UI first look ✅
+
+**Goal.** The pages a newcomer meets first look finished and stay usable at hundreds of
+repositories, before the announcement. Sprint 15, under epic SIN-89. Ships as a minor
+release: it adds a server-level setting, `ui.docsUrl`, and loosens one CSP directive.
+
+**Scope.**
+- [x] Design foundation: spacing, type, and semantic colour tokens, a named component set, a
+  component reference page rendered only in tests, and `web/DESIGN.md`. Tests recompute the
+  text (4.5:1) and fill (3:1) contrast tables from `sindri.css`, and fail an unused class or
+  a stylesheet over 30 KB (SIN-90)
+- [x] Test harness: a seed of 500 repositories and 50,000 packages written with COPY,
+  `make ui-seed`, a p95 limit of 200ms and a per-page query ceiling on that set for admin, a
+  restricted reader, and a writer, budgets for CSS, script, and page size, and
+  `make ui-preview`. The ceilings found and removed two N+1s: the repository list (205
+  queries to 3) and the OCI tag page (153 to 3) (SIN-100)
+- [x] `sindri.js` (3.4 KB): copy buttons, local time on `<time>`, the `g r` and `?`
+  shortcuts, and a sign-in redirect on an htmx 401 (SIN-91)
+- [x] First impressions: favicon, not-found and error pages, the "sign-in is not configured"
+  page with the exact `auth.oidc` block, session expiry through `HX-Redirect`, a header that
+  collapses under 720px, a footer docs link from `ui.docsUrl`. CLAUDE.md and ADR 21 name the
+  help page's hashed inline stylesheet as the one CSP exception (SIN-98)
+- [x] "Use this" panel: pull, install, and client setup commands per protocol, and promote,
+  revoke, and re-scan as `curl` for writers on hosted content. No token is ever rendered, and
+  the commands are run against a real server in an integration test (SIN-92)
+- [x] Repository list at scale: a GET filter (text, type, protocol), grouping by namespace, a
+  table view by default above 30 repositories, 200-row pages, and package count and last
+  publish from one aggregate query. The UI's `form-action` is now `'self'` and every form
+  must be an explicit GET (ADR 21 amended). Stored size was dropped: it pushed p95 to 476ms
+  (SIN-96)
+
+**Out of scope.** Screenshots in CI: they stay a person's job, reviewed in Safari against
+`make ui-preview` and a seeded `make run` (decision recorded in SIN-100). Stored size per
+repository, which needs a maintained summary. The rest of epic SIN-89.
+
+**Gate.**
+```bash
+make ci
+make test-integration        # includes TestScale_* on the seeded set and both route walks
+# by hand: make ui-preview, and make ui-seed + make run, in Safari, light and dark
+git tag v1.7.0 && git push origin v1.7.0   # the release workflow is green
+```
+
+**Gate run, 2026-11-17.** On the branch: `make ci` and `make test-integration` passed. Every
+page on the seeded set rendered with p95 under 30ms, the repository list in 4 queries for
+every filter, page, and view. Each new guard was shown to catch its bug once: a per-row query
+over the ceiling, a stylesheet over budget, a not-found page that differed for an unreadable
+repository, a rendered token, and a form overriding its GET. The reference page and the
+seeded UI were reviewed by eye in Safari. CI on main first failed on a test-only race in
+`internal/remote` (parallel test servers closing `http.DefaultTransport`'s idle connections),
+fixed in #75. The re-run on main
+and the release workflow passed on e7152bc, and v1.7.0 is published with binaries, the 1.7.0
+and 1.7.0-trivy images (amd64 and arm64), the 1.7.0 chart, and the docs site.
 
 ---
 

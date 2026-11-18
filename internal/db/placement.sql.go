@@ -103,7 +103,7 @@ func (q *Queries) CountVersionsByPackage(ctx context.Context, packageID uuid.UUI
 const createRepository = `-- name: CreateRepository :one
 INSERT INTO repositories (name, type, protocol, config, locked, managed_by)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, name, type, protocol, config, locked, managed_by, created_at
+RETURNING id, name, type, protocol, config, locked, managed_by, created_at, last_published_at
 `
 
 type CreateRepositoryParams struct {
@@ -134,6 +134,7 @@ func (q *Queries) CreateRepository(ctx context.Context, arg CreateRepositoryPara
 		&i.Locked,
 		&i.ManagedBy,
 		&i.CreatedAt,
+		&i.LastPublishedAt,
 	)
 	return i, err
 }
@@ -545,7 +546,7 @@ func (q *Queries) GetPackageByRepoAndName(ctx context.Context, arg GetPackageByR
 }
 
 const getRepositoryByID = `-- name: GetRepositoryByID :one
-SELECT id, name, type, protocol, config, locked, managed_by, created_at FROM repositories
+SELECT id, name, type, protocol, config, locked, managed_by, created_at, last_published_at FROM repositories
 WHERE id = $1
 `
 
@@ -561,12 +562,13 @@ func (q *Queries) GetRepositoryByID(ctx context.Context, id uuid.UUID) (Reposito
 		&i.Locked,
 		&i.ManagedBy,
 		&i.CreatedAt,
+		&i.LastPublishedAt,
 	)
 	return i, err
 }
 
 const getRepositoryByName = `-- name: GetRepositoryByName :one
-SELECT id, name, type, protocol, config, locked, managed_by, created_at FROM repositories
+SELECT id, name, type, protocol, config, locked, managed_by, created_at, last_published_at FROM repositories
 WHERE name = $1
 `
 
@@ -582,6 +584,7 @@ func (q *Queries) GetRepositoryByName(ctx context.Context, name string) (Reposit
 		&i.Locked,
 		&i.ManagedBy,
 		&i.CreatedAt,
+		&i.LastPublishedAt,
 	)
 	return i, err
 }
@@ -1142,7 +1145,7 @@ func (q *Queries) ListReferrers(ctx context.Context, arg ListReferrersParams) ([
 }
 
 const listRepositories = `-- name: ListRepositories :many
-SELECT id, name, type, protocol, config, locked, managed_by, created_at FROM repositories
+SELECT id, name, type, protocol, config, locked, managed_by, created_at, last_published_at FROM repositories
 WHERE ($1::text IS NULL OR name > $1)
 ORDER BY name
 LIMIT $2
@@ -1171,6 +1174,7 @@ func (q *Queries) ListRepositories(ctx context.Context, arg ListRepositoriesPara
 			&i.Locked,
 			&i.ManagedBy,
 			&i.CreatedAt,
+			&i.LastPublishedAt,
 		); err != nil {
 			return nil, err
 		}

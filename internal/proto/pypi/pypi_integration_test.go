@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spj/sindri/internal/api"
 	"github.com/spj/sindri/internal/auth"
@@ -257,6 +258,14 @@ func mustDo(t *testing.T, h http.Handler, method, path string, body []byte, cont
 // blob store, which runs the same storage conformance suite as the backends.
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
+	h, _ := newTestStack(t)
+	return h
+}
+
+// newTestStack is newTestHandler that also returns the database, for a test
+// that checks what a request left in it.
+func newTestStack(t *testing.T) (http.Handler, *db.DB) {
+	t.Helper()
 
 	url := testsupport.StartPostgres(t)
 	opts := testsupport.DBOptions(url)
@@ -292,5 +301,48 @@ func newTestHandler(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
-	return srv.Handler()
+	return srv.Handler(), database
+}
+
+func TestPyPI_UploadAdvancesTheRepositoryLastPublish(t *testing.T) {
+	client, database := newTestStack(t)
+	createRepo(t, client, "internal", "pypi")
+
+	lastPublished := func() *time.Time {
+		t.Helper()
+		var at *time.Time
+		if err := database.Pool().QueryRow(t.Context(),
+			`SELECT last_published_at FROM repositories WHERE name = 'internal'`).Scan(&at); err != nil {
+			t.Fatalf("reading last_published_at: %v", err)
+		}
+		return at
+	}
+	upload := func(version string) {
+		t.Helper()
+		wheel := buildWheel(t, "demo-package", version, ">=3.9")
+		sum := sha256.Sum256(wheel)
+		res := multipartUpload(t, client, "/pypi/internal/upload", map[string]string{
+			":action":       "file_upload",
+			"name":          "demo-package",
+			"version":       version,
+			"sha256_digest": hex.EncodeToString(sum[:]),
+		}, "demo_package-"+version+"-py3-none-any.whl", wheel)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("upload %s: %d %s", version, res.StatusCode, res.Body)
+		}
+	}
+
+	if got := lastPublished(); got != nil {
+		t.Fatalf("last_published_at of an empty repository = %v, want NULL", got)
+	}
+	upload("1.0.0")
+	first := lastPublished()
+	if first == nil {
+		t.Fatal("last_published_at is NULL after an upload")
+	}
+	upload("1.1.0")
+	second := lastPublished()
+	if second == nil || !second.After(*first) {
+		t.Fatalf("last_published_at after a second upload = %v, want later than %v", second, first)
+	}
 }

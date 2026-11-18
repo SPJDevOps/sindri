@@ -449,7 +449,7 @@ func (q *Queries) ListRepositoryMembersByName(ctx context.Context, name string) 
 }
 
 const listRepositoryNamePrefixes = `-- name: ListRepositoryNamePrefixes :many
-SELECT id, name, type, protocol, config, locked, managed_by, created_at FROM repositories
+SELECT id, name, type, protocol, config, locked, managed_by, created_at, last_published_at FROM repositories
 WHERE $1 = name
    OR $1 LIKE name || '/%'
 ORDER BY length(name) DESC
@@ -475,6 +475,7 @@ func (q *Queries) ListRepositoryNamePrefixes(ctx context.Context, name string) (
 			&i.Locked,
 			&i.ManagedBy,
 			&i.CreatedAt,
+			&i.LastPublishedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -488,25 +489,18 @@ func (q *Queries) ListRepositoryNamePrefixes(ctx context.Context, name string) (
 
 const listRepositoryStats = `-- name: ListRepositoryStats :many
 WITH wanted AS (
-    SELECT r.id, r.name FROM repositories r WHERE r.name = ANY($1::text[])
+    SELECT r.id, r.name, r.last_published_at FROM repositories r WHERE r.name = ANY($1::text[])
 ), counts AS (
     SELECT p.repo_id, count(*)::bigint AS package_count
     FROM packages p
     JOIN wanted w ON w.id = p.repo_id
     GROUP BY p.repo_id
-), newest AS (
-    SELECT p.repo_id, max(v.published_at)::timestamptz AS last_published_at
-    FROM versions v
-    JOIN packages p ON p.id = v.package_id
-    JOIN wanted w ON w.id = p.repo_id
-    GROUP BY p.repo_id
 )
 SELECT w.name AS repo_name,
        COALESCE(counts.package_count, 0)::bigint AS package_count,
-       newest.last_published_at AS last_published_at
+       w.last_published_at AS last_published_at
 FROM wanted w
 LEFT JOIN counts ON counts.repo_id = w.id
-LEFT JOIN newest ON newest.repo_id = w.id
 `
 
 type ListRepositoryStatsRow struct {
@@ -519,10 +513,14 @@ type ListRepositoryStatsRow struct {
 // only, in one query instead of one per row. The caller passes the names on the
 // page it is about to render, so the cost follows the page, not the registry.
 //
-// package_count is the packages the repository holds. last_published_at is the
-// newest versions.published_at in it: the newest time a version was added, NULL
-// when it holds none or only versions from before the column existed (00011).
-// A virtual repository holds nothing of its own and reports zero and NULL.
+// package_count is the packages the repository holds. last_published_at is
+// read from the repository row, where a trigger on versions (00016) keeps it
+// at the newest published_at ever inserted there. It means "the last time
+// something was published here": deleting a version never lowers it. NULL when
+// nothing has been published, or only versions from before versions.published_at
+// existed (00011). A virtual repository holds nothing of its own and reports
+// zero and NULL. Computing it as a max over versions cost ~17ms of ~21ms on
+// the large seed, which is why it is stored.
 //
 // There is deliberately no stored size. Summing the distinct blobs placed in a
 // repository (files plus repository_blobs, joined to blobs) costs about 80ms for
