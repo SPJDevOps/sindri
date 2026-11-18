@@ -276,7 +276,7 @@ repositories(
   id PK, name UNIQUE, type,                -- hosted | proxy | virtual
   protocol,                                -- oci | pypi | npm
   config jsonb, locked bool, managed_by,   -- config | api
-  created_at
+  created_at, last_published_at NULL       -- last time something was published here
 )  -- config: {namespace, source: file|apply, access: {read, write}, lifecycleStages}
 repository_members(virtual_repo_id FK, member_repo_id FK, position,
                    PRIMARY KEY (virtual_repo_id, member_repo_id))
@@ -307,6 +307,19 @@ dist_tags(package_id FK, tag, version_id FK,
 dist_tag_events(id PK, repository, package, tag,  -- append only, no FKs (ADR 24)
                 from_version, to_version, actor, at)
 ```
+
+`repositories.last_published_at` is the last time a version or tag was published into the
+repository, for the repository list. Triggers on `versions` (an insert, at its
+`published_at`) and on `tags` (OCI has no `versions` rows; an insert, or an update that
+moves the tag to another digest, at the time of the change) keep it current, so every write
+path is covered, including a proxy cache fill. A re-push or proxy refresh of an unchanged tag
+does not count. It never decreases: deleting versions, retention, and revoke leave it alone.
+Each publish updates the repository row, so concurrent publishes into one repository
+serialise briefly on that row lock. Nothing takes an explicit share lock on `repositories`,
+so publishes cannot deadlock with each other on it. Deleting a repository while something
+is published into it can deadlock (the delete holds the row and cascades into `packages`;
+the publish holds a `packages` row and wants the repository row); Postgres aborts one side
+with a deadlock error, which the client sees as a failed request.
 
 `repositories.config` carries what authorization and the reconciler read on
 the request path. That covers the owning team's namespace, which reconciler

@@ -307,8 +307,8 @@ func (r *Registry) AllMembers(ctx context.Context) (map[string][]string, error) 
 // ListRepositoryStats query for what each figure counts.
 type RepositoryStats struct {
 	Packages int64
-	// LastPublished is the newest version's publish time; the zero time when
-	// the repository holds no dated version.
+	// LastPublished is the last time something was published into the repository;
+	// the zero time when nothing dated has been.
 	LastPublished time.Time
 }
 
