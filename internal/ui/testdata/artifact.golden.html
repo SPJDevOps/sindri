@@ -85,8 +85,8 @@
 <section class="section" id="lifecycle">
   <h2 class="section-title">Lifecycle</h2>
   
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Lifecycle state of this artifact per environment and repository">
+  <table><caption class="sr-only">Lifecycle state of this artifact per environment and repository</caption>
     <thead><tr><th scope="col">Environment</th><th scope="col" class="mono">team/app</th></tr></thead>
     <tbody>
     
@@ -125,8 +125,8 @@
     <div class="vuln-head"><span class="mono">linux/amd64</span><span class="hint">Scanned <time datetime="2020-03-14T15:09:26Z" title="2020-03-14T15:09:26Z">14 Mar 2020</time></span><span class="hint">database 2020-03-14T06:00:00Z</span></div>
     <div class="pills"><span class="pill sev-critical">1 critical</span><span class="pill sev-low">1 low</span></div>
     
-    <div class="table-wrap">
-    <table>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Vulnerabilities in linux/amd64">
+    <table><caption class="sr-only">Vulnerabilities in linux/amd64</caption>
       <thead><tr><th scope="col">ID</th><th scope="col">Severity</th><th scope="col">Package</th><th scope="col">Installed</th><th scope="col">Fixed</th></tr></thead>
       <tbody>
       
@@ -214,7 +214,7 @@
     <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
   </div>
 </footer>
-<div class="live" id="live" role="status" aria-live="polite"></div>
+<div class="live" id="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <dialog class="keys" id="keys" aria-labelledby="keys-title">
   <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
   <dl class="facts">

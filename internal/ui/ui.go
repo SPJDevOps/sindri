@@ -197,6 +197,10 @@ type chrome struct {
 	Crumbs  []crumb
 	// Admin shows the System link.
 	Admin bool
+	// NavRepos and NavSystem are the aria-current value of that header
+	// link: "page" on the page itself, "true" below it, empty elsewhere.
+	NavRepos  string
+	NavSystem string
 }
 
 type crumb struct {
@@ -214,7 +218,22 @@ func (h *handler) chrome(r *http.Request, title string, crumbs ...crumb) chrome 
 		DocsURL: h.opts.DocsURL,
 		Crumbs:  crumbs,
 		Admin:   p.Admin,
+	}.nav(r.URL.Path)
+}
+
+// nav marks which header link the request's path belongs to.
+func (c chrome) nav(path string) chrome {
+	switch {
+	case path == "/ui" || path == "/ui/":
+		c.NavRepos = "page"
+	case strings.HasPrefix(path, "/ui/r/"):
+		c.NavRepos = "true"
+	case path == "/ui/system":
+		c.NavSystem = "page"
+	case strings.HasPrefix(path, "/ui/system/"):
+		c.NavSystem = "true"
 	}
+	return c
 }
 
 // render executes a whole page, or only the named partial when htmx asked

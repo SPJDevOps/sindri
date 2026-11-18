@@ -19,20 +19,20 @@
 
 {{define "results"}}
 {{if not .Total}}
-  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No repository you may read. Repositories are declared in sindri.yaml or created through the API.</p></div></div>
+  <div class="rows"><div class="empty-state"><div class="big" aria-hidden="true">0</div><p>No repository you may read. Repositories are declared in sindri.yaml or created through the API.</p></div></div>
 {{else if not .Matching}}
-  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No repository matches this filter. <a href="{{.ClearHref}}">Clear the filter</a></p></div></div>
+  <div class="rows"><div class="empty-state"><div class="big" aria-hidden="true">0</div><p>No repository matches this filter. <a href="{{.ClearHref}}">Clear the filter</a></p></div></div>
 {{else}}
   <div class="list-bar">
-    <p class="hint" role="status">{{if .Filter.Active}}{{.Matching}} of {{.Total}} repositories match{{else}}{{.Total}} repositories{{end}}{{if .Pager}}; showing {{.From}} to {{.To}}{{end}}</p>
-    <p class="filters" aria-label="View">{{if .Table}}<a class="filter" href="{{.TilesHref}}">Tiles</a><span class="filter active">Table</span>{{else}}<span class="filter active">Tiles</span><a class="filter" href="{{.TableHref}}">Table</a>{{end}}</p>
+    <p class="hint">{{if .Filter.Active}}{{.Matching}} of {{.Total}} repositories match{{else}}{{.Total}} repositories{{end}}{{if .Pager}}; showing {{.From}} to {{.To}}{{end}}</p>
+    <div class="filters" role="group" aria-label="View">{{if .Table}}<a class="filter" href="{{.TilesHref}}">Tiles</a><span class="filter active" aria-current="true">Table</span>{{else}}<span class="filter active" aria-current="true">Tiles</span><a class="filter" href="{{.TableHref}}">Table</a>{{end}}</div>
   </div>
   {{$groups := .Groups}}{{$table := .Table}}
   {{range $groups}}
     {{if or .Label (gt (len $groups) 1)}}<details class="group" open><summary>{{if .Label}}<span class="mono">{{.Label}}</span>{{else}}Top level{{end}} <span class="pill">{{if lt (len .Rows) .Total}}{{len .Rows}} of {{.Total}}{{else}}{{.Total}}{{end}}</span></summary>{{end}}
     {{if $table}}
-    <div class="table-wrap">
-    <table>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="{{if .Label}}Repositories in {{.Label}}{{else}}Repositories{{end}}">
+    <table><caption class="sr-only">{{if .Label}}Repositories in {{.Label}}{{else}}Repositories{{end}}</caption>
       <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Protocol</th><th scope="col" class="num">Packages</th><th scope="col">Last publish</th><th scope="col">Managed by</th></tr></thead>
       <tbody>
       {{range .Rows}}

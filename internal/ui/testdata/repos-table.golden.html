@@ -54,15 +54,15 @@
 
 
   <div class="list-bar">
-    <p class="hint" role="status">500 repositories; showing 1 to 200</p>
-    <p class="filters" aria-label="View"><a class="filter" href="/ui/?view=tiles">Tiles</a><span class="filter active">Table</span></p>
+    <p class="hint">500 repositories; showing 1 to 200</p>
+    <div class="filters" role="group" aria-label="View"><a class="filter" href="/ui/?view=tiles">Tiles</a><span class="filter active" aria-current="true">Table</span></div>
   </div>
   
   
     <details class="group" open><summary>Top level <span class="pill">2</span></summary>
     
-    <div class="table-wrap">
-    <table>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Repositories">
+    <table><caption class="sr-only">Repositories</caption>
       <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Protocol</th><th scope="col" class="num">Packages</th><th scope="col">Last publish</th><th scope="col">Managed by</th></tr></thead>
       <tbody>
       
@@ -90,8 +90,8 @@
   
     <details class="group" open><summary><span class="mono">team</span> <span class="pill">2 of 5</span></summary>
     
-    <div class="table-wrap">
-    <table>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Repositories in team">
+    <table><caption class="sr-only">Repositories in team</caption>
       <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Protocol</th><th scope="col" class="num">Packages</th><th scope="col">Last publish</th><th scope="col">Managed by</th></tr></thead>
       <tbody>
       
@@ -133,7 +133,7 @@
     <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
   </div>
 </footer>
-<div class="live" id="live" role="status" aria-live="polite"></div>
+<div class="live" id="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <dialog class="keys" id="keys" aria-labelledby="keys-title">
   <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
   <dl class="facts">

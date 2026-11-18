@@ -37,8 +37,8 @@
 <section class="section" id="lifecycle">
   <h2 class="section-title">Lifecycle</h2>
   {{if .Stages}}
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Lifecycle state of this artifact per environment and repository">
+  <table><caption class="sr-only">Lifecycle state of this artifact per environment and repository</caption>
     <thead><tr><th scope="col">Environment</th>{{range .StateRepos}}<th scope="col" class="mono">{{.}}</th>{{end}}</tr></thead>
     <tbody>
     {{range .Stages}}
@@ -70,8 +70,8 @@
     {{if .Clean}}
     <p class="hint">No findings</p>
     {{else}}
-    <div class="table-wrap">
-    <table>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="{{if .Platform}}Vulnerabilities in {{.Platform}}{{else}}Vulnerabilities{{end}}">
+    <table><caption class="sr-only">{{if .Platform}}Vulnerabilities in {{.Platform}}{{else}}Vulnerabilities{{end}}</caption>
       <thead><tr><th scope="col">ID</th><th scope="col">Severity</th><th scope="col">Package</th><th scope="col">Installed</th><th scope="col">Fixed</th></tr></thead>
       <tbody>
       {{range .Rows}}
@@ -116,8 +116,8 @@
 <section class="section" id="contents">
   <h2 class="section-title">Contents</h2>
   {{if .IsIndex}}
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Platforms in this image index">
+  <table><caption class="sr-only">Platforms in this image index</caption>
     <thead><tr><th scope="col">Platform</th><th scope="col">Digest</th>{{if not .Upstream}}<th scope="col">Stage</th><th scope="col">Findings</th>{{end}}<th scope="col" class="num col-size">Size</th></tr></thead>
     <tbody>
     {{range .Platforms}}

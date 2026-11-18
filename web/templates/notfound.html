@@ -1,6 +1,6 @@
 {{define "content"}}
 <div class="rows"><div class="empty-state">
-  <div class="big">404</div>
+  <h1 class="big"><span aria-hidden="true">404</span><span class="sr-only">Not found</span></h1>
   <p>This repository or page may not exist, or this account may not be allowed to read it.</p>
   {{if .Who}}<p class="hint">Signed in as <span class="mono">{{.Who}}</span>.</p>{{end}}
   <p><a href="/ui/">Back to repositories</a></p>

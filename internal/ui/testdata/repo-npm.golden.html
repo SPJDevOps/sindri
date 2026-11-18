@@ -64,10 +64,10 @@
   
 
   <div class="list-bar">
-    <p class="hint" role="status">1 in total</p>
+    <p class="hint">1 in total</p>
   </div>
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Packages in this repository">
+  <table><caption class="sr-only">Packages in this repository</caption>
     <thead><tr><th scope="col">Name</th><th scope="col">Latest</th><th scope="col" class="num">Versions</th><th scope="col">Last publish</th><th scope="col">Worst severity</th></tr></thead>
     <tbody>
     
@@ -92,7 +92,7 @@
     <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
   </div>
 </footer>
-<div class="live" id="live" role="status" aria-live="polite"></div>
+<div class="live" id="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <dialog class="keys" id="keys" aria-labelledby="keys-title">
   <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
   <dl class="facts">

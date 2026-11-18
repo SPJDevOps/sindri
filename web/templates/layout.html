@@ -18,7 +18,7 @@
 {{template "header" .}}
 <main id="main">
   <div class="container">
-    {{if .Crumbs}}<p class="crumbs">{{range $i, $c := .Crumbs}}{{if $i}}<span class="sep">/</span>{{end}}{{if $c.Href}}<a href="{{$c.Href}}">{{$c.Label}}</a>{{else}}{{$c.Label}}{{end}}{{end}}</p>{{end}}
+    {{if .Crumbs}}<nav class="crumbs" aria-label="Breadcrumb"><ol>{{range .Crumbs}}<li>{{if .Href}}<a href="{{.Href}}">{{.Label}}</a>{{else}}<span aria-current="page">{{.Label}}</span>{{end}}</li>{{end}}</ol></nav>{{end}}
     {{template "content" .}}
   </div>
 </main>
@@ -29,7 +29,7 @@
     {{if .DocsURL}}<a href="{{.DocsURL}}" rel="noreferrer noopener">Docs</a>{{end}}
   </div>
 </footer>
-<div class="live" id="live" role="status" aria-live="polite"></div>
+<div class="live" id="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <dialog class="keys" id="keys" aria-labelledby="keys-title">
   <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
   <dl class="facts">
@@ -51,8 +51,8 @@
 </header>{{end}}
 
 {{define "navlinks"}}
-      <a href="/ui/">Repositories</a>
-      {{if .Admin}}<a href="/ui/system">System</a>{{end}}
+      <a href="/ui/"{{with .NavRepos}} aria-current="{{.}}"{{end}}>Repositories</a>
+      {{if .Admin}}<a href="/ui/system"{{with .NavSystem}} aria-current="{{.}}"{{end}}>System</a>{{end}}
       {{if .Who}}<span class="who" title="Signed in as {{.Who}}">{{.Who}}</span>{{end}}
       {{if .SignOut}}<button class="signout" type="button" hx-post="/auth/logout" hx-swap="none">Sign out</button>{{end}}
 {{- end}}

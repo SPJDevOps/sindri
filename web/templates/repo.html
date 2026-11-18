@@ -48,7 +48,7 @@
 {{define "package-results"}}
 {{if not .Total}}
   {{if .Filter.Active}}
-  <div class="rows"><div class="empty-state"><div class="big">0</div><p>No package matches this filter. <a href="{{.ClearHref}}">Clear the filter</a></p></div></div>
+  <div class="rows"><div class="empty-state"><div class="big" aria-hidden="true">0</div><p>No package matches this filter. <a href="{{.ClearHref}}">Clear the filter</a></p></div></div>
   {{else if .Repo.Upstream}}
   <div class="rows"><div class="row empty">Nothing cached yet: content appears on first pull.</div></div>
   {{else}}
@@ -57,10 +57,10 @@
   {{end}}
 {{else}}
   <div class="list-bar">
-    <p class="hint" role="status">{{if .Filter.Active}}{{.Total}} matching{{else}}{{.Total}} in total{{end}}{{if .Pager}}; showing {{.From}} to {{.To}}{{end}}</p>
+    <p class="hint">{{if .Filter.Active}}{{.Total}} matching{{else}}{{.Total}} in total{{end}}{{if .Pager}}; showing {{.From}} to {{.To}}{{end}}</p>
   </div>
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Packages in this repository">
+  <table><caption class="sr-only">Packages in this repository</caption>
     <thead><tr><th scope="col">Name</th><th scope="col">Latest</th><th scope="col" class="num">{{if eq .Repo.Protocol "oci"}}Tags{{else}}Versions{{end}}</th><th scope="col">Last publish</th>{{if not .Repo.Upstream}}<th scope="col">Worst severity</th>{{end}}</tr></thead>
     <tbody>
     {{range .Rows}}

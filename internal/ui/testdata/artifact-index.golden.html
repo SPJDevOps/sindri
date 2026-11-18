@@ -85,8 +85,8 @@
 <section class="section" id="lifecycle">
   <h2 class="section-title">Lifecycle</h2>
   
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Lifecycle state of this artifact per environment and repository">
+  <table><caption class="sr-only">Lifecycle state of this artifact per environment and repository</caption>
     <thead><tr><th scope="col">Environment</th><th scope="col" class="mono">team/app</th></tr></thead>
     <tbody>
     
@@ -129,8 +129,8 @@
 <section class="section" id="contents">
   <h2 class="section-title">Contents</h2>
   
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Platforms in this image index">
+  <table><caption class="sr-only">Platforms in this image index</caption>
     <thead><tr><th scope="col">Platform</th><th scope="col">Digest</th><th scope="col">Stage</th><th scope="col">Findings</th><th scope="col" class="num col-size">Size</th></tr></thead>
     <tbody>
     
@@ -167,7 +167,7 @@
     <a href="https://docs.example.test/sindri/" rel="noreferrer noopener">Docs</a>
   </div>
 </footer>
-<div class="live" id="live" role="status" aria-live="polite"></div>
+<div class="live" id="live" role="status" aria-live="polite" aria-atomic="true"></div>
 <dialog class="keys" id="keys" aria-labelledby="keys-title">
   <h2 id="keys-title" class="section-title">Keyboard shortcuts</h2>
   <dl class="facts">

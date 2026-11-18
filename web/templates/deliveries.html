@@ -2,12 +2,12 @@
 <h1 class="page-title">Notification deliveries</h1>
 <p class="lead">Newest first.{{if .Webhook}} Showing webhook <span class="mono">{{.Webhook}}</span>. <a href="{{.Clear}}">all webhooks</a>{{end}}</p>
 
-<p class="filters" aria-label="Filter by state">{{range .Filters}}{{if .Active}}<span class="filter active">{{.Label}}</span>{{else}}<a class="filter" href="{{.Href}}">{{.Label}}</a>{{end}}{{end}}</p>
+<div class="filters" role="group" aria-label="Filter by state">{{range .Filters}}{{if .Active}}<span class="filter active" aria-current="true">{{.Label}}</span>{{else}}<a class="filter" href="{{.Href}}">{{.Label}}</a>{{end}}{{end}}</div>
 
 <section class="section">
   {{if .Rows}}
-  <div class="table-wrap">
-  <table>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Notification deliveries">
+  <table><caption class="sr-only">Notification deliveries</caption>
     <thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Webhook</th><th scope="col">Subject</th><th scope="col">Repository</th><th scope="col">State</th><th scope="col">Response</th><th scope="col">Attempts</th><th scope="col">Next retry</th><th scope="col">Error</th></tr></thead>
     <tbody>
     {{range .Rows}}
