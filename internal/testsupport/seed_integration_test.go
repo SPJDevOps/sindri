@@ -35,6 +35,21 @@ func TestSeedLarge_WritesTheDocumentedShapeAndRefusesASecondRun(t *testing.T) {
 		t.Errorf("revoked states = %d, %v", revoked, err)
 	}
 
+	// COPY fires the row triggers, so the seed's versions must have left each
+	// repository's last publish at the newest of them.
+	var wrong, populated int
+	if err := database.Pool().QueryRow(t.Context(), `
+		SELECT count(*) FILTER (WHERE r.last_published_at IS DISTINCT FROM s.newest),
+		       count(*) FILTER (WHERE r.last_published_at IS NOT NULL)
+		FROM repositories r
+		JOIN (SELECT p.repo_id, max(v.published_at) AS newest
+		      FROM versions v JOIN packages p ON p.id = v.package_id GROUP BY p.repo_id) s ON s.repo_id = r.id`).Scan(&wrong, &populated); err != nil {
+		t.Fatalf("checking last_published_at: %v", err)
+	}
+	if wrong != 0 || populated == 0 {
+		t.Errorf("%d repositories disagree with their newest version, %d populated; want 0 and some", wrong, populated)
+	}
+
 	if _, err := Seed(t.Context(), database.Pool()); !errors.Is(err, ErrAlreadySeeded) {
 		t.Errorf("second Seed error = %v, want ErrAlreadySeeded", err)
 	}
