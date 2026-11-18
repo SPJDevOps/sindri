@@ -63,8 +63,9 @@ func (s *scanSet) add(platform string, platforms []string, at time.Time, refused
 	}
 }
 
-// complete reports whether there is a scan the gate would accept and every platform the newest one
-// lists has one. A subject nobody scanned is not complete.
+// complete reports whether there is a scan the gate would accept and every
+// platform the newest one lists has one. A subject nobody scanned is not
+// complete.
 func (s *scanSet) complete() bool {
 	if !s.set || s.refused {
 		return false

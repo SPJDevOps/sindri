@@ -173,3 +173,22 @@ func TestScale_NonAdminRowsExerciseTheFilters(t *testing.T) {
 		t.Error("alice, who may not write, is offered a promote or revoke command")
 	}
 }
+
+// Seeded scans are written as the worker writes them, so the gate accepts them
+// and the pages read the seeded digests as scanned. A per-platform scan with no
+// platforms list, or any scan with no vulnerabilities list, would be refused.
+func TestScale_SeededScansAreOnesTheGateAccepts(t *testing.T) {
+	e, _, _ := seededEnv(t)
+	var scans, refused int
+	if err := e.pool.QueryRow(t.Context(), `
+		SELECT count(*), count(*) FILTER (WHERE
+			jsonb_typeof(metadata->'vulnerabilities') IS DISTINCT FROM 'array'
+			OR (coalesce(metadata->>'platform', '') <> ''
+			    AND coalesce(CASE WHEN jsonb_typeof(metadata->'platforms') = 'array' THEN jsonb_array_length(metadata->'platforms') END, 0) = 0))
+		FROM evidence WHERE type = 'scan' AND metadata->>'producer' = 'sindri'`).Scan(&scans, &refused); err != nil {
+		t.Fatalf("counting seeded scans: %v", err)
+	}
+	if scans == 0 || refused != 0 {
+		t.Errorf("%d seeded Sindri scans, %d of them ones the gate refuses", scans, refused)
+	}
+}

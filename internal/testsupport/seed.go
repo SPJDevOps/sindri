@@ -435,21 +435,24 @@ func (s *seeder) genSubject(r seedRepo, digest, kind, pkg string, known bool, k 
 	case known && kind == "oci-manifest":
 		// Two platforms, one with many findings, and an older scan of the
 		// first, so the page's "newest per platform" choice is exercised.
-		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/amd64", 12, 2, 0, n-1), "sindri", n*10+1, created.Add(2*time.Minute))
-		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/amd64", seedKnownScanFindings, 7, 5, n), "sindri", n*10+2, created.Add(3*time.Minute))
-		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/arm64", 40, 3, 0, n), "sindri", n*10+3, created.Add(4*time.Minute))
+		knownPlatforms := []string{"linux/amd64", "linux/arm64"}
+		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/amd64", knownPlatforms, 12, 2, 0, n-1), "sindri", n*10+1, created.Add(2*time.Minute))
+		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/amd64", knownPlatforms, seedKnownScanFindings, 7, 5, n), "sindri", n*10+2, created.Add(3*time.Minute))
+		s.addEvidence(digest, "scan", "application/json", scanMetadata("linux/arm64", knownPlatforms, 40, 3, 0, n), "sindri", n*10+3, created.Add(4*time.Minute))
 	case known:
-		s.addEvidence(digest, "scan", "application/json", scanMetadata("", 25, 2, 0, n), "sindri", n*10+1, created.Add(2*time.Minute))
+		s.addEvidence(digest, "scan", "application/json", scanMetadata("", nil, 25, 2, 0, n), "sindri", n*10+1, created.Add(2*time.Minute))
 	case n%10 < 7:
 		platform := ""
+		var platforms []string
 		if kind == "oci-manifest" {
 			platform = "linux/amd64"
+			platforms = []string{platform}
 		}
 		findings := 0
 		if n%3 != 0 {
 			findings = 1 + n%6
 		}
-		s.addEvidence(digest, "scan", "application/json", scanMetadata(platform, findings, 0, 0, n), "sindri", n*10+1, created.Add(2*time.Minute))
+		s.addEvidence(digest, "scan", "application/json", scanMetadata(platform, platforms, findings, 0, 0, n), "sindri", n*10+1, created.Add(2*time.Minute))
 	}
 	if known || n%3 == 0 {
 		s.addEvidence(digest, "signature", "application/vnd.dev.cosign.simplesigning.v1+json", `{}`, "ci", n*10+4, created.Add(5*time.Minute))
@@ -480,8 +483,10 @@ func (s *seeder) addEvidence(subject, typ, media, metadata, by string, n int, at
 }
 
 // scanMetadata is what the worker writes on a Sindri scan's evidence: the
-// fields the UI reads, with findings listed as the worker lists them.
-func scanMetadata(platform string, findings, critical, high, salt int) string {
+// fields the UI reads, with findings listed as the worker lists them. A
+// per-platform scan carries platforms, the sorted list of every platform of its
+// job, as internal/scan writes it; without it the gate refuses the scan.
+func scanMetadata(platform string, platforms []string, findings, critical, high, salt int) string {
 	type vuln struct {
 		ID        string `json:"id"`
 		Severity  string `json:"severity"`
@@ -517,6 +522,7 @@ func scanMetadata(platform string, findings, critical, high, salt int) string {
 	}
 	if platform != "" {
 		meta["platform"] = platform
+		meta["platforms"] = platforms
 	}
 	b, err := json.Marshal(meta)
 	if err != nil {
