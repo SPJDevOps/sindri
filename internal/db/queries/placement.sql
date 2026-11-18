@@ -189,7 +189,7 @@ SELECT EXISTS (
 
 -- name: ListFilesByPackage :many
 SELECT f.id, f.version_id, f.blob_digest, f.filename, f.media_type, f.metadata,
-       v.version, b.size AS blob_size
+       v.version, v.published_at, b.size AS blob_size
 FROM files f
 JOIN versions v ON v.id = f.version_id
 JOIN packages p ON p.id = v.package_id
@@ -422,7 +422,13 @@ WHERE repo_id = sqlc.arg('repo_id')
 -- A tag's name and the digest it points at. A tag row is itself a placement
 -- of that digest in the repository (CheckPlacement), so the pair needs no
 -- second lookup.
-SELECT t.name, t.target_digest FROM tags t
+-- shared is how many tags of the same image name this digest, itself included,
+-- so the UI can say that two tags are one image without paging through all.
+SELECT t.name, t.target_digest,
+       (SELECT count(*) FROM tags t2
+         WHERE t2.repo_id = t.repo_id AND t2.package_id = t.package_id
+           AND t2.target_digest = t.target_digest)::bigint AS shared
+FROM tags t
 JOIN repositories r ON r.id = t.repo_id
 JOIN packages p ON p.id = t.package_id
 WHERE r.name = sqlc.arg('repo_name')
