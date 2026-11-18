@@ -86,10 +86,22 @@ func TestVerdict_ReadsStageScanAndNewFindings(t *testing.T) {
 			stage:  "dev", scanned: true, worst: "1 high", newFindings: true,
 		},
 		{
-			name:   "AWorseWorstSeverityIsNew",
+			name:   "GrowthBelowHighAloneIsNotNew",
 			states: []lifecycle.State{state("r", "dev", lifecycle.ActionApprove, hour(2))},
 			evs:    []evidence.Evidence{sindriScan("a", hour(1), "", low), sindriScan("b", hour(3), "", medium)},
-			stage:  "dev", scanned: true, worst: "3 medium", newFindings: true,
+			stage:  "dev", scanned: true, worst: "3 medium",
+		},
+		{
+			name:   "AFirstScanWithOnlyMediumAfterApprovalIsNotNew",
+			states: []lifecycle.State{state("r", "dev", lifecycle.ActionApprove, hour(1))},
+			evs:    []evidence.Evidence{sindriScan("a", hour(2), "", medium)},
+			stage:  "dev", scanned: true, worst: "3 medium",
+		},
+		{
+			name:   "HighGrowingFromOneToTwoIsNew",
+			states: []lifecycle.State{state("r", "dev", lifecycle.ActionApprove, hour(2))},
+			evs:    []evidence.Evidence{sindriScan("a", hour(1), "", high1), sindriScan("b", hour(3), "", high2)},
+			stage:  "dev", scanned: true, worst: "2 high", newFindings: true,
 		},
 		{
 			name:   "TheSameFindingsAreNotNew",

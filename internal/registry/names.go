@@ -13,10 +13,6 @@ import (
 // ten thousand names.
 const maxDigestNames = 50
 
-// maxPlacingRepositories bounds the repositories one digest lookup reads. The
-// caller filters them to the ones its reader may see, so the bound is generous.
-const maxPlacingRepositories = 1000
-
 // DigestName is one name inside a repository that points at a digest.
 type DigestName struct {
 	// IsTag is true for an OCI tag. Otherwise the name is an npm or PyPI file.
@@ -54,18 +50,27 @@ func (r *Registry) NamesFor(ctx context.Context, repo string, digest model.Diges
 	return out, nil
 }
 
-// PlacedIn lists the repositories that place a digest, in name order, in one
-// query. It does no authorization: the caller must drop every repository its
-// reader may not read before naming or counting any of them.
-func (r *Registry) PlacedIn(ctx context.Context, digest model.Digest) ([]string, error) {
+// PlacedIn lists, in name order, the repositories among among that place a
+// digest, at most limit of them, and reports whether more were left out. It
+// looks only at the repositories it is given, so the caller passes the ones its
+// reader may read: the limit then applies after that filter, and no other
+// repository can change, name, or count in the answer. It does no authorization
+// itself.
+func (r *Registry) PlacedIn(ctx context.Context, digest model.Digest, among []string, limit int) (names []string, more bool, err error) {
 	if !digest.Valid() {
-		return nil, fmt.Errorf("%w: digest is required", ErrInvalidInput)
+		return nil, false, fmt.Errorf("%w: digest is required", ErrInvalidInput)
 	}
-	names, err := r.q.ListPlacingRepositories(ctx, db.ListPlacingRepositoriesParams{
-		Digest: digest.String(), MaxRepos: maxPlacingRepositories,
+	if len(among) == 0 || limit <= 0 {
+		return nil, false, nil
+	}
+	names, err = r.q.ListPlacingRepositories(ctx, db.ListPlacingRepositoriesParams{
+		Digest: digest.String(), RepoNames: among, MaxRepos: int32(limit) + 1, //nolint:gosec // G115: limit is a small page size
 	})
 	if err != nil {
-		return nil, fmt.Errorf("listing the repositories placing %s: %w", digest, err)
+		return nil, false, fmt.Errorf("listing the repositories placing %s: %w", digest, err)
 	}
-	return names, nil
+	if len(names) > limit {
+		return names[:limit], true, nil
+	}
+	return names, false, nil
 }

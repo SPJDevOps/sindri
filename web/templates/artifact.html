@@ -21,7 +21,7 @@
     {{if .MediaType}}<dt>Media type</dt><dd class="mono">{{.MediaType}}</dd>{{end}}
     <dt>Repository</dt><dd><a class="mono" href="{{.RepoHref}}">{{.Repo}}</a></dd>
     {{if .Names}}<dt>Names</dt><dd>{{range .Names}}<span class="name"><a class="mono" href="{{.Href}}">{{.Label}}</a>{{with .Detail}} <span class="hint mono">{{.}}</span>{{end}}</span>{{end}}</dd>{{end}}
-    {{if .AlsoIn}}<dt>Also placed in</dt><dd>{{range $i, $r := .AlsoIn}}{{if $i}}, {{end}}<a class="mono" href="{{$r.Href}}">{{$r.Name}}</a>{{end}}</dd>{{end}}
+    {{if .AlsoIn}}<dt>Also placed in</dt><dd>{{range $i, $r := .AlsoIn}}{{if $i}}, {{end}}<a class="mono" href="{{$r.Href}}">{{$r.Name}}</a>{{end}}{{if .AlsoInMore}} <span class="hint">and more not shown</span>{{end}}</dd>{{end}}
     {{if .HasIdentity}}
     <dt>Owners</dt><dd>{{range $i, $o := .Owners}}{{if $i}}, {{end}}<span class="mono">{{$o}}</span>{{else}}<span class="hint">none you may see</span>{{end}}</dd>
     <dt>First published</dt><dd>{{ago .CreatedAt}}</dd>

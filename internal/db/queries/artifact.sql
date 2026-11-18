@@ -27,12 +27,13 @@ UNION ALL
  LIMIT sqlc.arg('max_names'));
 
 -- name: ListPlacingRepositories :many
--- Every repository that places a digest, by the predicate of CheckPlacement
--- (invariant I2). The caller filters to the repositories it may read before
--- showing or counting any of them.
+-- The repositories among repo_names that place a digest, by the predicate of
+-- CheckPlacement (invariant I2). The caller passes only repositories its reader
+-- may read, so the limit applies after the readability filter and no repository
+-- outside the list can influence, name, or count in the result.
 SELECT r.name
 FROM repositories r
-WHERE EXISTS (
+WHERE r.name = ANY(sqlc.arg('repo_names')::text[]) AND (EXISTS (
     SELECT 1 FROM files f
     JOIN versions v ON v.id = f.version_id
     JOIN packages p ON p.id = v.package_id
@@ -41,6 +42,6 @@ WHERE EXISTS (
     SELECT 1 FROM tags t WHERE t.repo_id = r.id AND t.target_digest = sqlc.arg('digest')
 ) OR EXISTS (
     SELECT 1 FROM repository_blobs rb WHERE rb.repo_id = r.id AND rb.digest = sqlc.arg('digest')
-)
+))
 ORDER BY r.name
 LIMIT sqlc.arg('max_repos');

@@ -94,34 +94,26 @@ func sindriScans(evs []evidence.Evidence) map[string][]scanPoint {
 	return byPlatform
 }
 
-// worstRank is the index of the worst severity with findings in
-// summarySeverities, or its length when there are none; lower is worse.
-func worstRank(counts map[string]int) int {
-	for i, sev := range summarySeverities {
-		if counts[sev] > 0 {
-			return i
-		}
-	}
-	return len(summarySeverities)
-}
-
 // gravest are the severities whose count growth is "new findings" by itself.
 var gravest = []string{"CRITICAL", "HIGH"}
 
-// worse reports whether now found more at HIGH or above than before, or a
-// worse worst severity. A missing earlier scan is an empty one.
+// worse reports whether now found strictly more at CRITICAL or HIGH than
+// before. A missing earlier scan is an empty one, so a first scan counts when it
+// has any CRITICAL or HIGH finding. Growth in MEDIUM, LOW, or UNKNOWN alone does
+// not.
 func worse(now, before map[string]int) bool {
 	for _, sev := range gravest {
 		if now[sev] > before[sev] {
 			return true
 		}
 	}
-	return worstRank(now) < worstRank(before)
+	return false
 }
 
 // newFindingsSince reports whether, on any platform, the newest scan was made
-// after approvedAt and is worse than the scan before it. With no approval there
-// is nothing to be new since.
+// after approvedAt and has strictly more CRITICAL or HIGH findings than the scan
+// before it (or any, with no scan before). With no approval there is nothing to
+// be new since.
 func newFindingsSince(scans map[string][]scanPoint, approvedAt time.Time) bool {
 	if approvedAt.IsZero() {
 		return false

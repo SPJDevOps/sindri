@@ -81,30 +81,32 @@ func (q *Queries) ListNamesForDigest(ctx context.Context, arg ListNamesForDigest
 const listPlacingRepositories = `-- name: ListPlacingRepositories :many
 SELECT r.name
 FROM repositories r
-WHERE EXISTS (
+WHERE r.name = ANY($1::text[]) AND (EXISTS (
     SELECT 1 FROM files f
     JOIN versions v ON v.id = f.version_id
     JOIN packages p ON p.id = v.package_id
-    WHERE p.repo_id = r.id AND f.blob_digest = $1 AND f.upstream_gone_at IS NULL
+    WHERE p.repo_id = r.id AND f.blob_digest = $2 AND f.upstream_gone_at IS NULL
 ) OR EXISTS (
-    SELECT 1 FROM tags t WHERE t.repo_id = r.id AND t.target_digest = $1
+    SELECT 1 FROM tags t WHERE t.repo_id = r.id AND t.target_digest = $2
 ) OR EXISTS (
-    SELECT 1 FROM repository_blobs rb WHERE rb.repo_id = r.id AND rb.digest = $1
-)
+    SELECT 1 FROM repository_blobs rb WHERE rb.repo_id = r.id AND rb.digest = $2
+))
 ORDER BY r.name
-LIMIT $2
+LIMIT $3
 `
 
 type ListPlacingRepositoriesParams struct {
-	Digest   string `json:"digest"`
-	MaxRepos int32  `json:"max_repos"`
+	RepoNames []string `json:"repo_names"`
+	Digest    string   `json:"digest"`
+	MaxRepos  int32    `json:"max_repos"`
 }
 
-// Every repository that places a digest, by the predicate of CheckPlacement
-// (invariant I2). The caller filters to the repositories it may read before
-// showing or counting any of them.
+// The repositories among repo_names that place a digest, by the predicate of
+// CheckPlacement (invariant I2). The caller passes only repositories its reader
+// may read, so the limit applies after the readability filter and no repository
+// outside the list can influence, name, or count in the result.
 func (q *Queries) ListPlacingRepositories(ctx context.Context, arg ListPlacingRepositoriesParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, listPlacingRepositories, arg.Digest, arg.MaxRepos)
+	rows, err := q.db.Query(ctx, listPlacingRepositories, arg.RepoNames, arg.Digest, arg.MaxRepos)
 	if err != nil {
 		return nil, err
 	}

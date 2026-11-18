@@ -754,6 +754,8 @@ type artifactPage struct {
 	Names  []nameView
 	found  []registry.DigestName
 	AlsoIn []link
+	// AlsoInMore is set when more readable repositories place it than are listed.
+	AlsoInMore bool
 	// Sections is the in-page navigation, listing only the sections drawn.
 	Sections    []sectionLink
 	Digest      string
@@ -860,12 +862,16 @@ func (h *handler) artifactPage(w http.ResponseWriter, r *http.Request, repo mode
 	h.render(w, r, "artifact", "", http.StatusOK, data)
 }
 
+// alsoPlacedLimit bounds how many other repositories "Also placed in" names.
+// It is a variable so a test can lower it.
+var alsoPlacedLimit = 50
+
 // names fills in what points at the digest inside this repository, the title
 // that leads with the best of them, and the other repositories the caller may
-// read that place it. Both lookups are one query each. The second lists every
-// placing repository, so it filters to the readable ones before anything is
-// named or counted: a repository the caller cannot read does not appear, and
-// does not change what appears.
+// read that place it. Both lookups are one query each. The second is given
+// only the repositories the caller may read, so the cap on how many it names
+// applies to readable ones alone: a repository the caller cannot read does not
+// appear, is not counted, and cannot push a readable one out of the list.
 func (h *handler) names(r *http.Request, data *artifactPage, repo model.Repository, image string, digest model.Digest, all []model.Repository, visible map[string]bool) error {
 	ctx := r.Context()
 	found, err := h.opts.Registry.NamesFor(ctx, repo.Name, digest)
@@ -896,20 +902,22 @@ func (h *handler) names(r *http.Request, data *artifactPage, repo model.Reposito
 		data.Title = data.Name + " " + shortDigest(digest.String())
 	}
 
-	placed, err := h.opts.Registry.PlacedIn(ctx, digest)
-	if err != nil {
-		return err
-	}
+	among := make([]string, 0, len(visible))
 	types := make(map[string]model.RepoType, len(all))
 	for _, other := range all {
 		types[other.Name] = other.Type
+		if visible[other.Name] && other.Name != repo.Name {
+			among = append(among, other.Name)
+		}
+	}
+	placed, more, err := h.opts.Registry.PlacedIn(ctx, digest, among, alsoPlacedLimit)
+	if err != nil {
+		return err
 	}
 	for _, name := range placed {
-		if name == repo.Name || !visible[name] {
-			continue
-		}
 		data.AlsoIn = append(data.AlsoIn, link{Name: name, Type: string(types[name]), Href: repoHref(name)})
 	}
+	data.AlsoInMore = more
 	return nil
 }
 
