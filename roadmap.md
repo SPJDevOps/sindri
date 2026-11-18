@@ -839,7 +839,7 @@ publish is scanned, and promotion is refused above a severity.
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
 | 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 ✅ |
 | 14, Nov 16–22 | Notifications ✅ | SIN-117, 112 | v1.6.0 ✅ |
-| 15, Nov 17–29 | UI first look ✅ | SIN-90, 91, 100, 98, 92, 96, 119 | v1.7.0, v1.7.1 ✅ |
+| 15, Nov 17–29 | UI first look | SIN-90, 91, 100, 98, 92, 96, 119; 97, 93, 99 | v1.7.0, v1.7.1 ✅; v1.8.0 |
 | 16–17, two weeks from the announcement | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
@@ -877,6 +877,13 @@ the footer's docs link at a self-hosted copy for air-gapped sites. The mark is a
 on the accent. The component reference page is rendered only in tests. SIN-96, the
 repository list at scale, was pulled in on Nov 17 after a review of the seeded UI. Its work
 is recorded under [v1.7.0 — UI first look](#v170--ui-first-look-) below.
+
+v1.7.0 and v1.7.1 shipped on Nov 18 with eleven days of the sprint left. On Nov 18 three
+more tickets from epic SIN-89 were pulled in, each building on what had just shipped:
+repository and package rows (SIN-97), the artifact verdict header (SIN-93), and the
+accessibility pass (SIN-99), last so that it audits the final pages. They add features, so
+they ship as v1.8.0 rather than v1.7.2, recorded under
+[v1.8.0 — UI pages that answer](#v180--ui-pages-that-answer) below.
 
 Not scheduled: SIN-56, 58, 65, 74, and 76 from the hardening epic, kept as filler for the
 M12 window. SIN-118, an optional `format: slack` on a webhook so a notification can post
@@ -1482,6 +1489,37 @@ fail without its fix (★). The repository list's p95 on the seeded set fell fro
 locally, and from 51ms to 36ms under `-race`. CI on main and the release
 workflow passed on ed6a038, and v1.7.1 is published with binaries, the 1.7.1 and 1.7.1-trivy
 images (amd64 and arm64), the 1.7.1 chart, and the docs site.
+
+---
+
+### v1.8.0 — UI pages that answer
+
+**Goal.** A repository, package, or artifact page answers "which version is in prod, and is
+it clean?" without a click into each artifact, and every page passes one accessibility
+check. Sprint 15, second half, under epic SIN-89.
+
+**Scope.**
+- [ ] Repository and package rows: latest version or tag, version count, last publish,
+  highest approved stage, and worst severity per row, with filter and sort. The per-page
+  query ceilings from SIN-100 hold on the seeded set (SIN-97)
+- [ ] Artifact page: a verdict strip under the title (highest stage, worst severity, scan
+  age, new findings since approval), the names that point at the digest, and sections with
+  an in-page nav. Upstream artifacts show no verdict. Signature state waits for SIN-42
+  (SIN-93)
+- [ ] Accessibility and small-screen pass over every page to WCAG 2.2 AA, with a mechanical
+  test over the golden pages in `make test` and a dated manual checklist in `web/DESIGN.md`
+  (SIN-99)
+
+**Out of scope.** Vulnerabilities panel v2 and the CVE overview (SIN-94, 103), which need a
+queryable shape for findings first. Search (SIN-101) and home (SIN-102).
+
+**Gate.**
+```bash
+make ci
+make test-integration        # TestScale_* covers the new row columns
+# by hand: make ui-preview, and make ui-seed + make run, in Safari, light and dark
+git tag v1.8.0 && git push origin v1.8.0   # the release workflow is green
+```
 
 ---
 
