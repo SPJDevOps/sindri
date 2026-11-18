@@ -37,6 +37,7 @@
   --surface-2: #f4f4f5;
   --border: #e4e4e7;
   --border-strong: #d4d4d8;
+  --border-control: #868b95;
   --text: #18181b;
   --text-muted: #5b6270;
   --text-faint: #666d7a;
@@ -98,6 +99,7 @@
     --surface-2: #1e2126;
     --border: #282c33;
     --border-strong: #363b44;
+    --border-control: #6b7280;
     --text: #ededef;
     --text-muted: #9aa1ab;
     --text-faint: #8a919c;
@@ -117,7 +119,7 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: var(--space-16); }
 body {
   margin: 0;
   min-height: 100vh;
@@ -133,7 +135,8 @@ h1, h2, h3, p, ul, ol, dl, dd, figure, pre { margin: 0; }
 ul, ol { padding: 0; list-style: none; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 2px; }
-:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 2px; }
+:focus-visible, .tile:focus-visible, .stat:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+::placeholder { color: var(--text-faint); opacity: 1; }
 code, .mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 
 /* Layout -------------------------------------------------------------- */
@@ -141,7 +144,7 @@ code, .mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 .container { width: 100%; max-width: 64rem; margin: 0 auto; padding: 0 var(--gutter); }
 main { flex: 1; padding: var(--space-10) 0 var(--space-16); }
 
-.skip { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.skip, .live, .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .skip:focus { width: auto; height: auto; overflow: visible; clip-path: none; z-index: 10; top: var(--space-2); left: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); }
 
 .site-header { position: relative; border-bottom: 1px solid var(--border); background: var(--bg); }
@@ -159,7 +162,9 @@ main { flex: 1; padding: var(--space-10) 0 var(--space-16); }
 .wordmark:hover { color: var(--text); text-decoration: none; }
 .mark { display: block; width: 24px; height: 24px; }
 .nav { display: flex; align-items: center; gap: var(--space-6); color: var(--text-muted); }
+.nav a, .nav .signout, .menu-panel a, .menu-panel .signout, .site-footer a, .crumbs a { display: inline-flex; align-items: center; min-height: var(--target); }
 .nav a { color: var(--text-muted); }
+.nav a[aria-current], .menu-panel a[aria-current] { color: var(--text); }
 .nav a:hover { color: var(--text); text-decoration: none; }
 .who { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-faint); overflow-wrap: anywhere; }
 .signout {
@@ -190,9 +195,10 @@ main { flex: 1; padding: var(--space-10) 0 var(--space-16); }
 
 /* Headings and meta ---------------------------------------------------- */
 
-.crumbs { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-faint); margin-bottom: var(--space-3); overflow-wrap: anywhere; }
+.crumbs { display: block; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-faint); margin-bottom: var(--space-3); overflow-wrap: anywhere; }
 .crumbs a { color: var(--text-muted); }
-.crumbs .sep { padding: 0 6px; }
+.crumbs ol { display: flex; flex-wrap: wrap; align-items: center; }
+.crumbs li + li::before { content: "/"; padding: 0 6px; }
 .page-title {
   font-family: var(--font-display);
   font-size: var(--text-3xl);
@@ -410,7 +416,7 @@ html.js-enhanced .cmd .copy { display: inline-flex; }
 /* Inline copy buttons: quiet text, shown on hover and focus, always shown on
  * touch screens, and absent entirely without the script. */
 
-.copy { display: none; margin-left: var(--space-2); padding: 0 var(--space-2); font: 500 var(--text-xs)/1.8 var(--font-sans); color: var(--text-muted); background: none; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; vertical-align: baseline; }
+.copy { display: none; margin-left: var(--space-2); padding: 0 var(--space-2); font: 500 var(--text-xs)/1.8 var(--font-sans); color: var(--text-muted); background: none; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; vertical-align: baseline; min-height: var(--target); }
 .cmd .copy { border-radius: 0; margin-left: 0; }
 html.js-enhanced .copy { display: inline-block; }
 html.js-enhanced .cmd .copy { display: inline-flex; }
@@ -419,8 +425,6 @@ html.js-enhanced :is(.row, dd, td, .pills):is(:hover, :focus-within) .copy,
 html.js-enhanced .copy:focus-visible { opacity: 1; }
 @media (hover: none) { html.js-enhanced .copy { opacity: 1 !important; } }
 .copy:hover { color: var(--accent); }
-
-.live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* Keyboard shortcuts overlay: a native dialog opened with showModal. */
 
@@ -445,7 +449,7 @@ pre.document {
 .empty-state { padding: var(--space-12) var(--space-4); text-align: center; color: var(--text-muted); }
 .error-id { max-width: 28rem; margin: 0 auto var(--space-4); text-align: left; }
 .empty-state p + p, .empty-state p + .error-id { margin-top: var(--space-3); }
-.empty-state .big { font-family: var(--font-display); font-size: var(--text-4xl); color: var(--text-faint); line-height: 1; }
+.empty-state .big { font-weight: 400; font-family: var(--font-display); font-size: var(--text-4xl); color: var(--text-faint); line-height: 1; }
 
 /* Phone width: 16px gutters, stacked rows, no sideways scroll ------------ */
 
@@ -458,6 +462,7 @@ pre.document {
   .facts { grid-template-columns: minmax(0, 1fr); }
   .facts dd { border-top: 0; padding-top: 0; }
   .site-footer .container { flex-direction: column; gap: var(--space-1); }
+  th, td { padding-left: var(--space-2); padding-right: var(--space-2); overflow-wrap: anywhere; }
 }
 
 /* Status dot with label: ok, warn, bad, none. Shared by the System page's
@@ -511,6 +516,7 @@ code.command { display: inline-block; margin-top: var(--space-1); overflow-wrap:
   font-size: var(--text-sm);
   padding: 0 var(--space-3);
 }
+.filter-form :is(input, select) { border-color: var(--border-control); }
 .filter-form input[type="search"] { flex: 1 1 16em; min-width: 0; }
 .filter-form button { cursor: pointer; color: var(--text-muted); }
 .filter-form button:hover { border-color: var(--accent); color: var(--accent); }
@@ -578,3 +584,18 @@ main [id] { scroll-margin-top: var(--space-16); }
 
 .raw > summary { min-height: var(--target); cursor: pointer; font-family: var(--font-display); font-size: var(--text-xl); font-weight: 600; letter-spacing: -0.02em; }
 .raw[open] > summary { margin-bottom: var(--space-3); }
+
+/* Reduced motion and forced colours (Windows high contrast). Backgrounds
+ * vanish under forced colours, so the bar, the dots, and the current tab
+ * say it with system colours, borders, and an underline instead. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+@media (forced-colors: active) {
+  .bar { background: Highlight; }
+  .bar-track { border: 1px solid CanvasText; background: Canvas; }
+  .dot { background: CanvasText; }
+  .tabs a[aria-current], .nav a[aria-current], .menu-panel a[aria-current] { text-decoration: underline; }
+  .filter.active { border-width: 2px; }
+  :focus-visible { outline-color: Highlight; }
+}

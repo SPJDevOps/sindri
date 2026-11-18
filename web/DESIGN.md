@@ -21,7 +21,8 @@ a new token.
 | `--surface` | Cards, rows, tables, callouts. |
 | `--surface-2` | Hover, code, and command blocks. |
 | `--border` | Hairlines between rows and around panels. |
-| `--border-strong` | Borders of controls and neutral pills. |
+| `--border-strong` | Borders of buttons and neutral pills. |
+| `--border-control` | Borders of text boxes and selects, 3:1 against every ground (WCAG 1.4.11). |
 | `--text` | Body text and headings. |
 | `--text-muted` | Secondary text, table headers, neutral pills. |
 | `--text-faint` | Hints, meta lines, and "none" states. Still 4.5:1. |
@@ -167,3 +168,73 @@ Fills that carry no text, such as status dots, need 3:1 against what they sit on
 |---|---|---|
 | `--warn` fill on `--surface` | 3.7 | 11.5 |
 | `--warn` fill on `--surface-2` | 3.4 | 10.5 |
+| `--border-control` fill on `--bg` | 3.3 | 3.9 |
+| `--border-control` fill on `--surface` | 3.4 | 3.6 |
+| `--border-control` fill on `--surface-2` | 3.1 | 3.3 |
+| `--accent` fill on `--bg` | 6.4 | 7.1 |
+| `--accent` fill on `--surface` | 6.6 | 6.7 |
+
+## Accessibility
+
+Target: WCAG 2.2 AA. The mechanical rules are enforced by `internal/ui/a11y_test.go`,
+which parses every golden page under `internal/ui/testdata` and runs in `make test`;
+the colour rules by `web/contrast_test.go`. A rule that fails is fixed in the template
+or the stylesheet, never relaxed in the test.
+
+What the tests enforce:
+
+- Each page has one `h1`; headings start at `h1` and never skip a level going down.
+- One `main` (`id="main"`, the target of the skip link, which is the first link), one
+  `header`, one `footer`, and every `nav` carries an `aria-label`. `<html>` has `lang`
+  and the page has a `title`.
+- Breadcrumbs are `<nav aria-label="Breadcrumb">` holding one `<ol>`; the current page is
+  `aria-current="page"`. The header links carry `aria-current` for the section they are in
+  (`page` on the page itself, `true` below it).
+- Every link, button, `summary`, text box and select has an accessible name; every `img`
+  has `alt` (empty for the decorative mark); no `tabindex` above 0; a `tabindex="0"`
+  element has a name.
+- Every table has a `<caption class="sr-only">`, and every `th` has a `scope`. A table
+  sits in a `.table-wrap` that scrolls sideways and is itself focusable (`tabindex="0"`,
+  `role="region"`, named) so a keyboard user can scroll it.
+- `id`s are unique and `aria-labelledby` and `aria-controls` point at ids that exist.
+- Text colours reach 4.5:1 on `--bg`, `--surface` and `--surface-2` in both themes. The
+  focus ring (solid 2px `--accent`) and the border of text boxes and selects
+  (`--border-control`) reach 3:1.
+
+Behaviour that `sindri.js` adds, with no inline handlers:
+
+- One visually hidden `aria-live="polite"` region (`#live`). "Load more" moves focus to the
+  first new row (given `tabindex="-1"` at that moment) and announces "N more tags loaded".
+  A filter swap announces its result line ("3 of 10 repositories match"). Copy announces
+  "<what> copied".
+- The result line is a plain `.hint`, not a `role="status"` of its own, so the swap is
+  announced once.
+
+Styles: `prefers-reduced-motion: reduce` switches transitions, animations and smooth
+scrolling off. `forced-colors: active` draws the size bar, the status dots and the current
+tab with system colours and an underline, because backgrounds are dropped there.
+Interactive elements are at least 24px (`--target`), and `scroll-padding-top` keeps a
+focused element out from under the sticky section navigation.
+
+### Manual pass
+
+The machine cannot judge these. Walk them after any change to a template or the
+stylesheet, in light and dark, and record the date.
+
+- [ ] Keyboard only: Tab reaches every control in a sensible order; there is no trap
+      (the keys dialog closes with Esc and returns focus); the focus ring is visible
+      everywhere, including on rows, tiles, table scrollers and inside the sticky nav.
+- [ ] Skip link: the first Tab shows "Skip to content" and Enter lands in `main`.
+- [ ] VoiceOver (Safari) on an artifact page: landmarks and headings rotors read in a
+      sensible order; the verdict strip, platform table and layer sizes make sense
+      without the bars; "Load more" announces and lands on the first new row; a filter
+      announces its count.
+- [ ] 200% zoom: no loss of content and no horizontal page scroll (tables scroll inside
+      their own region).
+- [ ] 360px wide: every page reads without sideways page scroll; the menu and the section
+      menu open and close; pointer targets are not crowded.
+- [ ] Forced colours (Windows high contrast, or Chrome's emulation): text, borders, the
+      size bar, status dots, the current tab and the focus ring are all visible.
+- [ ] Reduced motion (System Settings, Reduce motion): nothing animates or scrolls smoothly.
+
+Last manual pass:
