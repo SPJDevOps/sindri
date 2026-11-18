@@ -839,7 +839,7 @@ publish is scanned, and promotion is refused above a severity.
 | 12, Nov 13–29 | M11b referrers ✅ | SIN-37, 83, 86 | v1.5.0 |
 | 13, Nov 16–22 | Pre-announcement hardening ✅ | SIN-116, 73, 75, 81, 82, 84, 85 | v1.5.1 ✅ |
 | 14, Nov 16–22 | Notifications ✅ | SIN-117, 112 | v1.6.0 ✅ |
-| 15, Nov 17–29 | UI first look | SIN-90, 91, 100, 98, 92, 96, 119; 97, 93, 99 | v1.7.0, v1.7.1 ✅; v1.8.0 |
+| 15, Nov 17–29 | UI first look ✅ | SIN-90, 91, 100, 98, 92, 96, 119; 97, 93, 99 | v1.7.0, v1.7.1, v1.8.0 ✅ |
 | 16–17, two weeks from the announcement | M12 feedback window | outside reports; SIN-56, 58, 65, 74, 76 as filler | patches |
 
 Sprint 5 closed early on Nov 5. Sprint 6 started on Friday, Nov 6, so it is longer than a
@@ -883,7 +883,7 @@ more tickets from epic SIN-89 were pulled in, each building on what had just shi
 repository and package rows (SIN-97), the artifact verdict header (SIN-93), and the
 accessibility pass (SIN-99), last so that it audits the final pages. They add features, so
 they ship as v1.8.0 rather than v1.7.2, recorded under
-[v1.8.0 — UI pages that answer](#v180--ui-pages-that-answer) below.
+[v1.8.0 — UI pages that answer](#v180--ui-pages-that-answer-) below.
 
 Not scheduled: SIN-56, 58, 65, 74, and 76 from the hardening epic, kept as filler for the
 M12 window. SIN-118, an optional `format: slack` on a webhook so a notification can post
@@ -1494,7 +1494,7 @@ images (amd64 and arm64), the 1.7.1 chart, and the docs site.
 
 ---
 
-### v1.8.0 — UI pages that answer
+### v1.8.0 — UI pages that answer ✅
 
 **Goal.** A repository, package, or artifact page answers "which version is in prod, and is
 it clean?" without a click into each artifact, and every page passes one accessibility
@@ -1543,6 +1543,10 @@ clean. Each fix has a test shown to fail without it. The same review led to SIN-
 Follow-ups filed: SIN-120 (a proxy's last upstream error), SIN-121 (PyPI yanked state,
 PEP 592), and SIN-122 (a proxy's artifact page shows a hosted subject's identity and
 lifecycle when the digest is shared). None is scheduled.
+
+CI on main and the release workflow passed on facacab, and v1.8.0 is published with
+binaries, the 1.8.0 and 1.8.0-trivy images (amd64 and arm64), the 1.8.0 chart, and the docs
+site. The manual VoiceOver pass recorded in `web/DESIGN.md` is still to do.
 
 ---
 
