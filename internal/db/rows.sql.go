@@ -46,6 +46,42 @@ func (q *Queries) ListLatestDistTags(ctx context.Context, packageIds []uuid.UUID
 	return items, nil
 }
 
+const listLatestTagsForPackages = `-- name: ListLatestTagsForPackages :many
+SELECT t.package_id,
+       COALESCE((array_agg(t.name ORDER BY s.created_at DESC, t.name) FILTER (WHERE s.created_at IS NOT NULL))[1], '')::text AS latest_tag
+FROM tags t
+LEFT JOIN subjects s ON s.digest = t.target_digest
+WHERE t.package_id = ANY($1::uuid[])
+GROUP BY t.package_id
+`
+
+type ListLatestTagsForPackagesRow struct {
+	PackageID uuid.UUID `json:"package_id"`
+	LatestTag string    `json:"latest_tag"`
+}
+
+// Per named image, the tag whose target was first published most recently.
+// Tags of proxy content point at digests with no subject, so they have none.
+func (q *Queries) ListLatestTagsForPackages(ctx context.Context, packageIds []uuid.UUID) ([]ListLatestTagsForPackagesRow, error) {
+	rows, err := q.db.Query(ctx, listLatestTagsForPackages, packageIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLatestTagsForPackagesRow{}
+	for rows.Next() {
+		var i ListLatestTagsForPackagesRow
+		if err := rows.Scan(&i.PackageID, &i.LatestTag); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPackageRowsOCI = `-- name: ListPackageRowsOCI :many
 WITH matched AS (
     SELECT p.id, p.normalized_name, p.display_name,
@@ -196,35 +232,29 @@ func (q *Queries) ListPackageRowsVersioned(ctx context.Context, arg ListPackageR
 	return items, nil
 }
 
-const listTagSummariesForPackages = `-- name: ListTagSummariesForPackages :many
-SELECT t.package_id,
-       array_agg(DISTINCT t.target_digest)::text[] AS digests,
-       COALESCE((array_agg(t.name ORDER BY s.created_at DESC, t.name) FILTER (WHERE s.created_at IS NOT NULL))[1], '')::text AS latest_tag
-FROM tags t
-LEFT JOIN subjects s ON s.digest = t.target_digest
-WHERE t.package_id = ANY($1::uuid[])
-GROUP BY t.package_id
+const listVersionsForPackages = `-- name: ListVersionsForPackages :many
+SELECT v.package_id, v.version
+FROM versions v
+WHERE v.package_id = ANY($1::uuid[])
 `
 
-type ListTagSummariesForPackagesRow struct {
+type ListVersionsForPackagesRow struct {
 	PackageID uuid.UUID `json:"package_id"`
-	Digests   []string  `json:"digests"`
-	LatestTag string    `json:"latest_tag"`
+	Version   string    `json:"version"`
 }
 
-// Per named image: the digests its tags point at, and the tag whose target was
-// first published most recently. Tags of proxy content point at digests with no
-// subject, so they have no latest tag.
-func (q *Queries) ListTagSummariesForPackages(ctx context.Context, packageIds []uuid.UUID) ([]ListTagSummariesForPackagesRow, error) {
-	rows, err := q.db.Query(ctx, listTagSummariesForPackages, packageIds)
+// Every version string of the named packages, for choosing which is current
+// (the ordering is a protocol's, so it happens in Go).
+func (q *Queries) ListVersionsForPackages(ctx context.Context, packageIds []uuid.UUID) ([]ListVersionsForPackagesRow, error) {
+	rows, err := q.db.Query(ctx, listVersionsForPackages, packageIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListTagSummariesForPackagesRow{}
+	items := []ListVersionsForPackagesRow{}
 	for rows.Next() {
-		var i ListTagSummariesForPackagesRow
-		if err := rows.Scan(&i.PackageID, &i.Digests, &i.LatestTag); err != nil {
+		var i ListVersionsForPackagesRow
+		if err := rows.Scan(&i.PackageID, &i.Version); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -235,34 +265,148 @@ func (q *Queries) ListTagSummariesForPackages(ctx context.Context, packageIds []
 	return items, nil
 }
 
-const listVersionDigestsForPackages = `-- name: ListVersionDigestsForPackages :many
-SELECT v.package_id, v.version,
-       COALESCE(array_agg(f.blob_digest ORDER BY f.filename) FILTER (WHERE f.blob_digest IS NOT NULL), '{}')::text[] AS digests
-FROM versions v
-LEFT JOIN files f ON f.version_id = v.id AND f.upstream_gone_at IS NULL
-WHERE v.package_id = ANY($1::uuid[])
-GROUP BY v.id
+const packageFindingsOCI = `-- name: PackageFindingsOCI :many
+WITH cur AS (
+    SELECT DISTINCT t.package_id, t.target_digest AS digest
+    FROM tags t
+    WHERE t.package_id = ANY($1::uuid[])
+), newest AS (
+    SELECT DISTINCT ON (c.package_id, c.digest, coalesce(e.metadata->>'platform', ''))
+           c.package_id, c.digest, e.metadata->'severity_counts' AS counts
+    FROM cur c
+    JOIN evidence e ON e.subject_digest = c.digest
+                   AND e.type = 'scan'
+                   AND e.metadata->>'producer' = 'sindri'
+    ORDER BY c.package_id, c.digest, coalesce(e.metadata->>'platform', ''), e.created_at DESC, e.id DESC
+)
+SELECT c.package_id,
+       count(DISTINCT c.digest)::bigint AS subjects,
+       count(DISTINCT n.digest)::bigint AS scanned,
+       COALESCE(sum((n.counts->>'CRITICAL')::int), 0)::bigint AS critical,
+       COALESCE(sum((n.counts->>'HIGH')::int), 0)::bigint AS high,
+       COALESCE(sum((n.counts->>'MEDIUM')::int), 0)::bigint AS medium,
+       COALESCE(sum((n.counts->>'LOW')::int), 0)::bigint AS low,
+       COALESCE(sum((n.counts->>'UNKNOWN')::int), 0)::bigint AS unknown
+FROM cur c
+LEFT JOIN newest n ON n.package_id = c.package_id AND n.digest = c.digest
+GROUP BY c.package_id
 `
 
-type ListVersionDigestsForPackagesRow struct {
+type PackageFindingsOCIRow struct {
 	PackageID uuid.UUID `json:"package_id"`
-	Version   string    `json:"version"`
-	Digests   []string  `json:"digests"`
+	Subjects  int64     `json:"subjects"`
+	Scanned   int64     `json:"scanned"`
+	Critical  int64     `json:"critical"`
+	High      int64     `json:"high"`
+	Medium    int64     `json:"medium"`
+	Low       int64     `json:"low"`
+	Unknown   int64     `json:"unknown"`
 }
 
-// Every version of the named packages with the digests of its files, for
-// choosing which version is current. Files flagged gone upstream are not
-// listed, as everywhere else.
-func (q *Queries) ListVersionDigestsForPackages(ctx context.Context, packageIds []uuid.UUID) ([]ListVersionDigestsForPackagesRow, error) {
-	rows, err := q.db.Query(ctx, listVersionDigestsForPackages, packageIds)
+// Per named image, what the newest Sindri scans of its current subjects found,
+// where current means every digest a tag points at now. The work is done here
+// so its cost follows the database, not the number of tags shipped through the
+// caller. subjects is how many distinct digests are current and scanned how
+// many of them have at least one Sindri scan; the severity columns add up the
+// newest scan per platform of each. Only producer = sindri counts (ADR 29).
+func (q *Queries) PackageFindingsOCI(ctx context.Context, packageIds []uuid.UUID) ([]PackageFindingsOCIRow, error) {
+	rows, err := q.db.Query(ctx, packageFindingsOCI, packageIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListVersionDigestsForPackagesRow{}
+	items := []PackageFindingsOCIRow{}
 	for rows.Next() {
-		var i ListVersionDigestsForPackagesRow
-		if err := rows.Scan(&i.PackageID, &i.Version, &i.Digests); err != nil {
+		var i PackageFindingsOCIRow
+		if err := rows.Scan(
+			&i.PackageID,
+			&i.Subjects,
+			&i.Scanned,
+			&i.Critical,
+			&i.High,
+			&i.Medium,
+			&i.Low,
+			&i.Unknown,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const packageFindingsVersioned = `-- name: PackageFindingsVersioned :many
+WITH picked AS (
+    SELECT a.package_id::uuid AS package_id, b.version::text AS version
+    FROM unnest($1::uuid[]) WITH ORDINALITY AS a(package_id, n)
+    JOIN unnest($2::text[]) WITH ORDINALITY AS b(version, n) ON b.n = a.n
+), cur AS (
+    SELECT DISTINCT p.package_id, f.blob_digest AS digest
+    FROM picked p
+    JOIN versions v ON v.package_id = p.package_id AND v.version = p.version
+    JOIN files f ON f.version_id = v.id AND f.upstream_gone_at IS NULL
+), newest AS (
+    SELECT DISTINCT ON (c.package_id, c.digest, coalesce(e.metadata->>'platform', ''))
+           c.package_id, c.digest, e.metadata->'severity_counts' AS counts
+    FROM cur c
+    JOIN evidence e ON e.subject_digest = c.digest
+                   AND e.type = 'scan'
+                   AND e.metadata->>'producer' = 'sindri'
+    ORDER BY c.package_id, c.digest, coalesce(e.metadata->>'platform', ''), e.created_at DESC, e.id DESC
+)
+SELECT c.package_id,
+       count(DISTINCT c.digest)::bigint AS subjects,
+       count(DISTINCT n.digest)::bigint AS scanned,
+       COALESCE(sum((n.counts->>'CRITICAL')::int), 0)::bigint AS critical,
+       COALESCE(sum((n.counts->>'HIGH')::int), 0)::bigint AS high,
+       COALESCE(sum((n.counts->>'MEDIUM')::int), 0)::bigint AS medium,
+       COALESCE(sum((n.counts->>'LOW')::int), 0)::bigint AS low,
+       COALESCE(sum((n.counts->>'UNKNOWN')::int), 0)::bigint AS unknown
+FROM cur c
+LEFT JOIN newest n ON n.package_id = c.package_id AND n.digest = c.digest
+GROUP BY c.package_id
+`
+
+type PackageFindingsVersionedParams struct {
+	PackageIds []uuid.UUID `json:"package_ids"`
+	Versions   []string    `json:"versions"`
+}
+
+type PackageFindingsVersionedRow struct {
+	PackageID uuid.UUID `json:"package_id"`
+	Subjects  int64     `json:"subjects"`
+	Scanned   int64     `json:"scanned"`
+	Critical  int64     `json:"critical"`
+	High      int64     `json:"high"`
+	Medium    int64     `json:"medium"`
+	Low       int64     `json:"low"`
+	Unknown   int64     `json:"unknown"`
+}
+
+// The same for npm and PyPI, where current is one named version per package:
+// package_ids[i] is at versions[i]. Every file of the version is a subject.
+func (q *Queries) PackageFindingsVersioned(ctx context.Context, arg PackageFindingsVersionedParams) ([]PackageFindingsVersionedRow, error) {
+	rows, err := q.db.Query(ctx, packageFindingsVersioned, arg.PackageIds, arg.Versions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PackageFindingsVersionedRow{}
+	for rows.Next() {
+		var i PackageFindingsVersionedRow
+		if err := rows.Scan(
+			&i.PackageID,
+			&i.Subjects,
+			&i.Scanned,
+			&i.Critical,
+			&i.High,
+			&i.Medium,
+			&i.Low,
+			&i.Unknown,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

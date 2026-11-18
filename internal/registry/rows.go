@@ -33,6 +33,9 @@ type PackageRowsParams struct {
 	Sort         PackageSort
 	Limit        int32
 	Offset       int32
+	// WithFindings fills PackageRow.Findings. Hosted rows want it; proxy
+	// content has no scans and is never summarised as if it did.
+	WithFindings bool
 }
 
 // PackageRow is one package of a repository as its list shows it.
@@ -48,11 +51,38 @@ type PackageRow struct {
 	// Latest is the version a plain install resolves, or an OCI image's most
 	// recently first-published tag; empty when there is none to name.
 	Latest string
-	// Current are the digests of the versions that count as current: an OCI
-	// image's every tag target, an npm package's latest version, a PyPI
-	// project's highest version. They are placed in this repository: they came
-	// from its own tag and file rows.
-	Current []model.Digest
+	// Findings is what the newest Sindri scans of the current versions found,
+	// when PackageRowsParams.WithFindings asked. Current means an OCI image's
+	// every tag target, an npm package's latest version, a PyPI project's
+	// highest version.
+	Findings PackageFindings
+}
+
+// PackageFindings adds up the newest Sindri scan per platform of each current
+// subject of a package. Only scans Sindri's own worker produced count (ADR 29).
+type PackageFindings struct {
+	// Subjects is how many distinct digests are current; Scanned how many of
+	// them have a Sindri scan. A package is only known clean when they match.
+	Subjects, Scanned int64
+	Critical, High    int64
+	Medium, Low       int64
+	Unknown           int64
+}
+
+// AllScanned reports whether every current subject has a Sindri scan, and
+// there is at least one.
+func (f PackageFindings) AllScanned() bool { return f.Subjects > 0 && f.Scanned == f.Subjects }
+
+// Counts returns the findings by Trivy severity name.
+func (f PackageFindings) Counts() map[string]int {
+	return map[string]int{
+		"CRITICAL": int(f.Critical), "HIGH": int(f.High), "MEDIUM": int(f.Medium),
+		"LOW": int(f.Low), "UNKNOWN": int(f.Unknown),
+	}
+}
+
+func findingsOf(subjects, scanned, critical, high, medium, low, unknown int64) PackageFindings {
+	return PackageFindings{Subjects: subjects, Scanned: scanned, Critical: critical, High: high, Medium: medium, Low: low, Unknown: unknown}
 }
 
 // PackageRows is one page of PackageRow and the number of matching packages
@@ -123,17 +153,14 @@ func (r *Registry) versionedPackageRows(ctx context.Context, repo db.Repository,
 		return out, nil
 	}
 
-	versions, err := r.q.ListVersionDigestsForPackages(ctx, ids)
+	versions, err := r.q.ListVersionsForPackages(ctx, ids)
 	if err != nil {
 		return PackageRows{}, fmt.Errorf("listing versions: %w", err)
 	}
 	protocol := model.Protocol(repo.Protocol)
-	byPackage := make(map[uuid.UUID]map[string][]string, len(ids))
+	byPackage := make(map[uuid.UUID][]string, len(ids))
 	for _, v := range versions {
-		if byPackage[v.PackageID] == nil {
-			byPackage[v.PackageID] = map[string][]string{}
-		}
-		byPackage[v.PackageID][v.Version] = v.Digests
+		byPackage[v.PackageID] = append(byPackage[v.PackageID], v.Version)
 	}
 	dist := map[uuid.UUID]string{}
 	if protocol == model.ProtocolNPM {
@@ -145,22 +172,25 @@ func (r *Registry) versionedPackageRows(ctx context.Context, repo db.Repository,
 			dist[t.PackageID] = t.Version
 		}
 	}
+	var withVersion []uuid.UUID
+	var picked []string
 	for id, i := range index {
-		have := byPackage[id]
-		names := make([]string, 0, len(have))
-		for v := range have {
-			names = append(names, v)
+		latest := CurrentVersion(protocol, dist[id], byPackage[id])
+		out.Rows[i].Latest = latest
+		if latest != "" {
+			withVersion = append(withVersion, id)
+			picked = append(picked, latest)
 		}
-		latest := CurrentVersion(protocol, dist[id], names)
-		row := &out.Rows[i]
-		row.Latest = latest
-		for _, d := range have[latest] {
-			digest, err := model.ParseDigest(d)
-			if err != nil {
-				return PackageRows{}, fmt.Errorf("stored digest %q: %w", d, err)
-			}
-			row.Current = append(row.Current, digest)
-		}
+	}
+	if !p.WithFindings || len(withVersion) == 0 {
+		return out, nil
+	}
+	found, err := r.q.PackageFindingsVersioned(ctx, db.PackageFindingsVersionedParams{PackageIds: withVersion, Versions: picked})
+	if err != nil {
+		return PackageRows{}, fmt.Errorf("summarising findings: %w", err)
+	}
+	for _, f := range found {
+		out.Rows[index[f.PackageID]].Findings = findingsOf(f.Subjects, f.Scanned, f.Critical, f.High, f.Medium, f.Low, f.Unknown)
 	}
 	return out, nil
 }
@@ -212,20 +242,22 @@ func (r *Registry) ociPackageRows(ctx context.Context, repo db.Repository, p Pac
 	if len(ids) == 0 {
 		return out, nil
 	}
-	tags, err := r.q.ListTagSummariesForPackages(ctx, ids)
+	tags, err := r.q.ListLatestTagsForPackages(ctx, ids)
 	if err != nil {
-		return PackageRows{}, fmt.Errorf("summarising tags: %w", err)
+		return PackageRows{}, fmt.Errorf("finding latest tags: %w", err)
 	}
 	for _, t := range tags {
-		row := &out.Rows[index[t.PackageID]]
-		row.Latest = t.LatestTag
-		for _, d := range t.Digests {
-			digest, err := model.ParseDigest(d)
-			if err != nil {
-				return PackageRows{}, fmt.Errorf("stored digest %q: %w", d, err)
-			}
-			row.Current = append(row.Current, digest)
-		}
+		out.Rows[index[t.PackageID]].Latest = t.LatestTag
+	}
+	if !p.WithFindings {
+		return out, nil
+	}
+	found, err := r.q.PackageFindingsOCI(ctx, ids)
+	if err != nil {
+		return PackageRows{}, fmt.Errorf("summarising findings: %w", err)
+	}
+	for _, f := range found {
+		out.Rows[index[f.PackageID]].Findings = findingsOf(f.Subjects, f.Scanned, f.Critical, f.High, f.Medium, f.Low, f.Unknown)
 	}
 	return out, nil
 }

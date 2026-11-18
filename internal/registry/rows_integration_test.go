@@ -62,9 +62,9 @@ func TestListPackageRows_FiltersSortsPagesAndNamesTheCurrentVersion(t *testing.T
 		})
 	}
 
-	row := list(registry.PackageRowsParams{NameContains: "beta"}).Rows[0]
-	if row.Latest != "1.10" || row.Versions != 3 || row.LastPublished.IsZero() || len(row.Current) != 1 {
-		t.Errorf("row = %+v, want latest 1.10 of 3 versions, dated, with one current digest", row)
+	row := list(registry.PackageRowsParams{NameContains: "beta", WithFindings: true}).Rows[0]
+	if row.Latest != "1.10" || row.Versions != 3 || row.LastPublished.IsZero() || row.Findings.Subjects != 1 || row.Findings.AllScanned() {
+		t.Errorf("row = %+v, want latest 1.10 of 3 versions, dated, with one current unscanned subject", row)
 	}
 	if _, err := f.reg.ListPackageRows(t.Context(), registry.PackageRowsParams{Repo: "nope", Limit: 10}); err == nil {
 		t.Error("an unknown repository did not fail")

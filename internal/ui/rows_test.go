@@ -107,6 +107,7 @@ func TestPkgFilter_ParsesAndRendersTheURL(t *testing.T) {
 		{"Defaults", "", pkgFilter{Sort: sortName}, "/ui/r/team/app"},
 		{"QueryAndSort", "q=web&sort=published&page=3", pkgFilter{Q: "web", Sort: sortPublished, Page: 3}, "/ui/r/team/app?page=3&q=web&sort=published"},
 		{"UnknownSortAndBadPageAreDropped", "sort=x&page=-4", pkgFilter{Sort: sortName}, "/ui/r/team/app"},
+		{"AHugePageIsCapped", "page=99999999999999", pkgFilter{Sort: sortName, Page: maxPage}, "/ui/r/team/app?page=100000"},
 		{"QueryIsTrimmed", "q=%20web%20", pkgFilter{Q: "web", Sort: sortName}, "/ui/r/team/app?q=web"},
 	}
 	for _, tc := range tests {

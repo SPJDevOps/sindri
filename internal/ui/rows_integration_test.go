@@ -177,12 +177,11 @@ func TestUI_TagRowsShowStageSeverityOwnersSizeAndSharedDigests(t *testing.T) {
 	if d2 := e.push("team-a", "app", "stable", "one"); d2 != d {
 		t.Fatalf("two tags of one manifest have two digests")
 	}
-	other := e.push("team-a", "app", "2.0", "two")
+	e.push("team-a", "app", "2.0", "two")
 	e.promote(t, d, "team-a", "dev")
 	e.promote(t, d, "team-a", "prod")
 	e.sindriScan(d, "linux/amd64", map[string]int{"HIGH": 3, "LOW": 1})
 	e.sindriScan(d, "linux/arm64", map[string]int{"HIGH": 1})
-	_ = other
 
 	body := e.get("alice", "/ui/r/team-a/-/package?name=app").body
 	one := rowFor(t, body, "1.0")
@@ -338,5 +337,27 @@ func TestUI_TagLoadMoreReturnsOnlyRows(t *testing.T) {
 	}
 	if got := strings.Count(next.body, `<td><span class="mono">t`); got != 5 {
 		t.Fatalf("load more returned %d rows, want the 5 left", got)
+	}
+}
+
+// The filter form posts to the bare repository URL. htmx appends the form's
+// values to a GET URL that already has a query, and Go reads the first value
+// of a repeated key, so an action carrying ?sort= would let a stale sort beat
+// the select.
+func TestUI_PackageFilterFormHasNoQueryInItsAction(t *testing.T) {
+	e := newEnv(t)
+	e.publishNPM("npm", "alpha", "1.0.0", "latest")
+	body := e.get("alice", "/ui/r/npm?sort=published&q=alp").body
+	form := regexp.MustCompile(`(?s)<form class="filter-form"[^>]*>`).FindString(body)
+	if form == "" {
+		t.Fatalf("no filter form:\n%s", body)
+	}
+	for _, want := range []string{`action="/ui/r/npm"`, `hx-get="/ui/r/npm"`} {
+		if !strings.Contains(form, want) {
+			t.Errorf("filter form lacks %s: %s", want, form)
+		}
+	}
+	if !strings.Contains(body, `<option value="published" selected>`) {
+		t.Error("the sort in the URL is not the selected option")
 	}
 }

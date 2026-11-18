@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -353,23 +354,14 @@ func (h *handler) packageRows(r *http.Request, repo model.Repository, filter pkg
 	ctx := r.Context()
 	list, err := h.opts.Registry.ListPackageRows(ctx, registry.PackageRowsParams{
 		Repo: repo.Name, NameContains: filter.Q, Sort: filter.registrySort(),
-		Limit: pageSize, Offset: int32((page - 1) * pageSize), //nolint:gosec // G115: a page number is bounded by the row count
+		Limit: pageSize, Offset: int32((page - 1) * pageSize), //nolint:gosec // G115: parsePkgFilter caps page at maxPage, so this is at most maxPage*pageSize
+		WithFindings: repo.Type == model.RepoTypeHosted,
 	})
 	if err != nil {
 		return pkgList{}, err
 	}
 	out := pkgList{Total: list.Total, Rows: make([]pkgRow, 0, len(list.Rows))}
 	hosted := repo.Type == model.RepoTypeHosted
-	var sums map[model.Digest]lifecycle.SubjectSummary
-	if hosted {
-		var digests []model.Digest
-		for _, row := range list.Rows {
-			digests = append(digests, row.Current...)
-		}
-		if sums, err = h.opts.Lifecycle.Summaries(ctx, digests, []string{repo.Name}); err != nil {
-			return pkgList{}, err
-		}
-	}
 	for _, row := range list.Rows {
 		pr := pkgRow{
 			Name: packageLabel(repo, row.Name), Href: packageHref(repo.Name, row.Name),
@@ -377,7 +369,10 @@ func (h *handler) packageRows(r *http.Request, repo model.Repository, filter pkg
 			HasSeverity: hosted,
 		}
 		if hosted {
-			pr.Severity = worstOf(severityOf(pickSummaries(sums, row.Current)))
+			pr.Severity = worstOf(severityView{
+				Counts:  severityCounts(row.Findings.Counts()),
+				Scanned: row.Findings.AllScanned(),
+			})
 		}
 		out.Rows = append(out.Rows, pr)
 	}
@@ -589,6 +584,9 @@ func (h *handler) versionRows(r *http.Request, repo model.Repository, pkg string
 		}
 	}
 	cmp := model.VersionComparator(repo.Protocol)
+	if cmp == nil {
+		return nil, fmt.Errorf("repository %s of protocol %s has no version ordering", repo.Name, repo.Protocol)
+	}
 	slices.SortStableFunc(ins, func(a, b versionIn) int { return cmp(b.Version, a.Version) })
 	rows := make([]versionRow, 0, len(ins))
 	for _, v := range ins {

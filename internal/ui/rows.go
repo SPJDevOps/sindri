@@ -157,10 +157,16 @@ func parsePkgFilter(v url.Values) pkgFilter {
 		f.Sort = sortPublished
 	}
 	if n, err := strconv.Atoi(v.Get("page")); err == nil && n > 1 {
-		f.Page = n
+		// A page past the end shows the last one, so any number beyond what
+		// a registry could fill is as good as maxPage.
+		f.Page = min(n, maxPage)
 	}
 	return f
 }
+
+// maxPage bounds the page number a URL may ask for, so the row offset fits
+// the query's int32 whatever the URL says.
+const maxPage = 100_000
 
 // Active reports whether the filter narrows the list. The sort and the page do
 // not.

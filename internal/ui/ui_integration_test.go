@@ -633,6 +633,9 @@ func TestUI_PackagePagerReturnsOnlyResultsForHTMX(t *testing.T) {
 	if !strings.Contains(later.header.Get("Vary"), "HX-Request") {
 		t.Fatal("pages that differ by HX-Request must say so in Vary")
 	}
+	if huge := e.get("alice", "/ui/r/team-a?page=99999999999999999"); huge.status != http.StatusOK || !strings.Contains(huge.body, "Page 2 of 2") {
+		t.Fatalf("a huge page number should show the last page, got %d", huge.status)
+	}
 	if past := e.get("alice", "/ui/r/team-a?page=99"); past.status != http.StatusOK || !strings.Contains(past.body, "Page 2 of 2") {
 		t.Fatalf("a page past the end should show the last one: %d", past.status)
 	}

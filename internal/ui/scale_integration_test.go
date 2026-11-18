@@ -62,6 +62,8 @@ func scalePages(info testsupport.SeedInfo) []scalePage {
 		{"hosted repository", "admin", "/ui/r/" + info.HostedOCI, 8},
 		{"hosted repository, filtered and sorted", "admin", "/ui/r/" + info.HostedOCI + "?q=pkg-00&sort=published", 8},
 		{"hosted repository, a later page", "admin", "/ui/r/" + info.HostedOCI + "?page=3", 8},
+		{"repository of 50 images of 200 tags", "admin", "/ui/r/" + info.ManyImagesRepo, 8},
+		{"repository of 50 images of 200 tags, as alice", "alice", "/ui/r/" + info.ManyImagesRepo, 8},
 		{"hosted pypi repository", "admin", "/ui/r/" + info.PyPIRepo, 8},
 		{"hosted npm repository", "admin", "/ui/r/" + info.NPMRepo, 9},
 		{"proxy repository", "admin", "/ui/r/" + info.ProxyOCI, 7},

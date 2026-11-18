@@ -62,6 +62,12 @@ type SeedInfo struct {
 	// repository page that summarises every tag of an image.
 	HugeTagImage string
 	HugeTags     int
+	// ManyImagesRepo is a hosted OCI repository whose first ManyImages images
+	// each have ManyImagesTags tags: the shape that makes a repository page's
+	// cost depend on tags, not on the rows it lists.
+	ManyImagesRepo string
+	ManyImages     int
+	ManyImagesTags int
 	// Versions of PyPIPackage and NPMPackage, which are deliberately large.
 	HeavyVersions int
 }
@@ -74,6 +80,8 @@ const (
 	seedHeavyVersions      = 120
 	seedHeavyTags          = 60
 	seedHugeTags           = 2000
+	seedManyImages         = 50
+	seedManyImagesTags     = 200
 	seedKnownScanFindings  = 300
 	seedSubjectEveryNth    = 4
 	seedRevokeEveryNth     = 7
@@ -299,6 +307,7 @@ func (s *seeder) generate() {
 	s.info.NPMRepo, s.info.NPMPackage = repoName("npm", "hosted", 1), "pkg-0001"
 	s.info.OCITags, s.info.HeavyVersions = seedHeavyTags, seedHeavyVersions
 	s.info.HugeTagImage, s.info.HugeTags = "pkg-0002", seedHugeTags
+	s.info.ManyImagesRepo, s.info.ManyImages, s.info.ManyImagesTags = repoName("oci", "hosted", 2), seedManyImages, seedManyImagesTags
 
 	for _, p := range seedProtocols {
 		for _, r := range hosted[p.name] {
@@ -352,6 +361,9 @@ func (s *seeder) genPackage(r seedRepo, j int) {
 	}
 	if r.protocol == "oci" && r.typ == "hosted" && r.index == 1 && j == 2 {
 		n = seedHugeTags
+	}
+	if r.protocol == "oci" && r.typ == "hosted" && r.index == 2 && j <= seedManyImages {
+		n = seedManyImagesTags
 	}
 	for k := 0; k < n; k++ {
 		s.artifact++
