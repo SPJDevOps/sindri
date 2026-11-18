@@ -395,7 +395,7 @@ type tagRow struct {
 	// Published is the digest's first publish; zero for proxy content.
 	Published time.Time
 	Owners    []string
-	Stage     string
+	Stage     stageView
 	Severity  severityView
 	Size      int64
 }
@@ -414,7 +414,7 @@ type versionRow struct {
 	Deprecated string   // an npm deprecation message; empty otherwise
 	Published  time.Time
 	Owners     []string
-	Stage      string
+	Stage      stageView
 	Severity   severityView
 	Size       int64
 	Files      []fileRow
@@ -676,7 +676,7 @@ type platformRow struct {
 	Href       string
 	Size       int64
 	HasVerdict bool
-	Stage      string
+	Stage      stageView
 	Severity   severityView
 }
 
@@ -895,9 +895,10 @@ func (h *handler) names(r *http.Request, data *artifactPage, repo model.Reposito
 		} else {
 			data.Name = best.Display + " " + best.Ref
 		}
-	} else if image != "" && repo.Protocol == model.ProtocolOCI {
-		data.Name = packageLabel(repo, image)
 	}
+	// With no name found for the digest in this repository the title has none:
+	// the URL's image is the caller's claim, and a crafted link must not give a
+	// digest a name. It stays in the breadcrumb only.
 	if data.Name != "" {
 		data.Title = data.Name + " " + shortDigest(digest.String())
 	}

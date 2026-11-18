@@ -168,6 +168,37 @@ func TestVerdict_ReadsStageScanAndNewFindings(t *testing.T) {
 	}
 }
 
+func TestVerdict_APartlyScannedIndexIsNotScanned(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	scan := func(id string, at time.Time, platform, platforms string) evidence.Evidence {
+		return evidence.Evidence{ID: id, Type: model.EvidenceScan, CreatedAt: at, Metadata: json.RawMessage(
+			`{"producer":"sindri","platform":"` + platform + `","platforms":` + platforms + `,"severity_counts":{"HIGH":0}}`)}
+	}
+	both := `["linux/amd64","linux/arm64"]`
+	tests := []struct {
+		name    string
+		evs     []evidence.Evidence
+		scanned bool
+	}{
+		{"OneOfTwoPlatformsScanned", []evidence.Evidence{scan("a", t0, "linux/amd64", both)}, false},
+		{"BothPlatformsScanned", []evidence.Evidence{scan("a", t0, "linux/amd64", both), scan("b", t0, "linux/arm64", both)}, true},
+		{"TheNewestScanListsTheRequiredSet", []evidence.Evidence{
+			scan("a", t0, "linux/amd64", `["linux/amd64"]`), scan("b", t0.Add(time.Hour), "linux/arm64", both)}, true},
+		{"ANewerScanListingAMissingPlatformMakesItIncomplete", []evidence.Evidence{
+			scan("a", t0, "linux/arm64", `["linux/arm64"]`), scan("b", t0.Add(time.Hour), "linux/amd64", both)}, true},
+		{"TheNewestScanNamesAPlatformWithNoScan", []evidence.Evidence{
+			scan("a", t0, "linux/amd64", `["linux/amd64"]`), scan("b", t0.Add(time.Hour), "linux/amd64", both)}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v := newVerdict(nil, "r", map[string]int32{}, tc.evs)
+			if v.Severity.Scanned != tc.scanned {
+				t.Errorf("scanned = %v, want %v", v.Severity.Scanned, tc.scanned)
+			}
+		})
+	}
+}
+
 func itoa(n int) string { return strconv.Itoa(n) }
 
 func TestSizeBucket_RoundsUpToTenths(t *testing.T) {

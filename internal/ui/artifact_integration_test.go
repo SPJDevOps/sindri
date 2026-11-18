@@ -332,3 +332,23 @@ func TestUI_ImageArtifactShowsLayersWithBuildStepsAndSizeBars(t *testing.T) {
 		t.Error("an empty-layer history entry became a layer's build step")
 	}
 }
+
+// A digest with no name in the repository has no title: the image in the link
+// is the caller's claim, and a crafted link must not give a digest a name.
+func TestUI_ArtifactTitleNeverTakesAnImageNameFromTheURL(t *testing.T) {
+	e := newEnv(t)
+	d := e.push("team-a", "app", "1.0", "nameless")
+	if _, err := e.pool.Exec(t.Context(), `DELETE FROM tags WHERE target_digest = $1`, d.String()); err != nil {
+		t.Fatalf("dropping the tag: %v", err)
+	}
+	r := e.get("alice", artifactPath("team-a", "trusted-vendor-base", d, ""))
+	if r.status != http.StatusOK {
+		t.Fatalf("GET: %d\n%s", r.status, r.body)
+	}
+	if strings.Contains(r.body, "<title>trusted-vendor-base") || strings.Contains(r.body, `class="page-title">trusted-vendor-base`) || strings.Contains(r.body, `class="sub mono"`) {
+		t.Errorf("the URL's image became the page's name:\n%s", r.body)
+	}
+	if !strings.Contains(r.body, "<title>"+shortDigest(d.String())) {
+		t.Errorf("the title is not the digest alone:\n%s", r.body)
+	}
+}

@@ -21,6 +21,8 @@ func TestSeverityOf_SumsScansAndNeverLooksCleanWithoutOne(t *testing.T) {
 	high := `{"producer":"sindri","severity_counts":{"HIGH":2,"LOW":1}}`
 	arm := `{"producer":"sindri","platform":"linux/arm64","severity_counts":{"HIGH":1,"CRITICAL":1}}`
 	clean := `{"producer":"sindri","severity_counts":{"HIGH":0}}`
+	amd := `{"producer":"sindri","platform":"linux/amd64","platforms":["linux/amd64","linux/arm64"],"created_at":"2026-01-01T00:00:00Z","severity_counts":{"HIGH":0}}`
+	armListed := `{"producer":"sindri","platform":"linux/arm64","platforms":["linux/amd64","linux/arm64"],"created_at":"2026-01-01T00:00:00Z","severity_counts":{"HIGH":1}}`
 	client := `{"producer":"ci","severity_counts":{"CRITICAL":9}}`
 	tests := []struct {
 		name        string
@@ -33,6 +35,9 @@ func TestSeverityOf_SumsScansAndNeverLooksCleanWithoutOne(t *testing.T) {
 		{"ACleanScanIsScanned", []lifecycle.SubjectSummary{{Scans: scans(clean)}}, true, nil},
 		{"PlatformsAddUp", []lifecycle.SubjectSummary{{Scans: scans(high, arm)}}, true,
 			[]severityCount{{"critical", "sev-critical", 1}, {"high", "sev-high", 3}, {"low", "sev-low", 1}}},
+		{"AnIndexWithOnlyOneListedPlatformScannedIsNotScanned", []lifecycle.SubjectSummary{{Scans: scans(amd)}}, false, nil},
+		{"AnIndexWithEveryListedPlatformScannedIsScanned", []lifecycle.SubjectSummary{{Scans: scans(amd, armListed)}}, true,
+			[]severityCount{{"high", "sev-high", 1}}},
 		{"AClientScanDoesNotCount", []lifecycle.SubjectSummary{{Scans: scans(client)}}, false, nil},
 		{"AnUnscannedFileMakesTheVersionNotScanned", []lifecycle.SubjectSummary{{Scans: scans(clean)}, {}}, false, nil},
 		{"FindingsStillShowWhenAnotherFileIsUnscanned", []lifecycle.SubjectSummary{{Scans: scans(high)}, {}}, false,
@@ -60,27 +65,39 @@ func TestWorstOf_KeepsOnlyTheHighestSeverity(t *testing.T) {
 
 func TestStageOf_IsTheHighestApprovedStageOfTheLeastPromotedFile(t *testing.T) {
 	appr := func(repo, stage string, pos int32) lifecycle.StageApproval {
-		return lifecycle.StageApproval{Repository: repo, Stage: stage, Position: pos}
+		return lifecycle.StageApproval{Repository: repo, Stage: stage, Position: pos, Action: lifecycle.ActionApprove}
+	}
+	rev := func(repo, stage string, pos int32) lifecycle.StageApproval {
+		return lifecycle.StageApproval{Repository: repo, Stage: stage, Position: pos, Action: lifecycle.ActionRevoke}
 	}
 	tests := []struct {
 		name string
 		sums []lifecycle.SubjectSummary
-		want string
+		want stageView
 	}{
-		{"None", nil, ""},
-		{"NotApproved", []lifecycle.SubjectSummary{{}}, ""},
-		{"HighestApprovedStage", []lifecycle.SubjectSummary{{Approvals: []lifecycle.StageApproval{appr("r", "dev", 0), appr("r", "prod", 2)}}}, "prod"},
-		{"AnotherRepositoryDoesNotCount", []lifecycle.SubjectSummary{{Approvals: []lifecycle.StageApproval{appr("other", "prod", 2)}}}, ""},
+		{"None", nil, stageView{}},
+		{"NotApproved", []lifecycle.SubjectSummary{{}}, stageView{}},
+		{"HighestApprovedStage", []lifecycle.SubjectSummary{{Approvals: []lifecycle.StageApproval{appr("r", "prod", 2)}}}, stageView{Name: "prod"}},
+		{"AnotherRepositoryDoesNotCount", []lifecycle.SubjectSummary{{Approvals: []lifecycle.StageApproval{appr("other", "prod", 2)}}}, stageView{}},
 		{"TwoFilesGoOnlyAsFarAsTheLeastPromoted", []lifecycle.SubjectSummary{
 			{Approvals: []lifecycle.StageApproval{appr("r", "prod", 2)}},
-			{Approvals: []lifecycle.StageApproval{appr("r", "dev", 0)}}}, "dev"},
+			{Approvals: []lifecycle.StageApproval{appr("r", "dev", 0)}}}, stageView{Name: "dev"}},
 		{"OneUnpromotedFileMeansNone", []lifecycle.SubjectSummary{
-			{Approvals: []lifecycle.StageApproval{appr("r", "prod", 2)}}, {}}, ""},
+			{Approvals: []lifecycle.StageApproval{appr("r", "prod", 2)}}, {}}, stageView{}},
+		{"ARevokedTopStageReadsRevokedFromIt", []lifecycle.SubjectSummary{{Approvals: []lifecycle.StageApproval{rev("r", "dev", 0)}}},
+			stageView{Name: "dev", Revoked: true}},
+		{"ARevokeOfTheTopStageIsNotHiddenByALowerApproval", []lifecycle.SubjectSummary{
+			{Approvals: []lifecycle.StageApproval{appr("r", "dev", 0), rev("r", "prod", 2)}}}, stageView{Name: "prod", Revoked: true}},
+		{"ARevokeOfALowerStageDoesNotHideAHigherApproval", []lifecycle.SubjectSummary{
+			{Approvals: []lifecycle.StageApproval{rev("r", "dev", 0), appr("r", "prod", 2)}}}, stageView{Name: "prod"}},
+		{"ARevokedFileMakesTheVersionRevoked", []lifecycle.SubjectSummary{
+			{Approvals: []lifecycle.StageApproval{appr("r", "prod", 2)}},
+			{Approvals: []lifecycle.StageApproval{rev("r", "dev", 0)}}}, stageView{Name: "dev", Revoked: true}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := stageOf(tc.sums, "r"); got != tc.want {
-				t.Errorf("stageOf = %q, want %q", got, tc.want)
+				t.Errorf("stageOf = %+v, want %+v", got, tc.want)
 			}
 		})
 	}

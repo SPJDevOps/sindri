@@ -40,32 +40,38 @@ type verdictView struct {
 // Otherwise the stage is the highest one approved. approvedAt is the time of
 // the approval that stage names; zero unless the subject is approved.
 func verdictStage(states []lifecycle.State, repo string, position map[string]int32) (stage string, revoked bool, approvedAt time.Time) {
-	var top *lifecycle.State
-	for i, st := range states {
+	var rs []stageReach
+	for _, st := range states {
 		if st.Repository != repo {
 			continue
 		}
-		if _, known := position[st.Stage]; !known {
+		pos, known := position[st.Stage]
+		if !known {
 			continue
 		}
-		if top == nil || position[st.Stage] > position[top.Stage] {
-			top = &states[i]
-		}
+		rs = append(rs, stageReach{Stage: st.Stage, Position: pos, Revoked: st.Action == lifecycle.ActionRevoke})
 	}
-	if top == nil {
+	top, ok := topReach(rs)
+	if !ok {
 		return "", false, time.Time{}
 	}
-	if top.Action == lifecycle.ActionRevoke {
+	if top.Revoked {
 		return top.Stage, true, time.Time{}
 	}
-	return top.Stage, false, top.At
+	for _, st := range states {
+		if st.Repository == repo && st.Stage == top.Stage {
+			return top.Stage, false, st.At
+		}
+	}
+	return top.Stage, false, time.Time{}
 }
 
 // scanPoint is one Sindri scan reduced to what the strip compares.
 type scanPoint struct {
-	ID     string
-	At     time.Time
-	Counts map[string]int
+	ID        string
+	At        time.Time
+	Counts    map[string]int
+	Platforms []string
 }
 
 // sindriScans groups a subject's Sindri scans by platform, oldest first with
@@ -81,7 +87,7 @@ func sindriScans(evs []evidence.Evidence) map[string][]scanPoint {
 		for sev, n := range meta.SeverityCounts {
 			counts[strings.ToUpper(sev)] = n
 		}
-		byPlatform[meta.Platform] = append(byPlatform[meta.Platform], scanPoint{ID: ev.ID, At: ev.CreatedAt, Counts: counts})
+		byPlatform[meta.Platform] = append(byPlatform[meta.Platform], scanPoint{ID: ev.ID, At: ev.CreatedAt, Counts: counts, Platforms: meta.Platforms})
 	}
 	for _, scans := range byPlatform {
 		slices.SortFunc(scans, func(a, b scanPoint) int {
@@ -140,8 +146,17 @@ func newVerdict(states []lifecycle.State, repo string, position map[string]int32
 	v := verdictView{Stage: stage, Revoked: revoked}
 	scans := sindriScans(evs)
 	total := map[string]int{}
-	for _, list := range scans {
+	var set scanSet
+	// In platform order, as the gate reads them, so a tie names the same scan.
+	platforms := make([]string, 0, len(scans))
+	for p := range scans {
+		platforms = append(platforms, p)
+	}
+	slices.Sort(platforms)
+	for _, p := range platforms {
+		list := scans[p]
 		last := list[len(list)-1]
+		set.add(p, last.Platforms, last.At)
 		for sev, n := range last.Counts {
 			total[sev] += n
 		}
@@ -149,7 +164,7 @@ func newVerdict(states []lifecycle.State, repo string, position map[string]int32
 			v.ScannedAt = last.At
 		}
 	}
-	v.Severity = worstOf(severityView{Counts: severityCounts(total), Scanned: len(scans) > 0})
+	v.Severity = worstOf(severityView{Counts: severityCounts(total), Scanned: set.complete()})
 	v.NewFindings = newFindingsSince(scans, approvedAt)
 	return v
 }

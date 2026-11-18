@@ -75,6 +75,6 @@
   {{if .Caption}}<p class="hint step">{{.Caption}}</p>{{end}}
   <div class="cmd"><pre><code>{{.Text}}</code></pre><button class="copy" type="button" data-copy="{{.Text}}" aria-label="Copy command">Copy</button></div>
 {{end}}{{end}}
-{{define "stage-pill"}}{{if .}}<span class="pill approve">{{.}}</span>{{else}}<span class="pill none">not promoted</span>{{end}}{{end}}
+{{define "stage-pill"}}{{if .Name}}{{if .Revoked}}<span class="pill revoke">revoked from {{.Name}}</span>{{else}}<span class="pill approve">{{.Name}}</span>{{end}}{{else}}<span class="pill none">not promoted</span>{{end}}{{end}}
 
 {{define "severity-pills"}}{{if .Counts}}{{range .Counts}}<span class="pill {{.Class}}">{{.N}} {{.Severity}}</span>{{end}}{{else if .Scanned}}<span class="pill sev-none">no findings</span>{{else}}<span class="pill none">not scanned</span>{{end}}{{end}}

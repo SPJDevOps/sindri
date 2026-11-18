@@ -57,7 +57,7 @@
       <td class="num col-size">{{if .Size}}{{bytes .Size}}{{else}}-{{end}}</td>
     </tr>
 {{else}}{{if not .Cursor}}
-    <tr><td class="more-row" colspan="7"><div class="row empty">No tags.</div></td></tr>
+    <tr><td class="more-row" colspan="{{if .Repo.Upstream}}3{{else}}7{{end}}"><div class="row empty">No tags.</div></td></tr>
 {{end}}{{end}}{{if .More}}
-    <tr><td class="more-row" colspan="7"><div class="more"><button type="button" data-more="tags" hx-get="{{.More}}" hx-target="closest tr" hx-swap="outerHTML">Load more</button></div></td></tr>
+    <tr><td class="more-row" colspan="{{if .Repo.Upstream}}3{{else}}7{{end}}"><div class="more"><button type="button" data-more="tags" hx-get="{{.More}}" hx-target="closest tr" hx-swap="outerHTML">Load more</button></div></td></tr>
 {{end}}{{end}}

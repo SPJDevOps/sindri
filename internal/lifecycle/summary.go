@@ -10,13 +10,16 @@ import (
 	"github.com/spj/sindri/internal/model"
 )
 
-// StageApproval is the highest lifecycle stage a subject is currently approved
-// at in one repository. A revoked stage is not approved, so a revoke of the top
-// stage leaves the next one down as the highest.
+// StageApproval is the highest lifecycle stage a subject has reached in one
+// repository, with what currently stands there: approve, or revoke. A revoke of
+// the top stage is reported as that, not as the next stage down still being
+// approved, so a row reads as the artifact page's verdict strip does.
 type StageApproval struct {
 	Repository string `json:"repository"`
 	Stage      string `json:"stage"`
 	Position   int32  `json:"position"`
+	// Action is ActionApprove or ActionRevoke.
+	Action Action `json:"action"`
 }
 
 // SubjectSummary is what a row or a header shows about one digest.
@@ -33,10 +36,11 @@ type SubjectSummary struct {
 	// caller shows only those naming a repository the reader may read.
 	Owners []string
 	// Approvals lists, for each repository asked about, the highest stage the
-	// subject is currently approved at; a repository with none is absent.
+	// subject has any current state at, with its action; a repository where it
+	// never reached a stage is absent.
 	Approvals []StageApproval
 	// Scans is the newest Sindri-produced scan per platform, trimmed to
-	// producer, platform, and severity_counts. A scan a client attached never
+	// producer, platform, platforms, created_at, and severity_counts. A scan a client attached never
 	// appears (ADR 29, ADR 30).
 	Scans []json.RawMessage
 }

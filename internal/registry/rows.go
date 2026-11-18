@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/spj/sindri/internal/db"
 	"github.com/spj/sindri/internal/model"
@@ -209,8 +210,11 @@ func CurrentVersion(p model.Protocol, latestTag string, versions []string) strin
 }
 
 func (r *Registry) ociPackageRows(ctx context.Context, repo db.Repository, p PackageRowsParams, limit int32) (PackageRows, error) {
+	// Only a hosted repository's rows read subjects: a proxy page must not learn
+	// the push time or tags of a hosted repository holding the same digest.
+	hosted := model.RepoType(repo.Type) == model.RepoTypeHosted
 	params := db.ListPackageRowsOCIParams{
-		RepoID: repo.ID, NameFilter: p.NameContains, ByPublished: p.Sort == SortByPublished,
+		Hosted: hosted, RepoID: repo.ID, NameFilter: p.NameContains, ByPublished: p.Sort == SortByPublished,
 		PageLimit: limit, PageOffset: p.Offset,
 	}
 	rows, err := r.q.ListPackageRowsOCI(ctx, params)
@@ -242,7 +246,7 @@ func (r *Registry) ociPackageRows(ctx context.Context, repo db.Repository, p Pac
 	if len(ids) == 0 {
 		return out, nil
 	}
-	tags, err := r.q.ListLatestTagsForPackages(ctx, ids)
+	tags, err := r.q.ListLatestTagsForPackages(ctx, db.ListLatestTagsForPackagesParams{PackageIds: ids, Hosted: hosted})
 	if err != nil {
 		return PackageRows{}, fmt.Errorf("finding latest tags: %w", err)
 	}
@@ -262,11 +266,12 @@ func (r *Registry) ociPackageRows(ctx context.Context, repo db.Repository, p Pac
 	return out, nil
 }
 
-// timeOf reads an aggregate timestamp sqlc could not type: a time, or nil when
-// the aggregate had nothing to take the maximum of.
-func timeOf(v any) time.Time {
-	t, _ := v.(time.Time)
-	return t
+// timeOf is the time of a nullable column, the zero time when it is null.
+func timeOf(v pgtype.Timestamptz) time.Time {
+	if !v.Valid {
+		return time.Time{}
+	}
+	return v.Time
 }
 
 // RemoteCacheStats is what a proxy repository holds.

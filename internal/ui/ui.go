@@ -154,6 +154,7 @@ var funcs = template.FuncMap{
 	"short": shortDigest,
 	"bytes": humanBytes,
 	"ago":   func(t time.Time) template.HTML { return timeTag(t, ago(t)) },
+	"stage": func(name string, revoked bool) stageView { return stageView{Name: name, Revoked: revoked} },
 	"when":  func(t time.Time) template.HTML { return timeTag(t, t.UTC().Format(time.RFC3339)) },
 }
 
@@ -224,13 +225,13 @@ func (h *handler) chrome(r *http.Request, title string, crumbs ...crumb) chrome 
 // nav marks which header link the request's path belongs to.
 func (c chrome) nav(path string) chrome {
 	switch {
-	case path == "/ui" || path == "/ui/":
+	case path == Prefix || path == Prefix+"/":
 		c.NavRepos = "page"
-	case strings.HasPrefix(path, "/ui/r/"):
+	case strings.HasPrefix(path, Prefix+"/r/"):
 		c.NavRepos = "true"
-	case path == "/ui/system":
+	case path == Prefix+"/system":
 		c.NavSystem = "page"
-	case strings.HasPrefix(path, "/ui/system/"):
+	case strings.HasPrefix(path, Prefix+"/system/"):
 		c.NavSystem = "true"
 	}
 	return c

@@ -119,9 +119,9 @@
   <table><caption class="sr-only">Package rows example</caption>
     <thead><tr><th scope="col">Version</th><th scope="col" class="col-owners">Owners</th><th scope="col">Stage</th><th scope="col">Findings</th><th scope="col" class="num col-size">Size</th></tr></thead>
     <tbody>
-      <tr><td><span class="mono">1.2.0</span> <span class="pill">latest</span></td><td class="col-owners"><span class="mono">repository:team/app</span></td><td>{{template "stage-pill" "prod"}}</td><td><div class="pills">{{template "severity-pills" .Findings}}</div></td><td class="num col-size">4.0 KiB</td></tr>
-      <tr><td><span class="mono">1.1.0</span> <span class="pill revoke">deprecated</span><span class="by">use 1.2.0</span></td><td class="col-owners">-</td><td>{{template "stage-pill" ""}}</td><td><div class="pills">{{template "severity-pills" .Clean}}</div></td><td class="num col-size">3.9 KiB</td></tr>
-      <tr><td><span class="mono">1.0.0</span></td><td class="col-owners">-</td><td>{{template "stage-pill" "dev"}}</td><td><div class="pills">{{template "severity-pills" .Unscanned}}</div></td><td class="num col-size">3.2 KiB</td></tr>
+      <tr><td><span class="mono">1.2.0</span> <span class="pill">latest</span></td><td class="col-owners"><span class="mono">repository:team/app</span></td><td>{{template "stage-pill" (stage "prod" false)}}</td><td><div class="pills">{{template "severity-pills" .Findings}}</div></td><td class="num col-size">4.0 KiB</td></tr>
+      <tr><td><span class="mono">1.1.0</span> <span class="pill revoke">deprecated</span><span class="by">use 1.2.0</span></td><td class="col-owners">-</td><td>{{template "stage-pill" (stage "" false)}}</td><td><div class="pills">{{template "severity-pills" .Clean}}</div></td><td class="num col-size">3.9 KiB</td></tr>
+      <tr><td><span class="mono">1.0.0</span></td><td class="col-owners">-</td><td>{{template "stage-pill" (stage "dev" false)}}</td><td><div class="pills">{{template "severity-pills" .Unscanned}}</div></td><td class="num col-size">3.2 KiB</td></tr>
       <tr><td class="more-row" colspan="5"><div class="more"><button type="button">Load more</button></div></td></tr>
     </tbody>
   </table>
@@ -131,9 +131,9 @@
 <section class="section">
   <h2 class="section-title">Artifact header</h2>
   <p class="hint">The title leads with the name and puts the short digest second (<code>.sub</code>). The verdict strip (<code>.pills.verdict</code>) is at most four pills: stage or "revoked from", worst severity, scan age, and "new findings since approval" (<code>.pill.new</code>). Upstream content has no strip. The section navigation (<code>.section-nav</code>) sticks below the strip; under 720px the links give way to a native <code>&lt;details class="sections-menu"&gt;</code>. Both are always in the markup.</p>
-  <div class="pills verdict" role="group" aria-label="Verdict"><span class="pill revoke">revoked from prod</span>{{template "severity-pills" .Findings}}<span class="pill">scanned 3 days ago</span><span class="pill new">new findings since approval</span></div>
-  <div class="pills verdict" role="group" aria-label="Verdict">{{template "stage-pill" "prod"}}{{template "severity-pills" .Clean}}<span class="pill">scanned 2 hours ago</span></div>
-  <div class="pills verdict" role="group" aria-label="Verdict">{{template "stage-pill" ""}}{{template "severity-pills" .Unscanned}}</div>
+  <div class="pills verdict" role="group" aria-label="Verdict">{{template "stage-pill" (stage "prod" true)}}{{template "severity-pills" .Findings}}<span class="pill">scanned 3 days ago</span><span class="pill new">new findings since approval</span></div>
+  <div class="pills verdict" role="group" aria-label="Verdict">{{template "stage-pill" (stage "prod" false)}}{{template "severity-pills" .Clean}}<span class="pill">scanned 2 hours ago</span></div>
+  <div class="pills verdict" role="group" aria-label="Verdict">{{template "stage-pill" (stage "" false)}}{{template "severity-pills" .Unscanned}}</div>
   <div class="section-nav">
     <nav class="sections" aria-label="Sections example"><a href="#reference">Overview</a><a href="#reference">Lifecycle</a><a href="#reference">Vulnerabilities</a><a href="#reference">Evidence</a></nav>
     <details class="sections-menu">

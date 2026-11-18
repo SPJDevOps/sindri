@@ -18,8 +18,11 @@ const maxVulnRows = 500
 // page reads (internal/scan evidenceMetadata). Pointer-free on purpose: older
 // scans lack the detail fields, which then render as dashes.
 type scanMetadata struct {
-	Producer           string         `json:"producer"`
-	Platform           string         `json:"platform"`
+	Producer string `json:"producer"`
+	Platform string `json:"platform"`
+	// Platforms is what an index scan lists: every child platform its job
+	// meant to scan (ADR 30). The gate refuses an index missing one.
+	Platforms          []string       `json:"platforms"`
 	DBUpdatedAt        string         `json:"db_updated_at"`
 	SeverityCounts     map[string]int `json:"severity_counts"`
 	Vulnerabilities    []vulnMetadata `json:"vulnerabilities"`

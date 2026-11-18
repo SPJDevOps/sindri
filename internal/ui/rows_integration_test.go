@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -10,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+
 	"github.com/spj/sindri/internal/evidence"
+	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
 	"github.com/spj/sindri/internal/registry"
 )
@@ -31,6 +35,51 @@ func (e *env) sindriScan(d model.Digest, platform string, counts map[string]int)
 		VALUES ($1, 'scan', 'application/json', $1, $2::jsonb, 'system:scanner')`, d.String(), meta); err != nil {
 		e.t.Fatalf("recording a scan of %s: %v", d, err)
 	}
+}
+
+// indexScan records the scan of one platform of an index as the worker writes
+// it: on the index digest, with the platform it covers and the full list of
+// platforms the job meant to scan (ADR 30).
+func (e *env) indexScan(d model.Digest, platform string, platforms []string, counts map[string]int) {
+	e.t.Helper()
+	list, err := json.Marshal(platforms)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	meta := fmt.Sprintf(`{"producer":"sindri","platform":%q,"platforms":%s,"severity_counts":{"CRITICAL":%d,"HIGH":%d,"MEDIUM":%d,"LOW":%d,"UNKNOWN":%d}}`,
+		platform, list, counts["CRITICAL"], counts["HIGH"], counts["MEDIUM"], counts["LOW"], counts["UNKNOWN"])
+	if _, err := e.pool.Exec(e.t.Context(), `
+		INSERT INTO evidence (subject_digest, type, media_type, blob_digest, metadata, created_by)
+		VALUES ($1, 'scan', 'application/json', $1, $2::jsonb, 'system:scanner')`, d.String(), meta); err != nil {
+		e.t.Fatalf("recording a scan of %s: %v", d, err)
+	}
+}
+
+// pushIndex pushes an index over two fresh single-image children under tag and
+// returns the index digest.
+func (e *env) pushIndex(repo, image, tag, seed string) model.Digest {
+	e.t.Helper()
+	var descs []ocispec.Descriptor
+	for _, arch := range []string{"amd64", "arm64"} {
+		d := e.push(repo, image, seed+"-"+arch, seed+"-"+arch)
+		info, err := e.reg.StatBlob(e.t.Context(), repo, d)
+		if err != nil {
+			e.t.Fatalf("StatBlob: %v", err)
+		}
+		descs = append(descs, ocispec.Descriptor{MediaType: ocispec.MediaTypeImageManifest, Digest: digestOf(d), Size: info.Size,
+			Platform: &ocispec.Platform{OS: "linux", Architecture: arch}})
+	}
+	index := ocispec.Index{MediaType: ocispec.MediaTypeImageIndex, Manifests: descs}
+	index.SchemaVersion = 2
+	body, err := json.Marshal(index)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	idx, err := e.reg.PutManifest(e.t.Context(), repo, image, tag, ocispec.MediaTypeImageIndex, body, model.Provenance{SourceType: "oci-push"})
+	if err != nil {
+		e.t.Fatalf("PutManifest index: %v", err)
+	}
+	return idx.Digest
 }
 
 // rowFor returns the table row of body whose first cell holds name.
@@ -359,5 +408,163 @@ func TestUI_PackageFilterFormHasNoQueryInItsAction(t *testing.T) {
 	}
 	if !strings.Contains(body, `<option value="published" selected>`) {
 		t.Error("the sort in the URL is not the selected option")
+	}
+}
+
+// An index is scanned only when every platform its newest scan lists has a
+// scan, as the severity gate reads it (ADR 30). One of two, clean, must say
+// "not scanned" everywhere, never "no findings".
+func TestUI_APartlyScannedIndexNeverReadsAsScannedOrClean(t *testing.T) {
+	e := newEnv(t)
+	idx := e.pushIndex("team-a", "app", "multi", "partial")
+	both := []string{"linux/amd64", "linux/arm64"}
+	e.indexScan(idx, "linux/amd64", both, nil)
+
+	verdict := func() string {
+		body := e.get("alice", artifactPath("team-a", "app", idx, "&tag=multi")).body
+		start := strings.Index(body, `<div class="pills verdict"`)
+		if start < 0 {
+			t.Fatalf("no verdict strip:\n%s", body)
+		}
+		return body[start : start+strings.Index(body[start:], "</div>")]
+	}
+	check := func(label string, wantScanned bool) {
+		t.Helper()
+		views := map[string]string{
+			"verdict strip": verdict(),
+			"tag row":       rowFor(t, e.get("alice", "/ui/r/team-a/-/package?name=app").body, "multi"),
+		}
+		for name, v := range views {
+			if wantScanned != strings.Contains(v, "no findings") || wantScanned == strings.Contains(v, "not scanned") {
+				t.Errorf("%s: the %s reads wrongly (scanned want %v):\n%s", label, name, wantScanned, v)
+			}
+		}
+	}
+	check("one of two platforms scanned", false)
+	e.indexScan(idx, "linux/arm64", both, nil)
+	check("both platforms scanned", true)
+}
+
+func TestUI_PackageRowOfAPartlyScannedIndexIsNotScanned(t *testing.T) {
+	e := newEnv(t)
+	idx := e.pushIndex("team-a", "solo", "multi", "solo")
+	// Only the index is current for the image: drop the child tags.
+	if _, err := e.pool.Exec(t.Context(), `DELETE FROM tags WHERE name <> 'multi' AND package_id IN (SELECT id FROM packages WHERE normalized_name = 'solo')`); err != nil {
+		t.Fatalf("dropping child tags: %v", err)
+	}
+	both := []string{"linux/amd64", "linux/arm64"}
+	e.indexScan(idx, "linux/amd64", both, nil)
+	if row := rowFor(t, e.get("alice", "/ui/r/team-a").body, "solo"); !strings.Contains(row, "not scanned") || strings.Contains(row, "no findings") {
+		t.Errorf("the repository row of a half-scanned index must not read clean:\n%s", row)
+	}
+	e.indexScan(idx, "linux/arm64", both, nil)
+	if row := rowFor(t, e.get("alice", "/ui/r/team-a").body, "solo"); !strings.Contains(row, "no findings") {
+		t.Errorf("a fully scanned clean index should read no findings:\n%s", row)
+	}
+}
+
+func TestUI_RowsOfAPartlyScannedImageReadNotScanned(t *testing.T) {
+	e := newEnv(t)
+	d1 := e.push("team-a", "app", "1.0", "scanned")
+	e.push("team-a", "app", "2.0", "unscanned")
+	e.sindriScan(d1, "", nil)
+
+	if row := rowFor(t, e.get("alice", "/ui/r/team-a").body, "app"); !strings.Contains(row, "not scanned") || strings.Contains(row, "no findings") {
+		t.Errorf("one clean tag and one unscanned tag must read not scanned:\n%s", row)
+	}
+	body := e.get("alice", "/ui/r/team-a/-/package?name=app").body
+	if row := rowFor(t, body, "1.0"); !strings.Contains(row, "no findings") {
+		t.Errorf("the scanned tag lost its own result:\n%s", row)
+	}
+	if row := rowFor(t, body, "2.0"); !strings.Contains(row, "not scanned") {
+		t.Errorf("the unscanned tag:\n%s", row)
+	}
+}
+
+func TestUI_RowsSumTheNewestScanPerPlatformOnly(t *testing.T) {
+	e := newEnv(t)
+	d := e.push("team-a", "app", "1.0", "rescanned")
+	e.sindriScan(d, "linux/amd64", map[string]int{"HIGH": 5}) // superseded
+	e.sindriScan(d, "linux/amd64", nil)
+	e.sindriScan(d, "linux/arm64", map[string]int{"LOW": 2})
+
+	for _, path := range []string{"/ui/r/team-a", "/ui/r/team-a/-/package?name=app"} {
+		body := e.get("alice", path).body
+		name := "app"
+		if strings.Contains(path, "package") {
+			name = "1.0"
+		}
+		row := rowFor(t, body, name)
+		if strings.Contains(row, "sev-high") || strings.Contains(row, "5 high") {
+			t.Errorf("%s: the older scan's findings still count:\n%s", path, row)
+		}
+		if !strings.Contains(row, "2 low") {
+			t.Errorf("%s: the other platform's findings are missing:\n%s", path, row)
+		}
+	}
+	if row := rowFor(t, e.get("alice", "/ui/r/team-a").body, "app"); strings.Contains(row, "sev-high") {
+		t.Errorf("repository row: %s", row)
+	}
+}
+
+func TestUI_RowsReadARevokedDigestAsTheVerdictStripDoes(t *testing.T) {
+	e := newEnv(t)
+	revoke := func(d model.Digest, stage string) {
+		t.Helper()
+		if _, err := e.lc.Revoke(t.Context(), lifecycle.ChangeParams{Digest: d, Repository: "team-a", Stage: stage, Actor: "user:admin", Reason: "bad"}); err != nil {
+			t.Fatalf("Revoke: %v", err)
+		}
+	}
+	only := e.push("team-a", "app", "dev-only", "dev-only")
+	e.promote(t, only, "team-a", "dev")
+	revoke(only, "dev")
+	both := e.push("team-a", "app", "both", "both")
+	e.promote(t, both, "team-a", "dev")
+	e.promote(t, both, "team-a", "prod")
+	revoke(both, "prod")
+	kept := e.push("team-a", "app", "kept", "kept")
+	e.promote(t, kept, "team-a", "dev")
+	e.promote(t, kept, "team-a", "prod")
+	revoke(kept, "dev")
+
+	body := e.get("alice", "/ui/r/team-a/-/package?name=app").body
+	for tag, want := range map[string]string{
+		"dev-only": `class="pill revoke">revoked from dev`,
+		"both":     `class="pill revoke">revoked from prod`,
+		"kept":     `class="pill approve">prod`,
+	} {
+		if row := rowFor(t, body, tag); !strings.Contains(row, want) || (tag != "kept" && strings.Contains(row, "not promoted")) {
+			t.Errorf("tag %s: want %q:\n%s", tag, want, row)
+		}
+	}
+	// The strip on the artifact page agrees with the row.
+	strip := e.get("alice", artifactPath("team-a", "app", only, "&tag=dev-only")).body
+	if !strings.Contains(strip, `class="pill revoke">revoked from dev`) {
+		t.Errorf("the verdict strip disagrees with the row:\n%s", strip)
+	}
+}
+
+// A digest cached in a proxy that is also pushed to a hosted repository the
+// reader cannot read must give the proxy page nothing from that repository:
+// no latest tag, no publish time, no influence on the sort (I2).
+func TestUI_ProxyRowsTakeNothingFromAHostedRepositoryHoldingTheSameDigest(t *testing.T) {
+	e := newEnv(t)
+	d := e.push("team-b", "secret", "internal-release", "same-bytes")
+	if r := e.get("alice", "/ui/r/team-b"); r.status != http.StatusNotFound {
+		t.Fatalf("alice must not read team-b: %d", r.status)
+	}
+	if _, err := e.reg.PlaceCachedManifest(t.Context(), "hub", "library/alpine", "3.20", ocispec.MediaTypeImageManifest, mustManifestBody(t, e, "team-b", "same-bytes")); err != nil {
+		t.Fatalf("PlaceCachedManifest: %v", err)
+	}
+	_ = d
+	for _, path := range []string{"/ui/r/hub", "/ui/r/hub?sort=published"} {
+		body := e.get("alice", path).body
+		row := rowFor(t, body, "library/alpine")
+		if strings.Contains(row, "3.20") || strings.Contains(row, "just now") || strings.Contains(row, "<time") {
+			t.Errorf("%s: the proxy row carries facts of a hosted repository:\n%s", path, row)
+		}
+		if strings.Contains(body, "team-b") || strings.Contains(body, "internal-release") {
+			t.Errorf("%s names the hidden repository or its tag", path)
+		}
 	}
 }

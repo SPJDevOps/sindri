@@ -50,10 +50,15 @@ const listLatestTagsForPackages = `-- name: ListLatestTagsForPackages :many
 SELECT t.package_id,
        COALESCE((array_agg(t.name ORDER BY s.created_at DESC, t.name) FILTER (WHERE s.created_at IS NOT NULL))[1], '')::text AS latest_tag
 FROM tags t
-LEFT JOIN subjects s ON s.digest = t.target_digest
-WHERE t.package_id = ANY($1::uuid[])
+LEFT JOIN subjects s ON s.digest = t.target_digest AND $1::bool
+WHERE t.package_id = ANY($2::uuid[])
 GROUP BY t.package_id
 `
+
+type ListLatestTagsForPackagesParams struct {
+	Hosted     bool        `json:"hosted"`
+	PackageIds []uuid.UUID `json:"package_ids"`
+}
 
 type ListLatestTagsForPackagesRow struct {
 	PackageID uuid.UUID `json:"package_id"`
@@ -61,9 +66,10 @@ type ListLatestTagsForPackagesRow struct {
 }
 
 // Per named image, the tag whose target was first published most recently.
-// Tags of proxy content point at digests with no subject, so they have none.
-func (q *Queries) ListLatestTagsForPackages(ctx context.Context, packageIds []uuid.UUID) ([]ListLatestTagsForPackagesRow, error) {
-	rows, err := q.db.Query(ctx, listLatestTagsForPackages, packageIds)
+// A proxy repository (hosted is false) reads no subjects, so it has none: the
+// digest may also live in a hosted repository the reader cannot see (I2).
+func (q *Queries) ListLatestTagsForPackages(ctx context.Context, arg ListLatestTagsForPackagesParams) ([]ListLatestTagsForPackagesRow, error) {
+	rows, err := q.db.Query(ctx, listLatestTagsForPackages, arg.Hosted, arg.PackageIds)
 	if err != nil {
 		return nil, err
 	}
@@ -86,17 +92,18 @@ const listPackageRowsOCI = `-- name: ListPackageRowsOCI :many
 WITH matched AS (
     SELECT p.id, p.normalized_name, p.display_name,
            count(t.name)::bigint AS tag_count,
-           max(s.created_at) AS last_published_at
+           max(s.created_at)::timestamptz AS last_published_at
     FROM packages p
     LEFT JOIN tags t ON t.package_id = p.id AND t.repo_id = p.repo_id
-    LEFT JOIN subjects s ON s.digest = t.target_digest
-    WHERE p.repo_id = $4
-      AND ($5::text = '' OR strpos(lower(p.normalized_name), lower($5::text)) > 0)
+    LEFT JOIN subjects s ON s.digest = t.target_digest AND $4::bool
+    WHERE p.repo_id = $5
+      AND ($6::text = '' OR strpos(lower(p.normalized_name), lower($6::text)) > 0)
     GROUP BY p.id
 )
-SELECT m.id, m.normalized_name, m.display_name, m.tag_count, m.last_published_at,
+SELECT m.id, m.normalized_name, m.display_name, m.tag_count, lp.last_published_at,
        count(*) OVER ()::bigint AS total
 FROM matched m
+LEFT JOIN matched lp ON lp.id = m.id
 ORDER BY (CASE WHEN $1::bool THEN m.last_published_at END) DESC NULLS LAST,
          m.normalized_name
 LIMIT $3 OFFSET $2
@@ -106,27 +113,34 @@ type ListPackageRowsOCIParams struct {
 	ByPublished bool      `json:"by_published"`
 	PageOffset  int32     `json:"page_offset"`
 	PageLimit   int32     `json:"page_limit"`
+	Hosted      bool      `json:"hosted"`
 	RepoID      uuid.UUID `json:"repo_id"`
 	NameFilter  string    `json:"name_filter"`
 }
 
 type ListPackageRowsOCIRow struct {
-	ID              uuid.UUID   `json:"id"`
-	NormalizedName  string      `json:"normalized_name"`
-	DisplayName     string      `json:"display_name"`
-	TagCount        int64       `json:"tag_count"`
-	LastPublishedAt interface{} `json:"last_published_at"`
-	Total           int64       `json:"total"`
+	ID              uuid.UUID          `json:"id"`
+	NormalizedName  string             `json:"normalized_name"`
+	DisplayName     string             `json:"display_name"`
+	TagCount        int64              `json:"tag_count"`
+	LastPublishedAt pgtype.Timestamptz `json:"last_published_at"`
+	Total           int64              `json:"total"`
 }
 
 // The same for an OCI repository, where an image has tags and no versions rows.
 // Its last publish is the newest first-publish (subjects.created_at) of any
-// digest a tag points at; proxy content has no subject and so no time.
+// digest a tag points at; proxy content has no subject and so no time. A proxy
+// repository never reads subjects at all (hosted is false): a digest it caches
+// may also be pushed to a hosted repository the reader cannot see, and that
+// repository's push time must not reach this page (invariant I2).
+// The join back to matched only tells sqlc the time may be null: a package with
+// no dated publish has none, and a bare time.Time could not scan that.
 func (q *Queries) ListPackageRowsOCI(ctx context.Context, arg ListPackageRowsOCIParams) ([]ListPackageRowsOCIRow, error) {
 	rows, err := q.db.Query(ctx, listPackageRowsOCI,
 		arg.ByPublished,
 		arg.PageOffset,
 		arg.PageLimit,
+		arg.Hosted,
 		arg.RepoID,
 		arg.NameFilter,
 	)
@@ -160,16 +174,17 @@ const listPackageRowsVersioned = `-- name: ListPackageRowsVersioned :many
 WITH matched AS (
     SELECT p.id, p.normalized_name, p.display_name,
            count(v.id)::bigint AS version_count,
-           max(v.published_at) AS last_published_at
+           max(v.published_at)::timestamptz AS last_published_at
     FROM packages p
     JOIN versions v ON v.package_id = p.id
     WHERE p.repo_id = $4
       AND ($5::text = '' OR strpos(lower(p.normalized_name), lower($5::text)) > 0)
     GROUP BY p.id
 )
-SELECT m.id, m.normalized_name, m.display_name, m.version_count, m.last_published_at,
+SELECT m.id, m.normalized_name, m.display_name, m.version_count, lp.last_published_at,
        count(*) OVER ()::bigint AS total
 FROM matched m
+LEFT JOIN matched lp ON lp.id = m.id
 ORDER BY (CASE WHEN $1::bool THEN m.last_published_at END) DESC NULLS LAST,
          m.normalized_name
 LIMIT $3 OFFSET $2
@@ -184,12 +199,12 @@ type ListPackageRowsVersionedParams struct {
 }
 
 type ListPackageRowsVersionedRow struct {
-	ID              uuid.UUID   `json:"id"`
-	NormalizedName  string      `json:"normalized_name"`
-	DisplayName     string      `json:"display_name"`
-	VersionCount    int64       `json:"version_count"`
-	LastPublishedAt interface{} `json:"last_published_at"`
-	Total           int64       `json:"total"`
+	ID              uuid.UUID          `json:"id"`
+	NormalizedName  string             `json:"normalized_name"`
+	DisplayName     string             `json:"display_name"`
+	VersionCount    int64              `json:"version_count"`
+	LastPublishedAt pgtype.Timestamptz `json:"last_published_at"`
+	Total           int64              `json:"total"`
 }
 
 // Queries behind the UI's repository and package pages. Each returns one page
@@ -199,6 +214,8 @@ type ListPackageRowsVersionedRow struct {
 // version: the version count and the newest published_at. A name kept only as
 // a claim, with no versions, is not listed (ListPackagesByRepo does the same).
 // total is the number of matching packages across every page.
+// The join back to matched only tells sqlc the time may be null: a package with
+// no dated publish has none, and a bare time.Time could not scan that.
 func (q *Queries) ListPackageRowsVersioned(ctx context.Context, arg ListPackageRowsVersionedParams) ([]ListPackageRowsVersionedRow, error) {
 	rows, err := q.db.Query(ctx, listPackageRowsVersioned,
 		arg.ByPublished,
@@ -271,17 +288,41 @@ WITH cur AS (
     FROM tags t
     WHERE t.package_id = ANY($1::uuid[])
 ), newest AS (
+    -- The newest Sindri scan per platform: the rule of ListNewestSindriScans,
+    -- which the severity gate reads. Keep the two in step.
     SELECT DISTINCT ON (c.package_id, c.digest, coalesce(e.metadata->>'platform', ''))
-           c.package_id, c.digest, e.metadata->'severity_counts' AS counts
+           c.package_id, c.digest, coalesce(e.metadata->>'platform', '') AS platform,
+           e.metadata->'severity_counts' AS counts, e.metadata->'platforms' AS platforms,
+           e.created_at
     FROM cur c
     JOIN evidence e ON e.subject_digest = c.digest
                    AND e.type = 'scan'
                    AND e.metadata->>'producer' = 'sindri'
     ORDER BY c.package_id, c.digest, coalesce(e.metadata->>'platform', ''), e.created_at DESC, e.id DESC
+), top AS (
+    -- The newest scan overall lists the platforms an index must have a scan
+    -- for, as the gate reads it (evaluateScanRule): newest created_at, the
+    -- first platform by name on a tie.
+    SELECT DISTINCT ON (package_id, digest) package_id, digest, platforms
+    FROM newest
+    ORDER BY package_id, digest, created_at DESC, platform
+), complete AS (
+    -- A digest is fully scanned when every platform that scan lists has a
+    -- newest scan of its own; an index with one of two scanned is not.
+    SELECT t.package_id, t.digest
+    FROM top t
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(t.platforms) = 'array' THEN t.platforms ELSE '[]'::jsonb END) AS want(platform)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM newest n
+            WHERE n.package_id = t.package_id AND n.digest = t.digest AND n.platform = want.platform
+        )
+    )
 )
 SELECT c.package_id,
        count(DISTINCT c.digest)::bigint AS subjects,
-       count(DISTINCT n.digest)::bigint AS scanned,
+       count(DISTINCT k.digest)::bigint AS scanned,
        COALESCE(sum((n.counts->>'CRITICAL')::int), 0)::bigint AS critical,
        COALESCE(sum((n.counts->>'HIGH')::int), 0)::bigint AS high,
        COALESCE(sum((n.counts->>'MEDIUM')::int), 0)::bigint AS medium,
@@ -289,6 +330,7 @@ SELECT c.package_id,
        COALESCE(sum((n.counts->>'UNKNOWN')::int), 0)::bigint AS unknown
 FROM cur c
 LEFT JOIN newest n ON n.package_id = c.package_id AND n.digest = c.digest
+LEFT JOIN complete k ON k.package_id = c.package_id AND k.digest = c.digest
 GROUP BY c.package_id
 `
 
@@ -307,7 +349,8 @@ type PackageFindingsOCIRow struct {
 // where current means every digest a tag points at now. The work is done here
 // so its cost follows the database, not the number of tags shipped through the
 // caller. subjects is how many distinct digests are current and scanned how
-// many of them have at least one Sindri scan; the severity columns add up the
+// many of them are fully scanned (every platform the newest scan lists has a
+// scan, ADR 30); the severity columns add up the
 // newest scan per platform of each. Only producer = sindri counts (ADR 29).
 func (q *Queries) PackageFindingsOCI(ctx context.Context, packageIds []uuid.UUID) ([]PackageFindingsOCIRow, error) {
 	rows, err := q.db.Query(ctx, packageFindingsOCI, packageIds)
@@ -349,17 +392,41 @@ WITH picked AS (
     JOIN versions v ON v.package_id = p.package_id AND v.version = p.version
     JOIN files f ON f.version_id = v.id AND f.upstream_gone_at IS NULL
 ), newest AS (
+    -- The newest Sindri scan per platform: the rule of ListNewestSindriScans,
+    -- which the severity gate reads. Keep the two in step.
     SELECT DISTINCT ON (c.package_id, c.digest, coalesce(e.metadata->>'platform', ''))
-           c.package_id, c.digest, e.metadata->'severity_counts' AS counts
+           c.package_id, c.digest, coalesce(e.metadata->>'platform', '') AS platform,
+           e.metadata->'severity_counts' AS counts, e.metadata->'platforms' AS platforms,
+           e.created_at
     FROM cur c
     JOIN evidence e ON e.subject_digest = c.digest
                    AND e.type = 'scan'
                    AND e.metadata->>'producer' = 'sindri'
     ORDER BY c.package_id, c.digest, coalesce(e.metadata->>'platform', ''), e.created_at DESC, e.id DESC
+), top AS (
+    -- The newest scan overall lists the platforms an index must have a scan
+    -- for, as the gate reads it (evaluateScanRule): newest created_at, the
+    -- first platform by name on a tie.
+    SELECT DISTINCT ON (package_id, digest) package_id, digest, platforms
+    FROM newest
+    ORDER BY package_id, digest, created_at DESC, platform
+), complete AS (
+    -- A digest is fully scanned when every platform that scan lists has a
+    -- newest scan of its own; an index with one of two scanned is not.
+    SELECT t.package_id, t.digest
+    FROM top t
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(t.platforms) = 'array' THEN t.platforms ELSE '[]'::jsonb END) AS want(platform)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM newest n
+            WHERE n.package_id = t.package_id AND n.digest = t.digest AND n.platform = want.platform
+        )
+    )
 )
 SELECT c.package_id,
        count(DISTINCT c.digest)::bigint AS subjects,
-       count(DISTINCT n.digest)::bigint AS scanned,
+       count(DISTINCT k.digest)::bigint AS scanned,
        COALESCE(sum((n.counts->>'CRITICAL')::int), 0)::bigint AS critical,
        COALESCE(sum((n.counts->>'HIGH')::int), 0)::bigint AS high,
        COALESCE(sum((n.counts->>'MEDIUM')::int), 0)::bigint AS medium,
@@ -367,6 +434,7 @@ SELECT c.package_id,
        COALESCE(sum((n.counts->>'UNKNOWN')::int), 0)::bigint AS unknown
 FROM cur c
 LEFT JOIN newest n ON n.package_id = c.package_id AND n.digest = c.digest
+LEFT JOIN complete k ON k.package_id = c.package_id AND k.digest = c.digest
 GROUP BY c.package_id
 `
 
@@ -418,20 +486,26 @@ func (q *Queries) PackageFindingsVersioned(ctx context.Context, arg PackageFindi
 }
 
 const remoteCacheStats = `-- name: RemoteCacheStats :one
-SELECT count(*) FILTER (WHERE c.status = 'hit')::bigint AS entries,
-       max(c.fetched_at) FILTER (WHERE c.status = 'hit') AS last_fetched_at
-FROM remote_cache c
-JOIN repositories r ON r.id = c.repo_id
-WHERE r.name = $1
+WITH agg AS (
+    SELECT count(*) FILTER (WHERE c.status = 'hit')::bigint AS entries,
+           (max(c.fetched_at) FILTER (WHERE c.status = 'hit'))::timestamptz AS fetched_at
+    FROM remote_cache c
+    JOIN repositories r ON r.id = c.repo_id
+    WHERE r.name = $1
+)
+SELECT a.entries, l.fetched_at AS last_fetched_at
+FROM agg a
+LEFT JOIN agg l ON true
 `
 
 type RemoteCacheStatsRow struct {
-	Entries       int64       `json:"entries"`
-	LastFetchedAt interface{} `json:"last_fetched_at"`
+	Entries       int64              `json:"entries"`
+	LastFetchedAt pgtype.Timestamptz `json:"last_fetched_at"`
 }
 
 // What a proxy holds: the cached upstream answers and when the last successful
-// fetch was. A miss is a recorded 404, not content, and never counts.
+// fetch was, null when it has fetched nothing (the join back to agg is how
+// sqlc learns that). A miss is a recorded 404, not content, and never counts.
 func (q *Queries) RemoteCacheStats(ctx context.Context, name string) (RemoteCacheStatsRow, error) {
 	row := q.db.QueryRow(ctx, remoteCacheStats, name)
 	var i RemoteCacheStatsRow
@@ -462,14 +536,13 @@ SELECT w.digest::text AS digest,
            WHERE o.digest = w.digest
        ), '{}')::text[] AS owners,
        COALESCE((
-           SELECT jsonb_agg(jsonb_build_object('repository', st.repo_name, 'stage', st.stage_name, 'position', st.position))
+           SELECT jsonb_agg(jsonb_build_object('repository', st.repo_name, 'stage', st.stage_name, 'position', st.position, 'action', st.action))
            FROM (
-               SELECT DISTINCT ON (r.name) r.name AS repo_name, ls.name AS stage_name, ls.position
+               SELECT DISTINCT ON (r.name) r.name AS repo_name, ls.name AS stage_name, ls.position, lc.action
                FROM lifecycle_current lc
                JOIN lifecycle_stages ls ON ls.id = lc.stage_id
                JOIN repositories r ON r.id = lc.repo_id
                WHERE lc.subject_digest = w.digest
-                 AND lc.action = 'approve'
                  AND r.name = ANY($1::text[])
                ORDER BY r.name, ls.position DESC
            ) st
@@ -481,6 +554,8 @@ SELECT w.digest::text AS digest,
                       jsonb_build_object(
                           'producer', e.metadata->'producer',
                           'platform', e.metadata->'platform',
+                          'platforms', e.metadata->'platforms',
+                          'created_at', e.created_at,
                           'severity_counts', e.metadata->'severity_counts') AS summary
                FROM evidence e
                WHERE e.subject_digest = w.digest
@@ -517,10 +592,13 @@ type SummarizeSubjectsRow struct {
 // that is not a subject (proxy content, a layer) has no created_at and no
 // owners, states, or scans.
 //
-// stages is the highest approved stage in each of repo_names where the digest
-// is currently approved; a revoked or never-approved stage does not count.
+// stages is the highest stage reached in each of repo_names, with its current
+// action (approve or revoke): the top position with any current state, the
+// rule the artifact page's verdict strip reads. A stage never reached is absent.
 // scans is the newest Sindri-produced scan per platform (ADR 29, ADR 30),
-// trimmed to what a summary needs; a client-attached scan never matches.
+// trimmed to what a summary needs, with its time and the platforms an index
+// scan lists; a client-attached scan never matches. The rule is that of
+// ListNewestSindriScans.
 func (q *Queries) SummarizeSubjects(ctx context.Context, arg SummarizeSubjectsParams) ([]SummarizeSubjectsRow, error) {
 	rows, err := q.db.Query(ctx, summarizeSubjects, arg.RepoNames, arg.Digests)
 	if err != nil {

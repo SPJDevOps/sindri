@@ -1,7 +1,7 @@
 {{define "content"}}
 <h1 class="page-title{{if not .Name}} mono{{end}}" title="{{.Digest}}">{{if .Name}}{{.Name}} <span class="sub mono">{{short .Digest}}</span>{{else}}{{short .Digest}}{{end}}</h1>
 <div class="pills">{{if .Kind}}<span class="pill">{{.Kind}}</span>{{end}}{{if .Upstream}}<span class="pill upstream">upstream content</span>{{end}}</div>{{with .Verdict}}
-<div class="pills verdict" role="group" aria-label="Verdict">{{if .Revoked}}<span class="pill revoke">revoked from {{.Stage}}</span>{{else}}{{template "stage-pill" .Stage}}{{end}}{{template "severity-pills" .Severity}}{{if not .ScannedAt.IsZero}}<span class="pill">scanned {{ago .ScannedAt}}</span>{{end}}{{if .NewFindings}}<span class="pill new">new findings since approval</span>{{end}}</div>{{end}}
+<div class="pills verdict" role="group" aria-label="Verdict">{{template "stage-pill" (stage .Stage .Revoked)}}{{template "severity-pills" .Severity}}{{if not .ScannedAt.IsZero}}<span class="pill">scanned {{ago .ScannedAt}}</span>{{end}}{{if .NewFindings}}<span class="pill new">new findings since approval</span>{{end}}</div>{{end}}
 
 {{if gt (len .Sections) 1}}<div class="section-nav">
   <nav class="sections" aria-label="Sections">{{template "section-links" .Sections}}</nav>

@@ -23,34 +23,85 @@ import (
 
 // severityView is what the severity-pills partial renders: the severities
 // with findings, worst first, and whether a Sindri scan exists to say there
-// are none. No scan shows as "not scanned", never as clean.
+// are none. No scan, or a scan of only part of an index, shows as "not
+// scanned", never as clean.
 type severityView struct {
 	Counts  []severityCount
 	Scanned bool
 }
 
+// scanSet is the newest Sindri scan of each platform of one subject, with what
+// the verdict and the rows both need to say whether the subject is fully
+// scanned. It mirrors the severity gate (lifecycle evaluateScanRule, ADR 30):
+// the newest scan overall lists the platforms of its index, and each of them
+// must have a scan of its own.
+type scanSet struct {
+	have map[string]bool
+	// required is the platforms the newest scan lists; at is that scan's time.
+	required []string
+	at       time.Time
+	set      bool
+}
+
+// add records the newest scan of one platform. Scans must arrive in platform
+// order, as the queries return them, so that on a tie in time the first
+// platform names the required set, as the gate's loop does.
+func (s *scanSet) add(platform string, platforms []string, at time.Time) {
+	if s.have == nil {
+		s.have = map[string]bool{}
+	}
+	s.have[platform] = true
+	if !s.set || at.After(s.at) {
+		s.set, s.at, s.required = true, at, platforms
+	}
+}
+
+// complete reports whether there is a scan and every platform the newest one
+// lists has one. A subject nobody scanned is not complete.
+func (s *scanSet) complete() bool {
+	if !s.set {
+		return false
+	}
+	for _, p := range s.required {
+		if !s.have[p] {
+			return false
+		}
+	}
+	return true
+}
+
 // scanCounts adds up the findings of one subject's newest Sindri scans, one per
 // platform. Scans a client attached never reach it (ADR 29): the summary query
 // returns only Sindri's own, and parseSindriScan checks the producer again.
+// scanned is false when no scan exists or the newest scan lists a platform that
+// has none, so a half-scanned index cannot read as clean; the counts still add
+// up whatever was found.
 func scanCounts(scans []json.RawMessage) (counts map[string]int, scanned bool) {
 	counts = map[string]int{}
+	var set scanSet
 	for _, raw := range scans {
 		meta, ok := parseSindriScan(evidence.Evidence{Type: model.EvidenceScan, Metadata: raw})
 		if !ok {
 			continue
 		}
-		scanned = true
+		var when struct {
+			At time.Time `json:"created_at"`
+		}
+		if err := json.Unmarshal(raw, &when); err != nil {
+			continue
+		}
+		set.add(meta.Platform, meta.Platforms, when.At)
 		for sev, n := range meta.SeverityCounts {
 			counts[strings.ToUpper(sev)] += n
 		}
 	}
-	return counts, scanned
+	return counts, set.complete()
 }
 
 // severityOf summarises what the Sindri scans of several subjects found: the
-// counts added up, and Scanned only when every subject has a scan. A version
-// with two files is scanned only if both are; a subject nobody scanned must
-// not make the whole look clean.
+// counts added up, and Scanned only when every subject is fully scanned. A
+// version with two files is scanned only if both are; a subject nobody scanned
+// must not make the whole look clean.
 func severityOf(sums []lifecycle.SubjectSummary) severityView {
 	total := map[string]int{}
 	scanned := len(sums) > 0
@@ -75,29 +126,68 @@ func worstOf(v severityView) severityView {
 	return v
 }
 
-// stageOf is the highest stage every one of sums is currently approved at in
-// repo, or "" when any of them is approved at none. A version with two files
-// is promoted only as far as its least promoted file.
-func stageOf(sums []lifecycle.SubjectSummary, repo string) string {
-	if len(sums) == 0 {
-		return ""
+// stageView is what the stage-pill partial renders: the stage a digest has
+// reached, and whether it stands revoked there. The zero value is "not
+// promoted".
+type stageView struct {
+	Name    string
+	Revoked bool
+}
+
+// stageReach is the highest stage one subject reached in a repository, and
+// whether that stage now stands revoked.
+type stageReach struct {
+	Stage    string
+	Position int32
+	Revoked  bool
+}
+
+// topReach picks the highest stage reached. Every caller, the verdict strip
+// and the rows alike, decides through it: the highest stage with any current
+// state is the one that speaks, so a revoke of it reads "revoked from X" even
+// when a lower stage is still approved. ok is false when none was reached.
+func topReach(rs []stageReach) (top stageReach, ok bool) {
+	for _, r := range rs {
+		if !ok || r.Position > top.Position || (r.Position == top.Position && r.Revoked) {
+			top, ok = r, true
+		}
 	}
-	var low *lifecycle.StageApproval
+	return top, ok
+}
+
+// stageOf is the stage a row shows for sums in repo. Each subject reads as the
+// verdict strip reads it (topReach). Several subjects, the files of one
+// version, combine to the least favourable: not promoted if any has reached no
+// stage, else revoked from the lowest stage any was revoked from, else the
+// lowest stage any is approved at.
+func stageOf(sums []lifecycle.SubjectSummary, repo string) stageView {
+	if len(sums) == 0 {
+		return stageView{}
+	}
+	var low, lowRevoked *stageReach
 	for _, s := range sums {
-		var best *lifecycle.StageApproval
-		for i, a := range s.Approvals {
-			if a.Repository == repo && (best == nil || a.Position > best.Position) {
-				best = &s.Approvals[i]
+		var rs []stageReach
+		for _, a := range s.Approvals {
+			if a.Repository == repo {
+				rs = append(rs, stageReach{Stage: a.Stage, Position: a.Position, Revoked: a.Action == lifecycle.ActionRevoke})
 			}
 		}
-		if best == nil {
-			return ""
+		top, ok := topReach(rs)
+		if !ok {
+			return stageView{}
 		}
-		if low == nil || best.Position < low.Position {
-			low = best
+		if top.Revoked {
+			if lowRevoked == nil || top.Position < lowRevoked.Position {
+				lowRevoked = &top
+			}
+		} else if low == nil || top.Position < low.Position {
+			low = &top
 		}
 	}
-	return low.Stage
+	if lowRevoked != nil {
+		return stageView{Name: lowRevoked.Stage, Revoked: true}
+	}
+	return stageView{Name: low.Stage}
 }
 
 // ownersOf lists the owners of sums the caller may see: those naming a
