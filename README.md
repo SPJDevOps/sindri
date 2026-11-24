@@ -1,11 +1,25 @@
 # Sindri
 
+[![CI](https://github.com/SPJDevOps/sindri/actions/workflows/ci.yml/badge.svg)](https://github.com/SPJDevOps/sindri/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/SPJDevOps/sindri)](https://github.com/SPJDevOps/sindri/releases)
+[![License](https://img.shields.io/github/license/SPJDevOps/sindri)](LICENSE)
+
 One registry for container images, Python packages, and npm packages, in a single Go
-binary.
+binary that also runs fully air-gapped.
 
 Polyglot teams tend to end up running Harbor for images, Verdaccio for npm, and devpi for
 Python, each with its own users, its own backups, and its own idea of what is safe to
 deploy. Sindri replaces all three with one server, one configuration file, and one sign-in.
+If you run Nexus or Artifactory and are happy with it, Sindri is not trying to replace
+it; it is for the team that ended up with three small registries instead of one large one.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/artifact-page-dark.png">
+  <img alt="Sindri's page for nginx:1.21.6: approved for dev and staging, 31 critical findings from the scan on publish, and not promoted to prod, because the prod gate refuses anything above high." src="docs/images/artifact-page-light.png">
+</picture>
+
+*A real `nginx:1.21.6`, pushed and scanned on publish. It is approved for dev and
+staging; promotion to prod was refused by a gate that allows nothing above `high`.*
 
 | If you run | Sindri gives you | Move over with |
 |---|---|---|
@@ -20,6 +34,20 @@ An artifact has one identity, its digest. It is not copied from a `dev` reposito
 such as SBOMs and signatures attaches to that identity. So CI and Kubernetes can ask the
 question they actually care about. Not "does this image exist?", but **"is exactly this
 artifact approved for this environment?"**
+
+That question is one call, and it always answers 200 with a decision, so an admission
+controller never has to read a 404 as policy:
+
+```console
+$ curl -H "Authorization: Bearer $SINDRI_TOKEN" \
+    "$SINDRI/api/v1/decisions?digest=sha256:25dedae0…&environment=prod"
+{"digest":"sha256:25dedae0…","environment":"prod","decision":"denied","reason":"not_approved","approvals":[]}
+
+$ curl -H "Authorization: Bearer $SINDRI_TOKEN" \
+    "$SINDRI/api/v1/decisions?digest=sha256:25dedae0…&environment=staging"
+{"digest":"sha256:25dedae0…","environment":"staging","decision":"approved","reason":"approved",
+ "approvals":[{"repository":"platform","actor":"bootstrap","reason":"release 2026.11","at":"2026-11-24T08:34:44Z"}]}
+```
 
 ## Try it in two minutes
 
@@ -93,6 +121,14 @@ The full documentation is at **<https://spjdevops.github.io/sindri/>**.
 - **Why it is built this way:** [ARCHITECTURE.md](ARCHITECTURE.md), the
   [decision records](https://spjdevops.github.io/sindri/adr/index.html), and the
   [roadmap](roadmap.md)
+
+## Status
+
+Sindri is young and built by one maintainer, developed since September 2026, with a
+release most weeks; see the [releases](https://github.com/SPJDevOps/sindri/releases).
+Every change runs against real Postgres and MinIO in CI, and a 3.3 GB push and pull has
+been verified through a TLS reverse proxy. Try it, and open an issue for whatever breaks
+or stops you from switching.
 
 ## Not there yet
 

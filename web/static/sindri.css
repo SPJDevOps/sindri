@@ -227,6 +227,9 @@ main { flex: 1; padding: var(--space-10) 0 var(--space-16); }
 .pill {
   display: inline-flex;
   align-items: center;
+  /* A flex container drops the space between a text run and an element, so
+     "scanned <time>" read "scanned6 days ago". One monospace space puts it back. */
+  gap: 1ch;
   border: 1px solid var(--b, var(--border-strong));
   border-radius: var(--radius);
   padding: 1px 6px;
