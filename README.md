@@ -1,6 +1,6 @@
 # Sindri
 
-[![CI](https://github.com/SPJDevOps/sindri/actions/workflows/ci.yml/badge.svg)](https://github.com/SPJDevOps/sindri/actions/workflows/ci.yml)
+[![CI](https://github.com/SPJDevOps/sindri/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/SPJDevOps/sindri/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SPJDevOps/sindri)](https://github.com/SPJDevOps/sindri/releases)
 [![License](https://img.shields.io/github/license/SPJDevOps/sindri)](LICENSE)
 
