@@ -834,17 +834,29 @@ func (h *handler) artifactPage(w http.ResponseWriter, r *http.Request, repo mode
 		return
 	}
 
-	subject, err := h.opts.Lifecycle.GetSubject(ctx, digest)
-	switch {
-	case err == nil:
-		if err := h.identity(r, &data, subject, visible); err != nil {
+	// Proxy content has no identity. A subject, its owners, evidence, scans,
+	// lifecycle state, and notifications are keyed by digest, and the same
+	// digest published to a hosted repository would lend them to the proxy
+	// page: state the cached copy never earned, from a repository the caller
+	// may not read (invariant I2, security rules 1 and 8). So a proxy page
+	// never reads them.
+	if !data.Upstream {
+		subject, err := h.opts.Lifecycle.GetSubject(ctx, digest)
+		switch {
+		case err == nil:
+			if err := h.identity(r, &data, subject, visible); err != nil {
+				h.fail(w, r, err)
+				return
+			}
+		case errors.Is(err, lifecycle.ErrSubjectNotFound):
+		default:
 			h.fail(w, r, err)
 			return
 		}
-	case errors.Is(err, lifecycle.ErrSubjectNotFound):
-	default:
-		h.fail(w, r, err)
-		return
+		if data.Deliveries, err = h.artifactDeliveries(r, digest); err != nil {
+			h.fail(w, r, err)
+			return
+		}
 	}
 
 	if repo.Protocol == model.ProtocolOCI && data.Size <= maxDocument {
@@ -852,10 +864,6 @@ func (h *handler) artifactPage(w http.ResponseWriter, r *http.Request, repo mode
 			h.fail(w, r, err)
 			return
 		}
-	}
-	if data.Deliveries, err = h.artifactDeliveries(r, digest); err != nil {
-		h.fail(w, r, err)
-		return
 	}
 	h.commands(r, &data, repo, image, digest)
 	data.Sections = sectionsOf(&data)
