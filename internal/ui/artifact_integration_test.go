@@ -12,6 +12,7 @@ import (
 
 	"github.com/spj/sindri/internal/lifecycle"
 	"github.com/spj/sindri/internal/model"
+	"github.com/spj/sindri/internal/notify"
 	"github.com/spj/sindri/internal/registry"
 )
 
@@ -350,5 +351,86 @@ func TestUI_ArtifactTitleNeverTakesAnImageNameFromTheURL(t *testing.T) {
 	}
 	if !strings.Contains(r.body, "<title>"+shortDigest(d.String())) {
 		t.Errorf("the title is not the digest alone:\n%s", r.body)
+	}
+}
+
+// cacheHostedBytesInProxy pushes a manifest to the hosted repository team-b,
+// promotes it, scans it, and caches the same bytes through the OCI proxy hub,
+// as a mirrored base image would be. It returns the proxy page's path.
+func cacheHostedBytesInProxy(t *testing.T, e *env) (model.Digest, string) {
+	t.Helper()
+	d := e.push("team-b", "secret", "internal-release", "same-bytes")
+	e.promote(t, d, "team-b", "dev")
+	e.sindriScan(d, "", map[string]int{"HIGH": 2})
+	m, err := e.reg.PlaceCachedManifest(t.Context(), "hub", "library/alpine", "3.20", ocispec.MediaTypeImageManifest, mustManifestBody(t, e, "team-b", "same-bytes"))
+	if err != nil {
+		t.Fatalf("PlaceCachedManifest: %v", err)
+	}
+	if m.Digest != d {
+		t.Fatalf("the proxy cached %s, not the hosted digest %s", m.Digest, d)
+	}
+	return d, artifactPath("hub", "library%2Falpine", d, "&tag=3.20")
+}
+
+// identityMarkers are what a page shows only for a subject's identity: none
+// of them may appear for proxy content, which has no identity (SIN-122).
+var identityMarkers = []string{
+	`verdict`, "not promoted", `pill approve`, "2 high", `id="lifecycle"`, `id="vulnerabilities"`,
+	`id="evidence"`, `id="provenance"`, "repository:team-b", "oci-push",
+}
+
+// A digest cached through a proxy and also published to a hosted repository
+// the reader cannot read: the proxy's artifact page shows the upstream notice
+// and nothing of the hosted subject, and never names the hosted repository
+// (I2, security rules 1 and 8).
+func TestUI_ProxyArtifactPageTakesNothingFromAHostedSubjectOfTheSameDigest(t *testing.T) {
+	e := newEnv(t)
+	_, path := cacheHostedBytesInProxy(t, e)
+	if r := e.get("alice", "/ui/r/team-b"); r.status != http.StatusNotFound {
+		t.Fatalf("alice must not read team-b: %d", r.status)
+	}
+
+	r := e.get("alice", path)
+	if r.status != http.StatusOK {
+		t.Fatalf("GET: %d\n%s", r.status, r.body)
+	}
+	if !strings.Contains(r.body, "Fetched from an upstream") {
+		t.Error("the upstream notice is gone")
+	}
+	for _, banned := range identityMarkers {
+		if strings.Contains(r.body, banned) {
+			t.Errorf("the proxy artifact page shows %q from the hosted subject", banned)
+		}
+	}
+	for _, hidden := range []string{"team-b", "internal-release", "secret"} {
+		if strings.Contains(r.body, hidden) {
+			t.Errorf("the proxy artifact page names %q of a repository alice cannot read", hidden)
+		}
+	}
+}
+
+// Even a reader of both repositories gets no hosted identity, state, or
+// notification history on the proxy page: proxy content is never promoted, and
+// what was recorded for the hosted publish belongs to the hosted page.
+func TestUI_ProxyArtifactPageShowsNoIdentityEvenToAReaderOfTheHostedRepository(t *testing.T) {
+	e := newEnv(t)
+	e.withWebhook()
+	d, path := cacheHostedBytesInProxy(t, e)
+	e.delivery("chat", notify.EventPromoted, d, "delivered", 1, 200, "")
+
+	r := e.get("admin", path)
+	if r.status != http.StatusOK {
+		t.Fatalf("GET: %d\n%s", r.status, r.body)
+	}
+	if !strings.Contains(r.body, "Fetched from an upstream") {
+		t.Error("the upstream notice is gone")
+	}
+	for _, banned := range append(identityMarkers, "Notification to") {
+		if strings.Contains(r.body, banned) {
+			t.Errorf("the proxy artifact page shows %q from the hosted subject", banned)
+		}
+	}
+	if hosted := e.get("admin", artifactPath("team-b", "secret", d, "")).body; !strings.Contains(hosted, `pill approve`) || !strings.Contains(hosted, "Notification to") {
+		t.Errorf("the hosted page lost its own identity or deliveries:\n%s", hosted)
 	}
 }
