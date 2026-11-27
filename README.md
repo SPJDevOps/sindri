@@ -130,17 +130,24 @@ Every change runs against real Postgres and MinIO in CI, and a 3.3 GB push and p
 been verified through a TLS reverse proxy. Try it, and open an issue for whatever breaks
 or stops you from switching.
 
-## Not there yet
+## Roadmap
 
-So that nothing is silently missing:
+What comes next, in order. The full plan and the reasons for the order are in
+[roadmap.md](roadmap.md#later).
 
-- **Several replicas.** Sindri runs as one replica, because upload sessions live in memory.
-- **Other formats.** Hugging Face models and datasets (planned next), Maven, and Helm's own
-  repository format. Helm charts as OCI artifacts
-  work today.
-- **OCI:** cross-repository blob mounts.
-- **Storage:** native Google Cloud Storage and Azure Blob Storage.
-- **Auth:** SAML, LDAP, and per-path access rules.
+1. **High availability.** Several replicas behind a load balancer, with upload sessions
+   shared between them, and separate `--api-only` and `--worker-only` modes. Today Sindri
+   runs as one replica, because upload sessions live in memory.
+2. **Trust enforced end to end.** Signature verification for cosign and Sigstore (today the
+   `signature` gate checks that a signature exists, not that it verifies), then a Kubernetes
+   admission webhook that refuses an image not approved for that environment.
+3. **Hugging Face models and datasets** as the fourth protocol: hosted, proxy, and virtual
+   behind `HF_ENDPOINT`, air-gapped deployments included.
+4. **A fifth protocol, chosen by demand.** Maven, unless adopters ask for Go modules or
+   Helm's own repository format first. Helm charts as OCI artifacts work today.
+
+**On request, not scheduled:** native Google Cloud Storage and Azure Blob Storage, and OCI
+cross-repository blob mounts.
 
 ## Contributing and security
 
